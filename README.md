@@ -49,18 +49,6 @@ MobileWork Expert Manager 提供了一套完整的工具链，用于管理基于
 - 团员不得直接向用户交付最终答案
 - 团员不得继续委派其他团员
 
-## 使用
-
-将此技能添加到 Claude Code 的技能目录：
-
-```bash
-# 方法 1: 从 GitHub 克隆
-git clone https://github.com/xiaodong528/mobilework-expert-manager.git ~/.agents/skills/mobilework-expert-manager
-
-# 方法 2: 复制现有技能目录
-cp -r mobilework-expert-manager ~/.agents/skills/
-```
-
 ## 快速开始
 
 ### 创建一个代码审查专家
