@@ -1,0 +1,96 @@
+{
+  "slug": "agent-runtime-options-team",
+  "type": "team",
+  "name": "Agent 运行参数专家团",
+  "description": "验证每个角色的 OpenCode Agent 运行参数声明、投影和继承边界。",
+  "language": "zh",
+  "tags": [
+    "agent-options",
+    "runtime-contract",
+    "projection-validation"
+  ],
+  "quick_prompts": [
+    "验证各角色运行参数是否正确投影。",
+    "检查未声明参数是否保持继承。",
+    "检查隐藏团员是否仍可由团长调度。"
+  ],
+  "default_prompt": "验证各角色运行参数是否正确投影。",
+  "common_skills": [
+    {"purpose": "delivery-quality"}
+  ],
+  "primary_agent": {
+    "id": "runtime-lead",
+    "name": "运行参数团长",
+    "display_name": "运行参数团长",
+    "profession": "Agent 运行合同负责人",
+    "description": "编排并验收各角色运行参数的投影结果。",
+    "mode": "primary",
+    "steps": 120,
+    "model": "openai/gpt-5",
+    "variant": "high",
+    "temperature": 0.2,
+    "options": {
+      "reasoningEffort": "high",
+      "textVerbosity": "low"
+    },
+    "skills": [
+      {"purpose": "runtime-review"}
+    ],
+    "responsibilities": [
+      "验收 manifest、Agent Markdown 和运行配置的一致性。"
+    ],
+    "workflow": [
+      "委派团员检查参数，再汇总验证证据。"
+    ],
+    "quality_gates": [
+      "所有声明参数和省略参数都有读回证据。"
+    ],
+    "route_triggers": [
+      "用户需要验证 Agent 运行参数投影时使用。"
+    ],
+    "handoff_contract": [
+      "返回参数矩阵、验证证据和未决风险。"
+    ],
+    "permission": {
+      "read": "allow"
+    }
+  },
+  "subagents": [
+    {
+      "id": "runtime-auditor",
+      "name": "运行参数审计员",
+      "display_name": "运行参数审计员",
+      "profession": "Agent 配置审计员",
+      "description": "独立核对角色运行参数及默认继承边界。",
+      "mode": "subagent",
+      "steps": 50,
+      "top_p": 0.7,
+      "hidden": true,
+      "options": {
+        "textVerbosity": "low"
+      },
+      "skills": [
+        {"purpose": "runtime-audit"}
+      ],
+      "responsibilities": [
+        "核对声明值、缺失值和派生文件差异。"
+      ],
+      "workflow": [
+        "读取配置并逐字段返回审计结果。"
+      ],
+      "quality_gates": [
+        "不把继承值误报为 manifest 声明值。"
+      ],
+      "route_triggers": [
+        "团长需要独立审计运行参数时调用。"
+      ],
+      "handoff_contract": [
+        "返回逐字段审计清单和证据。"
+      ],
+      "permission": {
+        "read": "allow"
+      }
+    }
+  ],
+  "workflows": []
+}

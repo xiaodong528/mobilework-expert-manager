@@ -1,0 +1,325 @@
+{
+  "slug": "software-dev-team",
+  "type": "team",
+  "name": "Software Development Expert Team",
+  "summary": "Expert team manifest with primary orchestration, subagents, local skills, and per-agent permissions.",
+  "description": "Delivers software from product intent to verified release through delegated specialist work and evidence-backed acceptance.",
+  "language": "zh",
+  "avatar_url": "avatars/software-dev-team.png",
+  "tags": [
+    "product-delivery",
+    "software-engineering",
+    "qa-verification"
+  ],
+  "quick_prompts": [
+    "帮我把这个产品想法拆成可交付的软件开发计划并完成验证。",
+    "请让产品、架构、工程和 QA 并行评估这个需求。",
+    "请检查这次软件交付是否满足验收标准。"
+  ],
+  "common_skills": [
+    {"purpose": "delivery-quality"}
+  ],
+  "primary_agent": {
+    "id": "delivery-director",
+    "name": "Delivery Director",
+    "description": "Orchestrates delivery workflow, delegates specialist steps, accepts or rejects handoffs, and owns final quality.",
+    "mode": "primary",
+    "color": "#2563eb",
+    "avatar_url": "avatars/delivery-director.png",
+    "skills": [
+      {"purpose": "role-guidelines"},
+      {"purpose": "delivery-review"}
+    ],
+    "workflow": [
+      "Clarify the user goal, constraints, scope boundaries, and acceptance criteria.",
+      "Route each specialist step with task.subagent_type to one or more declared subagent owners instead of doing the specialist work directly.",
+      "Dispatch product-strategist and architect with task in parallel only when their outputs are independently checkable and have no shared-write conflict.",
+      "Accept or re-dispatch each discovery branch with concrete failed criteria before implementation begins.",
+      "Use task.subagent_type=engineer to produce the scoped implementation or delivery artifact after required discovery handoffs pass.",
+      "Use task.subagent_type=qa-reviewer to verify acceptance criteria, evidence, edge cases, and release readiness.",
+      "Integrate only accepted subagent outputs into the final response and record unresolved risks."
+    ],
+    "quality_gates": [
+      "Every delegated task includes task, expected output, acceptance criteria, and required evidence.",
+      "Dependent steps wait for upstream acceptance unless the risk is explicitly waived.",
+      "Parallel branches must have separate outputs, separate acceptance criteria, and no shared mutable write target.",
+      "Failed checks are re-dispatched to the same responsible subagent with concrete feedback.",
+      "Final delivery cites evidence from accepted subagent handoffs."
+    ],
+    "permission": {
+      "read": "allow",
+      "edit": "allow",
+      "bash": {
+        "*": "allow",
+        "git status*": "allow",
+        "git diff*": "allow"
+      },
+      "webfetch": "allow",
+      "skill": {
+        "*": "deny",
+        "software-dev-team-common-delivery-quality": "allow",
+        "software-dev-team-delivery-director-role-guidelines": "allow",
+        "software-dev-team-delivery-director-delivery-review": "allow"
+      },
+      "task": {
+        "*": "deny",
+        "product-strategist": "allow",
+        "architect": "allow",
+        "engineer": "allow",
+        "qa-reviewer": "allow"
+      }
+    },
+    "display_name": "Delivery Director",
+    "profession": "Delivery Director",
+    "route_triggers": [
+      "用户需求落在 Delivery Director 的职责域时调度。"
+    ],
+    "handoff_contract": [
+      "返回任务理解、产出、证据、验收状态、失败项、下游依赖和剩余风险。"
+    ]
+  },
+  "subagents": [
+    {
+      "id": "product-strategist",
+      "name": "Product Strategist",
+      "description": "Turns user intent into scope, user value, acceptance criteria, and out-of-scope boundaries.",
+      "mode": "subagent",
+      "color": "accent",
+      "avatar_url": "avatars/product-strategist.png",
+      "skills": [
+        {"purpose": "role-guidelines"},
+        {"purpose": "product-brief"}
+      ],
+      "responsibilities": [
+        "Convert ambiguous requests into concrete user stories, scope boundaries, and acceptance criteria.",
+        "Identify product risks, sequencing constraints, and questions that block downstream work."
+      ],
+      "quality_gates": [
+        "Acceptance criteria are testable and tied to user value.",
+        "Handoff reports each criterion as pass, fail, or blocked.",
+        "Handoff names downstream dependencies for architecture, implementation, or QA."
+      ],
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "bash": {
+          "*": "allow",
+          "git status*": "allow",
+          "git diff*": "allow"
+        },
+        "webfetch": "allow",
+        "skill": {
+          "*": "deny",
+          "software-dev-team-common-delivery-quality": "allow",
+          "software-dev-team-product-strategist-role-guidelines": "allow",
+          "software-dev-team-product-strategist-product-brief": "allow"
+        }
+      },
+      "display_name": "Product Strategist",
+      "profession": "Product Strategist",
+      "route_triggers": [
+        "用户需求落在 Product Strategist 的职责域时调度。"
+      ],
+      "handoff_contract": [
+        "返回任务理解、产出、证据、验收状态、失败项、下游依赖和剩余风险。"
+      ]
+    },
+    {
+      "id": "architect",
+      "name": "Architect",
+      "description": "Designs implementation boundaries, integration shape, and technical risk controls.",
+      "mode": "subagent",
+      "color": "warning",
+      "avatar_url": "avatars/architect.png",
+      "skills": [
+        {"purpose": "role-guidelines"},
+        {"purpose": "architecture-review"}
+      ],
+      "responsibilities": [
+        "Inspect existing patterns and identify the smallest safe implementation shape.",
+        "Name integration risks, data flow, and dependency order."
+      ],
+      "quality_gates": [
+        "Architecture guidance cites concrete files, interfaces, or commands.",
+        "Handoff separates decisions from assumptions.",
+        "Implementation dependencies are explicit before coding starts."
+      ],
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "bash": {
+          "*": "allow",
+          "git status*": "allow",
+          "git diff*": "allow"
+        },
+        "webfetch": "allow",
+        "skill": {
+          "*": "deny",
+          "software-dev-team-common-delivery-quality": "allow",
+          "software-dev-team-architect-role-guidelines": "allow",
+          "software-dev-team-architect-architecture-review": "allow"
+        }
+      },
+      "display_name": "Architect",
+      "profession": "Architect",
+      "route_triggers": [
+        "用户需求落在 Architect 的职责域时调度。"
+      ],
+      "handoff_contract": [
+        "返回任务理解、产出、证据、验收状态、失败项、下游依赖和剩余风险。"
+      ]
+    },
+    {
+      "id": "engineer",
+      "name": "Engineer",
+      "description": "Produces the scoped artifact or code change with minimal impact and reports exact verification.",
+      "mode": "subagent",
+      "color": "success",
+      "avatar_url": "avatars/engineer.png",
+      "skills": [
+        {"purpose": "role-guidelines"},
+        {"purpose": "code-change"},
+        {"purpose": "test-runner"}
+      ],
+      "responsibilities": [
+        "Reuse existing project patterns and make the smallest change that satisfies accepted criteria.",
+        "Avoid unrelated refactors, speculative flexibility, and formatting churn.",
+        "Return files changed, commands run, observed results, failed criteria, and residual risk."
+      ],
+      "quality_gates": [
+        "Work starts only after required discovery branches are accepted or explicitly waived.",
+        "Relevant tests or checks are run, or the blocker is explained with evidence.",
+        "Handoff is ready for QA review without hidden follow-up assumptions."
+      ],
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "bash": {
+          "*": "allow",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "pnpm test*": "allow",
+          "python -m pytest*": "allow"
+        },
+        "webfetch": "allow",
+        "skill": {
+          "*": "deny",
+          "software-dev-team-common-delivery-quality": "allow",
+          "software-dev-team-engineer-role-guidelines": "allow",
+          "software-dev-team-engineer-code-change": "allow",
+          "software-dev-team-engineer-test-runner": "allow"
+        }
+      },
+      "display_name": "Engineer",
+      "profession": "Engineer",
+      "route_triggers": [
+        "用户需求落在 Engineer 的职责域时调度。"
+      ],
+      "handoff_contract": [
+        "返回任务理解、产出、证据、验收状态、失败项、下游依赖和剩余风险。"
+      ]
+    },
+    {
+      "id": "qa-reviewer",
+      "name": "QA Reviewer",
+      "description": "Verifies accepted criteria, checks edge cases, and decides whether delivery evidence is complete.",
+      "mode": "subagent",
+      "color": "info",
+      "avatar_url": "avatars/qa-reviewer.png",
+      "skills": [
+        {"purpose": "role-guidelines"},
+        {"purpose": "test-plan"}
+      ],
+      "responsibilities": [
+        "Turn acceptance criteria into verification scenarios.",
+        "Check regressions, edge cases, release risk, and evidence completeness.",
+        "Mark each criterion pass, fail, or blocked with concrete observations."
+      ],
+      "quality_gates": [
+        "Verification includes commands, source evidence, or observed behavior.",
+        "Handoff identifies any failed or blocked criterion before final integration.",
+        "Residual risks and recommended re-dispatch targets are explicit."
+      ],
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "bash": {
+          "*": "allow",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "pnpm test*": "allow",
+          "python -m pytest*": "allow"
+        },
+        "webfetch": "allow",
+        "skill": {
+          "*": "deny",
+          "software-dev-team-common-delivery-quality": "allow",
+          "software-dev-team-qa-reviewer-role-guidelines": "allow",
+          "software-dev-team-qa-reviewer-test-plan": "allow"
+        }
+      },
+      "display_name": "QA Reviewer",
+      "profession": "QA Reviewer",
+      "route_triggers": [
+        "用户需求落在 QA Reviewer 的职责域时调度。"
+      ],
+      "handoff_contract": [
+        "返回任务理解、产出、证据、验收状态、失败项、下游依赖和剩余风险。"
+      ]
+    }
+  ],
+  "profession": "软件交付专家团",
+  "category_id": "02-Engineering",
+  "display_description": "围绕产品、架构、工程和 QA 协作的软件交付专家团。",
+  "default_prompt": "帮我把这个产品想法拆成可交付的软件开发计划并完成验证。",
+  "workflows": [
+    {
+      "name": "标准软件交付",
+      "trigger": "用户需要把产品想法、需求或缺陷转成可验收的软件交付。",
+      "phases": [
+        {
+          "name": "范围和方案发现",
+          "mode": "parallel",
+          "agents": [
+            "product-strategist",
+            "architect"
+          ],
+          "input": "用户目标、约束、现有上下文和验收标准",
+          "expected_output": "产品边界、技术边界、风险和下游依赖",
+          "acceptance": [
+            "每个分支有独立可验收输出",
+            "无共享写入冲突",
+            "阻塞问题明确"
+          ]
+        },
+        {
+          "name": "实现或交付产物",
+          "mode": "serial",
+          "agents": [
+            "engineer"
+          ],
+          "input": "已接受的产品和架构分支",
+          "expected_output": "最小可用实现、文件清单和验证证据",
+          "acceptance": [
+            "只改必要范围",
+            "报告命令和结果",
+            "未通过项可复现"
+          ]
+        },
+        {
+          "name": "最终验收",
+          "mode": "serial",
+          "agents": [
+            "qa-reviewer"
+          ],
+          "input": "实现产物、验收标准和工程证据",
+          "expected_output": "通过/失败/阻塞判定和剩余风险",
+          "acceptance": [
+            "每条验收标准都有状态",
+            "失败项指向返工责任人"
+          ]
+        }
+      ]
+    }
+  ]
+}

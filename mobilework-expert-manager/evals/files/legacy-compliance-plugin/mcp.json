@@ -1,0 +1,8 @@
+{
+  "policy": {
+    "type": "remote",
+    "url": "https://policy.example.invalid/mcp",
+    "headers": {"Authorization": "Bearer {env:API_TOKEN}"},
+    "enabled": false
+  }
+}

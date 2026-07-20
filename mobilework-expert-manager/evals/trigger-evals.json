@@ -1,0 +1,22 @@
+[
+  {"query":"请在临时目录创建一个 MobileWork 发票审核专家，包含 expert.json、头像、推荐问法和验证结果。","should_trigger":true},
+  {"query":"把这份客服 SOP 转成 MobileWork 专家团，团长负责分派，质检和知识库维护作为团员。","should_trigger":true},
+  {"query":"帮我检查 ~/.mobilework/my-experts/legal-reviewer 这个专家包为什么 validator 不通过，只读诊断。","should_trigger":true},
+  {"query":"给现有 expert.json 增加 remote MCP、reference 和 {env:API_TOKEN}，然后重生成专家包。","should_trigger":true},
+  {"query":"把这个旧 Claude/Qoder 插件迁成可分发的 MobileWork expert，不要带旧宿主配置。","should_trigger":true},
+  {"query":"创建一个由产品经理、架构师、开发和 QA 组成的 MobileWork 专家团，设置串并行 workflow。","should_trigger":true},
+  {"query":"将这个 MobileWork 专家完整安装到临时 workspace，检查 .mobilework-engine receipt 和合并配置。","should_trigger":true},
+  {"query":"把已经校验通过的 MobileWork expert 打包成便携 zip，并对干净解压包复验。","should_trigger":true},
+  {"query":"专家团里的团员权限引用了别人的 supplemental skill，按 expert.json 合同修好并重建。","should_trigger":true},
+  {"query":"我的专家把报告写进 .opencode 了，请按 MobileWork 专家包规则修正产物目录并做便携性扫描。","should_trigger":true},
+  {"query":"给普通 OpenCode 项目写一个代码审查 agent markdown，不需要 MobileWork expert.json。","should_trigger":false},
+  {"query":"帮我在 opencode.json 里配置一个通用 remote MCP server，项目不是 MobileWork 专家包。","should_trigger":false},
+  {"query":"写一个通用 SKILL.md，教团队使用 pytest，放在 .agents/skills 下。","should_trigger":false},
+  {"query":"分析一下 MCP 协议的 streamable HTTP 和 stdio 传输有什么区别。","should_trigger":false},
+  {"query":"检查这个普通 npm 插件的 package.json 依赖冲突，不要转换成专家。","should_trigger":false},
+  {"query":"给我的 Codex agent 增加一条 permission 规则，禁止 rm 命令。","should_trigger":false},
+  {"query":"把 README 里的英文翻译成中文并保持 Markdown 结构。","should_trigger":false},
+  {"query":"审查一个普通 OpenCode workspace 的 LSP 配置为什么没生效。","should_trigger":false},
+  {"query":"设计一个多智能体协作方案，但目标平台还没定，也不需要生成 MobileWork 包。","should_trigger":false},
+  {"query":"打包一个普通 Python wheel 并检查是否包含 __pycache__。","should_trigger":false}
+]

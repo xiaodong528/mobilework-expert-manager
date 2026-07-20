@@ -1,0 +1,6 @@
+{
+  "name": "legacy-compliance-review",
+  "description": "Review API changes against policy and produce evidence.",
+  "agents": ["reviewer"],
+  "skills": ["review-skill.md"]
+}

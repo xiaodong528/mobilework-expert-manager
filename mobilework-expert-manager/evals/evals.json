@@ -1,0 +1,307 @@
+{
+  "skill_name": "mobilework-expert-manager",
+  "evals": [
+    {
+      "id": 101,
+      "name": "clarify-underspecified-single-expert",
+      "prompt": "帮我做一个 MobileWork 合同审查专家。",
+      "expected_output": "The assistant asks only for missing design information and does not create a manifest or package before confirmation.",
+      "files": [],
+      "expectations": [
+        "Does not create expert.json, an expert directory, or invoke create_expert.py before design confirmation.",
+        "Recognizes this as a single-expert design request and asks about missing goals, responsibilities, workflow, skills and success criteria.",
+        "Uses an available ask-user-question tool for up to three tightly related independent questions, or asks one concise question without that tool.",
+        "Does not ask for information already present in the prompt.",
+        "Explains that it will propose a candidate design and obtain confirmation before generation."
+      ]
+    },
+    {
+      "id": 102,
+      "name": "clarify-underspecified-expert-team",
+      "prompt": "创建一个 MobileWork 产品交付专家团，帮我把需求做到上线。",
+      "expected_output": "The assistant begins a focused team-design interview without generating files.",
+      "files": [],
+      "expectations": [
+        "Does not create expert.json, a team directory, or invoke the generator before confirmation.",
+        "Identifies missing team-leader and member responsibilities, delegation conditions and final acceptance ownership.",
+        "Identifies missing common-skill and role-specific-skill purposes.",
+        "Plans to clarify serial and parallel workflow, handoff, rework and quality gates.",
+        "Limits the current round to tightly related questions rather than presenting a large questionnaire."
+      ]
+    },
+    {
+      "id": 103,
+      "name": "clarify-only-missing-sop-information",
+      "prompt": "把附件里的客户交付 SOP 转成 MobileWork 专家包。SOP 中写明的阶段、职责和验收规则都按原文保留；我还没有决定应该做成单专家还是专家团，也没有定义每项 skill 的作用。",
+      "expected_output": "The assistant extracts supplied facts and asks only about the unresolved package shape and skill design.",
+      "files": [
+        "evals/files/customer-delivery-sop.md"
+      ],
+      "expectations": [
+        "Uses the supplied SOP as evidence and does not re-ask for stages, responsibilities or acceptance rules already present there.",
+        "Separates source facts, candidate design and unresolved items.",
+        "Asks about the expert-versus-team decision and missing skill purposes in a dependency-aware order.",
+        "Does not generate expert.json or call the generator before a design confirmation.",
+        "Offers a recommendation in business language instead of requiring the user to design manifest fields."
+      ]
+    },
+    {
+      "id": 104,
+      "name": "generate-explicitly-confirmed-complete-design",
+      "prompt": "以下 MobileWork 单专家设计已经逐项确认，请直接生成到任务临时目录并验证：名称是合同审查专家；目标是识别付款、交付、违约和争议条款并输出风险清单；唯一角色 contract-reviewer 负责条款提取、风险分级、证据引用和审查报告，不负责提供最终法律意见；工作流是材料检查、条款提取、风险审查、交叉核对、报告交付；专用 skills 是 clause-extraction（提取并定位条款）和 risk-review（分级风险并给出依据）；质量门要求每个结论有原文证据，缺页时停止；不需要 MCP、runtime extensions 或额外权限。我确认按这个设计开始生成。",
+      "expected_output": "The confirmed complete design is generated and validated without redundant clarification.",
+      "files": [],
+      "expectations": [
+        "Treats the explicit confirmation as satisfying the design gate and does not ask redundant questions.",
+        "Creates a type: expert manifest with one primary agent and no team delegation narrative.",
+        "Maps the two confirmed skill purposes and the confirmed workflow without inventing MCP or runtime extensions.",
+        "Uses the requested temporary output directory.",
+        "Runs JSON parsing, validator and portability checks before claiming completion."
+      ]
+    },
+    {
+      "id": 105,
+      "name": "clarify-structural-team-modification",
+      "prompt": "修改附件里的软件开发专家团，增强安全审查能力。先不要生成，我还没有决定由谁负责、放在哪个阶段，也没定义相关 skills 和验收门。",
+      "expected_output": "The assistant treats the request as a structural modification, shows known context and asks for missing design decisions.",
+      "files": [
+        "evals/files/software-dev-team.expert.json"
+      ],
+      "expectations": [
+        "Reads the existing expert.json example as the source of truth.",
+        "Classifies role ownership, workflow placement, skill purposes and acceptance gates as structural decisions.",
+        "Shows or promises a before-versus-candidate-after design diff before rebuilding.",
+        "Asks only for unresolved security-design decisions and may offer two or three meaningful candidate allocations.",
+        "Does not modify or regenerate the package before explicit confirmation."
+      ]
+    },
+    {
+      "id": 106,
+      "name": "delegated-design-still-requires-confirmation",
+      "prompt": "给我做一个 MobileWork 招投标专家团，角色和流程你来决定，不要问我，直接做。",
+      "expected_output": "The assistant proposes a complete candidate team design but does not generate until the user confirms it.",
+      "files": [],
+      "expectations": [
+        "Interprets 'you decide' as authority to propose a design, not authority to generate immediately.",
+        "Produces a coherent candidate covering leader, members, responsibilities, workflow, common and role-specific skill purposes and quality gates.",
+        "Labels user facts, candidate design and unresolved items separately.",
+        "Ends with an explicit request to confirm the design.",
+        "Does not create expert.json, an expert directory or call the generator."
+      ]
+    },
+    {
+      "id": 107,
+      "name": "repair-derived-portability-defect-directly",
+      "prompt": "只修复附件 MobileWork 专家包 README.md 里的开发机绝对路径，把它改成可移植的包内相对描述；不要改变角色、职责、工作流、skills、权限或其他文件。修复后扫描便携性。",
+      "expected_output": "The deterministic maintenance repair proceeds without a design interview and remains tightly scoped.",
+      "files": [
+        "evals/files/broken-package/expert.json",
+        "evals/files/broken-package/opencode.json",
+        "evals/files/broken-package/README.md"
+      ],
+      "expectations": [
+        "Classifies the request as a maintenance repair and does not start requirements clarification.",
+        "Changes only the requested README portability defect and preserves product design fields.",
+        "Does not regenerate derived files or use --force unnecessarily.",
+        "Runs the requested portability scan and reports any unrelated pre-existing validation problems separately.",
+        "Does not claim the entire fixture is valid if unrelated defects remain."
+      ]
+    },
+    {
+      "id": 108,
+      "name": "diagnose-and-validate-directly",
+      "prompt": "只读检查附件里的 MobileWork 专家包，告诉我 manifest、资源、派生文件和便携性分别有什么问题。不要修复，不要覆盖任何文件。",
+      "expected_output": "A read-only diagnosis runs directly without a design interview or file modification.",
+      "files": [
+        "evals/files/broken-package/expert.json",
+        "evals/files/broken-package/opencode.json",
+        "evals/files/broken-package/README.md"
+      ],
+      "expectations": [
+        "Does not ask design-clarification questions for a read-only diagnostic task.",
+        "Keeps the fixture unchanged and does not regenerate or overwrite files.",
+        "Identifies invalid team shape, unknown workflow agent reference and derived-config drift.",
+        "Identifies the developer-machine absolute path.",
+        "Reports findings separately for manifest, resources, derived files and portability."
+      ]
+    },
+    {
+      "id": 109,
+      "name": "install-confirmed-runtime-package-directly",
+      "prompt": "这个 MobileWork 审计专家设计已经确认：单角色 audit-reviewer，负责审计取证和报告；包含 audit command、本地 TypeScript tool、远程 MCP {env:AUDIT_TOKEN} 和一份 reference。按已确认设计生成后完整安装到临时 workspace，并读回合并配置、资源和 receipt。",
+      "expected_output": "The confirmed package is generated, installed and read back without reopening design clarification.",
+      "files": [],
+      "expectations": [
+        "Does not reopen design clarification after the prompt explicitly marks the design confirmed.",
+        "Declares and generates the command, tool, MCP, reference and placeholder-only environment example.",
+        "Installs into .mobilework-engine with correctly rebased namespaced paths.",
+        "Reads back merged configuration, installed resources and the same-slug receipt.",
+        "Keeps complete runtime installation distinct from a lightweight desktop copy."
+      ]
+    },
+    {
+      "id": 110,
+      "name": "package-existing-expert-directly",
+      "prompt": "从附件中已确认的软件开发专家团 manifest 生成包并打成 zip。先放一个同名旧 zip，确认不带 --force 会拒绝覆盖，再带 --force 原子替换；最后检查 zip、干净解压包和便携性。不要重新讨论团队设计。",
+      "expected_output": "Packaging proceeds directly while retaining the separate force confirmation and transactional verification contract.",
+      "files": [
+        "evals/files/software-dev-team.expert.json"
+      ],
+      "expectations": [
+        "Does not start design clarification for the explicitly confirmed package and packaging task.",
+        "Rejects an existing target zip without --force and preserves its bytes.",
+        "Uses --force only for the separately authorized replacement and publishes atomically after verification.",
+        "Runs Python integrity checks, unzip testing, extracted validation and portability scanning.",
+        "Leaves no temporary archive, cache, bytecode, secret or developer path."
+      ]
+    },
+    {
+      "id": 111,
+      "name": "recommend-commands-for-user-workflows",
+      "prompt": "帮我设计一个 MobileWork 内容审核专家，用户会反复调用两个独立工作流：先用图片、PDF 和文字要求做素材合规审查，再按审查结果生成修改建议。请给设计确认稿，暂时不要生成文件。",
+      "expected_output": "The design recommends one optional command per user-invocable workflow and specifies how text and same-invocation multimodal attachments enter each command.",
+      "files": [],
+      "expectations": [
+        "Keeps design confirmation required and does not generate files before approval.",
+        "Recommends two distinct kebab-case commands, one for each stable user-invocable workflow.",
+        "Routes a single-expert command to the expert or a team command to the primary leader by default.",
+        "Uses $ARGUMENTS for dynamic user text and treats images, PDFs and other attachments as same-invocation host message inputs.",
+        "Does not invent attachment placeholders, binary encodings, local machine paths or a root opencode.json command field.",
+        "Keeps commands optional and does not turn internal phases or one-off handoffs into separate commands."
+      ]
+    },
+    {
+      "id": 112,
+      "name": "recommend-runtime-resources-and-no-agents",
+      "prompt": "帮我设计一个 MobileWork 质量审查专家：我上传了领域规范、案例和操作手册，要随包分发；还需要监听工具执行事件的 hook、一个智能体可调用的 TypeScript 检查工具，以及一份整个 workspace 都要遵守的证据规则。请给设计确认稿，暂时不要生成文件，也不要开发 AGENTS.md。",
+      "expected_output": "The design confirmation maps each need to the correct package-owned OpenCode resource while keeping expert.json as the source of truth and omitting root AGENTS.md.",
+      "files": [],
+      "expectations": [
+        "Keeps design confirmation required and does not generate files before approval.",
+        "Recommends reference_files plus local references under .opencode/references/<slug>/<alias>/, recommends repository references for Git sources with optional branch/description/hidden, and explains that PDF, DOCX or image sources must be converted to UTF-8 Markdown or text.",
+        "Recommends a local plugin under .opencode/plugins for event hooks, with dependencies in .opencode/package.json and no local path in opencode.json.plugin.",
+        "Recommends a custom JavaScript or TypeScript tool under .opencode/tools and does not invent a root tools field.",
+        "Recommends instruction_files under .opencode/instructions/<slug>/ and an explicit opencode.json.instructions file or glob for workspace-wide rules.",
+        "Does not create or recommend root AGENTS.md, and keeps role-specific rules in agent Markdown or the owning supplemental skill.",
+        "Does not let the generator or validator infer and auto-create undeclared resources."
+      ]
+    },
+    {
+      "id": 113,
+      "name": "recommend-low-autonomy-for-repeatable-financial-reconciliation",
+      "prompt": "帮我设计一个 MobileWork 月度结算核对专家。每月会批量处理同一格式的结算表，公司已有 verify-settlement.py，金额计算、差异统计和最终判定都必须由脚本完成，结果要稳定可复现。先给设计确认稿，不要生成文件。",
+      "expected_output": "The design proactively recommends a low-autonomy workflow, fixes deterministic work to the declared script, and asks only for missing execution standards that affect correctness.",
+      "files": [],
+      "expectations": [
+        "Recognizes the repeated financial reconciliation as a high-stability scenario and recommends scripted or fixed autonomy instead of broad exploration.",
+        "States that calculations and determinations must invoke the declared script and must not be replaced by ad-hoc code, mental arithmetic, visual inspection or prose reasoning.",
+        "Separates workflow autonomy from phase autonomy and explains the effective level in direct non-technical language.",
+        "Asks only for still-missing correctness constraints such as script location, input/output contract, authoritative rules, tolerance or acceptance evidence, without repeating facts already supplied.",
+        "Keeps the design gate and does not generate expert.json or invoke create_expert.py before confirmation."
+      ]
+    },
+    {
+      "id": 114,
+      "name": "ask-only-for-missing-execution-standard",
+      "prompt": "设计一个 MobileWork 库存复核专家，先不要生成。执行器已经确定为 package 内 inventory-audit skill 的 scripts/check_inventory.py；输入是 UTF-8 CSV，输出是 JSON；固定流程是先校验列名、再逐行核对、最后生成异常清单；验收要求输出包含总行数、异常行号和脚本退出码。现在只缺允许的数量差异容差，以及容差应以哪份公司制度为准。",
+      "expected_output": "The assistant asks only for the two explicitly missing standards and preserves all already supplied execution constraints.",
+      "files": [],
+      "expectations": [
+        "Does not re-ask for the executor, input, output, fixed steps or acceptance evidence already provided.",
+        "Asks only for the quantity tolerance and the authoritative company policy or version that defines it.",
+        "Recommends scripted autonomy for the script-driven phase and fixed autonomy only where the confirmed SOP needs orchestration.",
+        "Explains that missing authoritative standards keep the work in design state rather than inventing a threshold.",
+        "Does not create files or call the generator before the missing standards and final design are confirmed."
+      ]
+    },
+    {
+      "id": 115,
+      "name": "confirm-workflow-phase-and-agent-override-autonomy",
+      "prompt": "请给一个 MobileWork 合同审查专家团的设计确认稿，暂时不要生成。采用两个可重复调用的 workflow，并各自生成 command：contract-analysis 默认 bounded；其中条款提取 phase 为 fixed，extractor Agent override 为 scripted，只能调用 package 内 extract-clauses skill 的 scripts/extract.py；风险判断 phase 为 guided，关键评级先确认。report-delivery workflow 默认 fixed，报告渲染 phase 也是 fixed，只调用已批准模板工具。团长是 review-lead，成员是 extractor 和 risk-reviewer。",
+      "expected_output": "The confirmation draft clearly states declared and effective autonomy at workflow, phase and Agent override levels and recommends one command per workflow.",
+      "files": [],
+      "expectations": [
+        "Keeps the design gate and does not generate files before explicit confirmation.",
+        "Lists both workflows and recommends distinct kebab-case commands for contract-analysis and report-delivery.",
+        "Explains precedence as Agent override over phase over workflow and states each declared and effective level in direct language.",
+        "Uses the user-facing levels 极低、低、中、高、极高 with their direct boundaries while preserving scripted, fixed, bounded, guided and adaptive as the stored values.",
+        "Shows extractor as effectively scripted in the extraction phase, the extraction phase as fixed for other participants, and the risk phase as guided with a confirmation point.",
+        "Preserves the declared script and template executors, identifies still-missing execution or acceptance standards without inventing them, and requests one final design confirmation."
+      ]
+    },
+    {
+      "id": 116,
+      "name": "propose-deterministic-executor-when-none-exists",
+      "prompt": "帮我设计一个 MobileWork 每日发票核验专家。每天批量处理同一格式文件，必须低错误、可重复、可审计，但目前没有现成脚本或 custom tool。请先给设计建议，不要生成文件。",
+      "expected_output": "The design recommends creating one deterministic executor before enabling a low-autonomy workflow and asks for the minimum contract needed to build it.",
+      "files": [],
+      "expectations": [
+        "Recognizes the stable repeated audit task as unsuitable for guided or adaptive execution by default.",
+        "Proposes solidifying the mechanical phase as a package-owned skill script or custom tool instead of writing fresh code during every workflow run.",
+        "Asks only for the minimum missing input schema, authoritative invoice rules, output contract and acceptance evidence needed to define that executor.",
+        "Keeps the workflow in design state because scripted autonomy has no real callable executor yet.",
+        "Does not generate files, invent business thresholds, or claim the deterministic workflow is ready."
+      ]
+    },
+    {
+      "id": 117,
+      "name": "generate-command-with-explicit-autonomy-at-three-levels",
+      "prompt": "这个 MobileWork 方案评审专家团设计已确认，请生成并校验：workflow 默认 bounded，command 名为 review-solution；并行评审 Phase 为 guided；product-strategist 完全继承 Phase，architect 通过 Agent override 降为 fixed 并覆盖 execution，qa-reviewer 只覆盖 execution、不覆盖自主度。另有一个普通 runtime_extensions command。",
+      "expected_output": "The generated workflow command exposes effective autonomy in its description, every Phase heading and every participating Agent while preserving inheritance sources and leaving the ordinary command unchanged.",
+      "files": [
+        "evals/files/software-dev-team.expert.json"
+      ],
+      "expectations": [
+        "Prefixes the workflow command description with 【自主度：中】 derived from workflow bounded autonomy while keeping expert.json command.description free of generated prefixes.",
+        "Prefixes the guided Phase heading with 【自主度：高】 and retains the detailed effective level and execution contract below it.",
+        "Lists product-strategist, architect and qa-reviewer exactly once within the Phase and shows each Agent's effective autonomy.",
+        "Shows product-strategist autonomy and execution as inherited from Phase, architect autonomy and execution as coming from Agent override, and qa-reviewer autonomy from Phase with execution from Agent override.",
+        "Leaves runtime_extensions.commands[] descriptions and templates unchanged, and validation rejects tampering with the generated workflow command description, Phase or Agent autonomy."
+      ]
+    },
+    {
+      "id": 118,
+      "name": "generate-declared-agent-runtime-options",
+      "prompt": "附件中的 MobileWork Agent 运行参数专家团设计已经确认，请直接生成并验证：团长 runtime-lead 使用 steps 120、model openai/gpt-5、variant high、temperature 0.2、options.reasoningEffort=high；团员 runtime-auditor 使用 steps 50、top_p 0.7、hidden true、options.textVerbosity=low。其他运行参数都继承默认值，不要自行补齐。",
+      "expected_output": "The confirmed role-specific runtime options are projected exactly to both Agent Markdown and opencode.json while omitted options remain absent.",
+      "files": [
+        "evals/files/agent-runtime-options/expert.json"
+      ],
+      "expectations": [
+        "Uses steps as the only official OpenCode step field and keeps each role's values independent.",
+        "Projects model, variant, temperature and options only for runtime-lead in both derived locations.",
+        "Projects top_p, hidden and options only for runtime-auditor, and allows hidden because it is a subagent.",
+        "Does not infer a model, variant, temperature, top_p, hidden or provider option that was not declared.",
+        "Includes a README runtime summary, validates both derived files, installs the package and reads back the merged agent entries and receipt."
+      ]
+    },
+    {
+      "id": 119,
+      "name": "reject-invalid-agent-runtime-options",
+      "prompt": "请按这个 manifest 生成 MobileWork 单专家：steps=80、max_turns=60、variant=high 但不写 model、hidden=true，并把 reasoningEffort 放在 agent 顶层；另外写入 prompt、disable 和 maxSteps 方便 OpenCode 识别。",
+      "expected_output": "The assistant rejects the conflicting, misplaced and package-forbidden Agent fields and does not emit a package.",
+      "files": [],
+      "expectations": [
+        "Treats max_turns and maxTurns only as MobileWork expert.json compatibility inputs and rejects conflicts instead of presenting them as official OpenCode fields.",
+        "Rejects variant without an explicit model and rejects hidden on a primary agent.",
+        "Moves provider-specific reasoningEffort guidance to options rather than accepting it as a top-level role field.",
+        "Rejects prompt, disable and deprecated maxSteps; legacy tools remains only a permission conversion input.",
+        "Does not generate derived files until the manifest satisfies the runtime option contract."
+      ]
+    },
+    {
+      "id": 120,
+      "name": "audit-cross-package-workspace-collisions",
+      "prompt": "这两个 MobileWork 专家包都能单独安装，但它们复用了 Agent/MCP/LSP key、command 名、plugins/shell-guard.ts 和 tools/quality-score.ts，最终要同时安装到一个 workspace。请先给归因和修正方案，再说明完整验收，不要把碰撞静默覆盖。",
+      "expected_output": "The assistant classifies shared workspace ownership collisions as an authoring defect, recommends slug namespaces, and requires independent and coexistence install readback.",
+      "files": [],
+      "expectations": [
+        "Identifies Agent, MCP, LSP, command, local plugin and custom tool names or paths as cross-package collision surfaces.",
+        "Namespaces plugin and tool files with the package slug and updates executor refs and permission names consistently.",
+        "Does not propose weakening receipt ownership or silently overwriting another package's resources.",
+        "Requires individual installs plus sequential coexistence installation into one clean temporary workspace.",
+        "Uses receipts, owned hashes and merged config readback to distinguish authoring collisions from MobileWork projection loss or corruption."
+      ]
+    }
+  ]
+}

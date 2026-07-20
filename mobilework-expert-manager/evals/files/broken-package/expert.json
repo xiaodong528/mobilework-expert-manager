@@ -1,0 +1,14 @@
+{
+  "slug": "broken-review-team",
+  "type": "team",
+  "name": "Broken Review Team",
+  "description": "Fixture for read-only diagnosis.",
+  "avatar_url": "avatars/team.svg",
+  "tags": ["review"],
+  "quick_prompts": ["Review this"],
+  "default_prompt": "Review this",
+  "common_skills": [{"purpose": "evidence"}],
+  "primary_agent": {"id": "lead", "mode": "primary", "description": "Lead review", "skills": [{"purpose": "routing"}]},
+  "subagents": [],
+  "workflows": [{"name": "review", "trigger": "review", "phases": [{"name": "inspect", "mode": "serial", "agents": ["missing-agent"]}]}]
+}
