@@ -1,57 +1,107 @@
-# MobileWork Expert Manager
+# MobileWork Expert Evaluation Marketplace
 
-用于创建、转换、修改、诊断、校验、安装、打包和版本发布 MobileWork 专家与专家团的 Agent Skill。
+面向“26 暑期实习－智能体评估优化方向”的 Claude Code 插件市场。仓库包含一个公共专家管理插件，
+以及 A、B、C 三组独立开发的专家评估与优化插件。
 
-技能源码位于 [`mobilework-expert-manager/`](mobilework-expert-manager/)；入口文件为
-[`SKILL.md`](mobilework-expert-manager/SKILL.md)。
+> 当前状态：`mobilework-expert-manager` 为可用公共插件；A/B/C 插件为可安装、可继续开发的起步骨架，
+> 尚未实现完整的 Promptfoo、OpenCode、评测结果 Web 或真实业务链路。
 
-## 核心能力
+## 快速开始
 
-- 以 `expert.json` 作为专家包结构与资源所有权的唯一事实源。
-- 支持单专家、专家团、角色拓扑、Workflow、Skills、MCP、custom tools、plugins、references、
-  instructions 与 LSP。
-- 支持 `scripted`、`fixed`、`bounded`、`guided`、`adaptive` 五档 Workflow 自主度和相应权限边界。
-- 支持外部 ZIP、附件和未知目录的无执行静态诊断。
-- 支持结构化 findings、root cause、证据 gate、可信 sidecar 和 OpenCode pure config 验证。
-- 支持旧包迁移规划、供应链审计、Bundle manifest 和 Bundle 校验。
-- 支持专家包本地 Git 初始化、SemVer 建议与用户确认后的版本发布。
+在 Claude Code 中添加市场：
 
-## 安全边界
-
-- 外部或未知输入默认只允许静态诊断，不执行其中的 Python、Shell、JavaScript/TypeScript、
-  Plugin、custom tool、MCP 或包管理脚本。
-- 不把静态校验、安装成功或 pure config 加载成功描述为 Runtime 已验证。
-- 未经明确确认，不自动 commit、tag、配置 remote 或发布专家包版本。
-- `.git`、真实 `.env`、`node_modules`、lockfile、缓存、日志、密钥和个人配置不得进入分发包。
-
-## 主要命令
-
-```bash
-python mobilework-expert-manager/scripts/check_environment.py --feature core
-python mobilework-expert-manager/scripts/create_expert.py --manifest <expert.json>
-python mobilework-expert-manager/scripts/validate_expert.py <package-dir> --format json
-python mobilework-expert-manager/scripts/diagnose_expert.py <unknown-dir-or-zip> --format json
-python mobilework-expert-manager/scripts/install_expert.py \
-  --package-dir <package-dir> --workspace-dir <workspace>
-python mobilework-expert-manager/scripts/package_expert.py \
-  --package-dir <package-dir> --output-dir <dist-dir>
-python mobilework-expert-manager/scripts/validate_expert_bundle.py <bundle>
+```text
+/plugin marketplace add xiaodong528/mobilework-expert-eval-marketplace
 ```
 
-完整工作流、权限矩阵和验收要求请阅读
-[`mobilework-expert-manager/SKILL.md`](mobilework-expert-manager/SKILL.md) 及其按需引用的
-[`references/`](mobilework-expert-manager/references/)。
+按需安装插件：
 
-## 验证
+```text
+/plugin install mobilework-expert-manager@mobilework-expert-eval
+/plugin install group-a-expert-eval@mobilework-expert-eval
+/plugin install group-b-expert-eval@mobilework-expert-eval
+/plugin install group-c-expert-eval@mobilework-expert-eval
+/reload-plugins
+```
+
+也可以使用非交互 CLI：
 
 ```bash
-python /path/to/skill-creator/scripts/quick_validate.py mobilework-expert-manager
-python -m unittest discover \
-  -s mobilework-expert-manager/tests \
+claude plugin marketplace add xiaodong528/mobilework-expert-eval-marketplace
+claude plugin install mobilework-expert-manager@mobilework-expert-eval
+```
+
+## 插件清单
+
+| 用途 | 插件安装标识 | Skill 调用 |
+|---|---|---|
+| 公共专家管理 | `mobilework-expert-manager@mobilework-expert-eval` | `/mobilework-expert-manager:mobilework-expert-manager` |
+| A 组 | `group-a-expert-eval@mobilework-expert-eval` | `/group-a-expert-eval:expert-evaluation` |
+| B 组 | `group-b-expert-eval@mobilework-expert-eval` | `/group-b-expert-eval:expert-evaluation` |
+| C 组 | `group-c-expert-eval@mobilework-expert-eval` | `/group-c-expert-eval:expert-evaluation` |
+
+## 仓库结构
+
+```text
+.
+├── .claude-plugin/
+│   └── marketplace.json
+├── plugins/
+│   ├── mobilework-expert-manager/
+│   ├── group-a-expert-eval/
+│   ├── group-b-expert-eval/
+│   └── group-c-expert-eval/
+├── .github/workflows/
+│   └── validate-marketplace.yml
+└── CONTRIBUTING.md
+```
+
+每组只对本组插件目录负责。市场清单、根文档和公共插件属于共享区域，修改前需说明影响并由导师复核。
+具体分支、评审和证据要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 共同评测合同
+
+每组插件最终应独立跑通：
+
+```text
+Claude Code 对话
+  → 本组插件
+  → 真实 OpenCode 专家（团）
+  → Promptfoo
+  → 本地评测结果 Web
+```
+
+共同要求：
+
+- 评估并优化 1 个单专家和 1 个专家团。
+- 覆盖结构化、混合式和开放式任务 case。
+- 比较不同模型、不同专家版本及“使用专家／不使用专家”。
+- 原始专家包保持只读；优化生成带版本标识的新副本。
+- 使用相同 case、模型和运行环境完成优化前后复测。
+- 保留配置、版本、输入、原始输出、指标、日志和报告等可复现证据。
+
+## 本地验证
+
+```bash
+claude plugin validate . --strict
+python3 -m unittest discover \
+  -s plugins/mobilework-expert-manager/skills/mobilework-expert-manager/tests \
   -p 'test_*.py'
 ```
 
-本次同步快照通过技能快速校验及 230 项单元测试。
+CI 会在每次推送到 `main` 和每个 Pull Request 上执行同样的市场结构校验与公共插件测试。
+插件使用显式 SemVer；发布新能力或修复时必须同步升级对应 `plugin.json` 的版本。
+
+## 资料
+
+- [课题任务书](https://docs.qq.com/doc/DRXVNTktmaFZ2Wmpy)
+- [Promptfoo GitHub](https://github.com/promptfoo/promptfoo)
+- [Promptfoo 入门文档](https://www.promptfoo.dev/docs/intro/)
+- [Promptfoo OpenCode SDK Provider](https://www.promptfoo.dev/docs/providers/opencode-sdk/)
+- [OpenCode 官方文档](https://opencode.ai/docs/)
+- [Claude Code 插件开发](https://code.claude.com/docs/en/plugins)
+- [Claude Code 插件技术参考](https://code.claude.com/docs/en/plugins-reference)
+- [Claude Code 插件市场](https://code.claude.com/docs/en/plugin-marketplaces)
 
 ## License
 

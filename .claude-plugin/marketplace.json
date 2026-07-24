@@ -1,0 +1,29 @@
+{
+  "name": "mobilework-expert-eval",
+  "owner": {
+    "name": "MobileWork Expert Evaluation Team"
+  },
+  "description": "Claude Code plugins for MobileWork expert and expert-team evaluation and optimization.",
+  "plugins": [
+    {
+      "name": "mobilework-expert-manager",
+      "source": "./plugins/mobilework-expert-manager",
+      "description": "Create, diagnose, validate, install, package, and version MobileWork experts and expert teams."
+    },
+    {
+      "name": "group-a-expert-eval",
+      "source": "./plugins/group-a-expert-eval",
+      "description": "Group A starter plugin for reproducible MobileWork expert evaluation and optimization."
+    },
+    {
+      "name": "group-b-expert-eval",
+      "source": "./plugins/group-b-expert-eval",
+      "description": "Group B starter plugin for reproducible MobileWork expert evaluation and optimization."
+    },
+    {
+      "name": "group-c-expert-eval",
+      "source": "./plugins/group-c-expert-eval",
+      "description": "Group C starter plugin for reproducible MobileWork expert evaluation and optimization."
+    }
+  ]
+}
