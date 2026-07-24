@@ -5,9 +5,9 @@
   "version": "0.1.0",
   "description": "Create, diagnose, validate, install, package, and version MobileWork experts and expert teams.",
   "author": {
-    "name": "MobileWork Expert Evaluation Team"
+    "name": "xiaodong528"
   },
-  "repository": "https://github.com/xiaodong528/mobilework-expert-eval-marketplace",
+  "repository": "https://github.com/xiaodong528/mobilework-expert-manager",
   "license": "Apache-2.0",
   "keywords": [
     "mobilework",
