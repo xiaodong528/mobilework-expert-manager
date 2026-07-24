@@ -15,8 +15,8 @@ from urllib.parse import urlparse
 
 
 PACKAGE_RUNTIME_DIR = ".opencode"
-WORKSPACE_RUNTIME_DIR = ".mobilework-engine"
-WORKSPACE_CONFIG = "mobilework-engine.jsonc"
+WORKSPACE_RUNTIME_DIR = ".opencode"
+WORKSPACE_CONFIG = "opencode.jsonc"
 INSTALL_RECEIPT_DIR = ".expert-installs"
 OPENCODE_SCHEMA = "https://opencode.ai/config.json"
 OPENCODE_PACKAGE_ROOT_KEYS = frozenset(
@@ -53,6 +53,8 @@ AGENT_MANIFEST_KEYS = frozenset(
         "skills",
         "mcp",
         "permission",
+        "permission_reason",
+        "custom_tools",
         "tools",
     }
 )
@@ -89,7 +91,7 @@ PLUGINS_SUBDIR = "plugins"
 REFERENCES_SUBDIR = "references"
 INSTRUCTIONS_SUBDIR = "instructions"
 
-ROOT_FILES = {"expert.json", "opencode.json", "README.md", ".env.example"}
+ROOT_FILES = {"expert.json", "opencode.json", "README.md", ".env.example", ".gitignore"}
 ROOT_DIRS = {"avatars", PACKAGE_RUNTIME_DIR}
 RUNTIME_FILES = {"package.json"}
 RUNTIME_DIRS = {
@@ -373,7 +375,7 @@ def normalize_reference_entries(
     slug: str,
     reference_file_paths: Iterable[str],
 ) -> dict[str, dict[str, Any]]:
-    """Validate package-owned OpenCode 1.18.3 local and Git references."""
+    """Validate package-owned local and Git references under the manager contract."""
 
     references = {} if value is None else value
     if not isinstance(references, dict):
@@ -444,7 +446,7 @@ def normalize_reference_entries(
 
 
 def normalize_lsp_config(value: Any, field: str = "runtime_extensions.lsp") -> bool | dict[str, Any] | None:
-    """Validate the package-owned OpenCode 1.18.3 LSP subset."""
+    """Validate the package-owned LSP subset under the manager contract."""
 
     if value is None or isinstance(value, bool):
         return value
@@ -750,6 +752,9 @@ def assert_no_symlinks(root: Path) -> None:
         raise ContractError(f"symlink is not allowed: {root}")
     for current, directories, files in os.walk(root, followlinks=False):
         base = Path(current)
+        for name in list(directories):
+            if name == ".git":
+                directories.remove(name)
         for name in [*directories, *files]:
             path = base / name
             if path.is_symlink():
@@ -775,7 +780,7 @@ def declared_package_files(manifest: dict[str, Any]) -> set[str]:
     slug = manifest.get("slug")
     if not isinstance(slug, str) or not NAME_RE.fullmatch(slug):
         raise ContractError("expert.json slug is invalid")
-    allowed = {"expert.json", "opencode.json", "README.md", ".env.example"}
+    allowed = {"expert.json", "opencode.json", "README.md", ".env.example", ".gitignore"}
 
     expert_type = manifest.get("type")
     if expert_type == "expert":

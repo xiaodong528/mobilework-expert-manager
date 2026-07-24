@@ -385,7 +385,7 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
         )
         self.assertEqual(installed.returncode, 0, installed.stderr)
 
-        runtime = workspace / ".mobilework-engine"
+        runtime = workspace / ".opencode"
         expected_files = {
             "commands/review-scope.md",
             "tools/score.ts",
@@ -397,11 +397,11 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
         for relative in expected_files:
             self.assertTrue((runtime / relative).is_file(), relative)
 
-        config = json.loads((runtime / "mobilework-engine.jsonc").read_text(encoding="utf-8"))
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
         for key in {"agent", "mcp", "plugin", "references", "instructions", "lsp"}:
             self.assertIn(key, config)
         self.assertEqual(config["instructions"], [
-            ".mobilework-engine/instructions/contract-review-expert/*.md",
+            ".opencode/instructions/contract-review-expert/*.md",
         ])
         self.assertEqual(config["references"], {
             "contract-review-expert-playbook": {

@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 from typing import Any, Iterable
 
 import package_contract
+import permission_policy
 
 
 AUTONOMY_LEVELS = ("scripted", "fixed", "bounded", "guided", "adaptive")
@@ -514,10 +516,19 @@ def _validate_executor_references(
                             f"{field}.ref: mcp-tool must reference an MCP owned by Agent {agent_id}"
                         )
                 elif kind == "programming-tool":
-                    permission_key = ref.split("/", 1)[0].split(":", 1)[0]
-                    if _permission_denies(role, ref, permission_key):
+                    try:
+                        permission_policy.validate_bash_pattern(ref)
+                        tokens = shlex.split(ref)
+                    except (PermissionError, ValueError, permission_policy.PermissionPolicyError) as exc:
+                        raise WorkflowContractError(f"{field}.ref: unsafe programming-tool pattern: {exc}") from exc
+                    referenced_resources = {token for token in tokens if token in resources}
+                    if not referenced_resources:
                         raise WorkflowContractError(
-                            f"{field}.ref: Agent {agent_id} permission denies programming tool {permission_key}"
+                            f"{field}.ref: programming-tool must reference a declared package resource"
+                        )
+                    if _permission_denies(role, "bash", ref):
+                        raise WorkflowContractError(
+                            f"{field}.ref: Agent {agent_id} permission denies programming tool bash"
                         )
                 elif kind == "agent" and ref not in role_ids:
                     raise WorkflowContractError(f"{field}.ref: references unknown agent {ref}")

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 import package_contract
@@ -12,13 +13,14 @@ import workflow_autonomy
 
 TOP_LEVEL_KEYS = frozenset(
     {
-        "slug", "type", "name", "summary", "description", "language",
+        "slug", "type", "version", "name", "summary", "description", "language",
         "profession", "category_id", "display_description", "avatar_url",
         "tags", "quick_prompts", "default_prompt", "common_skills",
         "package_resources", "runtime_extensions", "mcp_servers", "agent",
         "primary_agent", "subagents", "workflows",
     }
 )
+SEMVER_RE = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,10 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
     expert_type = manifest.get("type")
     if expert_type not in {"expert", "team"}:
         return [ManifestIssue("type", "must be expert or team")]
+
+    version = manifest.get("version")
+    if version is not None and (not isinstance(version, str) or not SEMVER_RE.fullmatch(version)):
+        issues.append(ManifestIssue("version", "must be SemVer X.Y.Z without a v prefix"))
 
     if expert_type == "expert":
         if not isinstance(manifest.get("agent"), dict):

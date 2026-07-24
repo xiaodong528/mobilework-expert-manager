@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 
 import validate_expert
+import ooxml_inspector
 
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
@@ -59,6 +60,19 @@ def scan_text_file(path: Path, base: Path, findings: list[dict[str, str]]) -> No
 
 
 def scan_workbook(path: Path, base: Path, findings: list[dict[str, str]]) -> None:
+    inspection = ooxml_inspector.inspect_workbook(path)
+    for issue in inspection.issues:
+        findings.append(
+            {
+                "file": path.relative_to(base).as_posix(),
+                "location": issue.path,
+                "type": issue.code,
+                "match": issue.message,
+                "severity": issue.severity,
+            }
+        )
+    if inspection.errors:
+        return
     try:
         from openpyxl import load_workbook
     except ImportError as exc:  # pragma: no cover - host dependent
@@ -173,8 +187,9 @@ def main() -> int:
             continue
         all_findings.extend(scan_root(root))
 
-    print(json.dumps({"ok": not all_findings, "findings": all_findings}, ensure_ascii=False, indent=2))
-    return 0 if not all_findings else 1
+    errors = [item for item in all_findings if item.get("severity", "error") == "error"]
+    print(json.dumps({"ok": not errors, "findings": all_findings}, ensure_ascii=False, indent=2))
+    return 0 if not errors else 1
 
 
 if __name__ == "__main__":

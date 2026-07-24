@@ -1,0 +1,4 @@
+interface:
+  display_name: "MobileWork 专家管理器"
+  short_description: "创建、校验、迁移和发布 MobileWork 专家包"
+  default_prompt: "使用 $mobilework-expert-manager 创建并完整验证一个 MobileWork 专家包。"

@@ -84,6 +84,7 @@
 | 字段 | 规则 |
 |---|---|
 | `slug` | 稳定包 id，必须与目录名一致。 |
+| `version` | 可选 `X.Y.Z`。只在用户确认本地 release 时更新；未 release 的可信源可省略。 |
 | `name` | 专家或专家团公开名称。单专家不得用 slug 或内部 id 代替。 |
 | `summary` | 单行定位摘要。 |
 | `description` | 说明能力、适用场景和交付结果。 |
@@ -97,7 +98,7 @@
 | `default_prompt` | 如存在，必须等于 `quick_prompts[0]`。 |
 | `common_skills` | 非空 purpose 对象列表。 |
 | `mcp_servers` | 可选 MCP 声明；支持 local、remote、header auth、OAuth 与 timeout，详见 `runtime-extensions-spec.md`。 |
-| `runtime_extensions` | commands、tools、plugins、OpenCode 1.18.3 local/Git references、instructions、LSP。 |
+| `runtime_extensions` | commands、tools、plugins、目标 capability contract 支持的 local/Git references、instructions、LSP。 |
 | `package_resources` | supplemental skill 中除生成 `SKILL.md` 外的声明资源。 |
 
 来源资料中的宿主产品、平台发布和智能体容器叙事，在展示草案前改为 MobileWork 口径。
@@ -137,7 +138,7 @@
 
 - `id`、`name`、`display_name`、`profession`、`description`、`avatar_url`、`color`；
 - `responsibilities`、`route_triggers`、`workflow`、`quality_gates`、`handoff_contract`；
-- `skills`、`mcp`、`permission`；
+- `skills`、`mcp`、`custom_tools`、`permission`、可选 `permission_reason`；
 - OpenCode 正式步数字段 `steps`，以及仅供 `expert.json` 读取旧包的 MobileWork 历史输入
   `max_turns`、`maxTurns`；
 - 可选运行参数 `model`、`variant`、`temperature`、`top_p`、`hidden`、`options`。
@@ -146,6 +147,10 @@
 统一声明 `name`；当旧角色只有 `title` 时 generator 将其用于显示名，但不会向 Agent Markdown
 或 `opencode.json.agent.<id>` 派生 `title`。若同时声明 `name` 与 `title`，`name` 优先。
 角色 `mcp[]` 只能引用已声明的 MCP server，且条目不得重复。
+角色 `custom_tools[]` 只接受非空、不重复的相对 path，并必须精确匹配
+`runtime_extensions.custom_tools[].path`。单专家不自动拥有全部包级 custom tool；workflow
+executor 可以只为实际参与角色建立该 workflow 所需的 tool 所有权。旧 `tools` mapping 仅作为
+布尔 permission 兼容输入，不是 custom tool 所有权声明。
 
 `steps` 是 OpenCode 官方支持且新设计唯一使用的步数字段。`max_turns`、`maxTurns` 不是 OpenCode Agent
 选项，只为避免批量迁移既有 MobileWork manifest 而在 `expert.json` 输入层兼容；三种输入都
@@ -175,6 +180,10 @@
 `prompt`、`disable` 及其他未知顶层字段；
 provider-specific 参数必须放入 `options`。旧 `tools` 只作为 manifest 到 `permission` 的布尔兼容
 输入，永不写入 Agent Markdown 或 `opencode.json`。
+
+启用 workflow autonomy 时，permission 按 `references/permission-policy-spec.md` 从角色的全部
+effective autonomy、execution 和 ownership 合并。显式规则提高计算动作时必须声明非空
+`permission_reason`；它不能改写 task、Skill、MCP、Bash 通配或外部目录硬边界。
 
 生成的 agent frontmatter 至少包含：
 
@@ -279,7 +288,7 @@ permission: {}
           "input": "已验收的专业结果",
           "expected_output": "最终集成交付",
           "execution": {
-            "executors": [{"kind": "programming-tool", "ref": "validation-command"}],
+            "executors": [{"kind": "programming-tool", "ref": "python3 .opencode/skills/software-delivery-team-quality-control/scripts/validate.py *"}],
             "standards": ["按固定验收清单逐项检查，不得跳项"]
           },
           "acceptance": ["所有必要分支已通过验收"]
@@ -289,6 +298,10 @@ permission: {}
   ]
 }
 ```
+
+上例的 `programming-tool` 同时要求 manifest 在 `package_resources[]` 中声明
+`.opencode/skills/software-delivery-team-quality-control/scripts/validate.py`，并随可信源提供该真实文件；
+缺少声明或文件时生成前失败。
 
 - `mode` 只能是 `primary`、`serial` 或 `parallel`。
 - `agents[]` 只能引用已声明的 primary 或 subagent id。
@@ -320,7 +333,7 @@ execution 只接受 `executors/standards`；每个 Agent override 只接受 `aut
 | `skill-script` | `<完整-skill-id>:scripts/<path>` | 对应 `package_resources[]` 真实文件存在，角色未拒绝该 skill |
 | `custom-tool` | `runtime_extensions.custom_tools[].path` | backing source 存在，角色权限未明确拒绝 |
 | `mcp-tool` | `<mcp-name>/<tool-name>` | MCP 已声明且属于参与角色 |
-| `programming-tool` | 明确工具或受控命令入口 | ref 非空、权限未拒绝，standards 限定输入输出和用途 |
+| `programming-tool` | 精确 Bash pattern | 不含 shell 控制符，至少一个 token 精确引用 `package_resources[]`，权限未拒绝，standards 限定输入输出和用途 |
 | `agent` | 已声明 Agent id | `scripted` 禁止；其他档位需要明确标准 |
 
 `scripted`、`fixed`、`bounded` 必须有非空 executors 和 standards；`guided` 必须有关键确认点
@@ -439,7 +452,7 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
       "read": "allow",
       "edit": "allow",
       "bash": {
-        "*": "allow",
+        "*": "ask",
         "git status*": "allow",
         "git diff*": "allow"
       },

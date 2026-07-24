@@ -7,6 +7,21 @@ MCP 或环境变量时读取本文件。所有配置都从 `expert.json` 派生�
 `opencode.json` 的官方 schema、包级支持字段和 workspace/user 配置边界见
 `opencode-json-spec.md`；本文件只描述已支持扩展如何从 manifest 投影到运行时。
 
+## 目录
+
+1. [包内落位](#1-包内落位)
+2. [完整 Manifest 示例](#2-完整-manifest-示例)
+3. [Commands](#3-commands)
+4. [Custom tools](#4-custom-tools)
+5. [Plugins 与依赖](#5-plugins-与依赖)
+6. [References](#6-references)
+7. [Instructions](#7-instructions)
+8. [LSP](#8-lsp)
+9. [MCP](#9-mcp)
+10. [环境变量](#10-环境变量)
+11. [CLI 安装投影](#11-cli-安装投影)
+12. [已知边界](#12-已知边界)
+
 ## 1. 包内落位
 
 ```text
@@ -204,7 +219,7 @@ CLI 安装按 package name 合并依赖。同一依赖名版本不一致时，�
 
 ### 5.1 Workspace 共存与命名空间
 
-安装会把多个专家包投影到同一个 `.mobilework-engine`。下列资源不是包内私有空间，必须在设计时
+安装会把多个专家包投影到同一个 `.opencode`。下列资源不是包内私有空间，必须在设计时
 做跨包冲突审计：Agent id、MCP name、LSP server key、command 文件名、local plugin 路径和
 custom tool 路径。local plugin 与 custom tool 的 `path` 应使用 `<slug>-<name>.ts`、
 `<slug>-<name>.js` 或 `<slug>/<name>.*`，并同步更新 workflow executor ref 与 `permission` 中的
@@ -212,12 +227,12 @@ custom tool 路径。local plugin 与 custom tool 的 `path` 应使用 `<slug>-<
 receipt 所有权边界。
 
 验收至少包含三次安装：每个包分别安装，以及全部包在同一干净 workspace 顺序安装。共存安装后
-读回所有 receipts、owned file hashes 和 `mobilework-engine.jsonc`；若仅共存失败且投影与 receipt
+读回所有 receipts、owned file hashes 和 `opencode.jsonc`；若仅共存失败且投影与 receipt
 没有丢字段或串改，归因为专家包编写错误并修正命名，而不是修改 MobileWork 以静默覆盖资源。
 
 ## 6. References
 
-OpenCode v1.18.3 正式支持根级 `references`。`runtime_extensions.references` 是唯一上游声明，
+目标 OpenCode capability contract 支持根级 `references` 时，`runtime_extensions.references` 是唯一上游声明，
 生成器把短 alias 改写为 `<slug>-<alias>` 后投影到 `opencode.json.references`。local entry 由
 `reference_files[]` 提供包内真实文件；Git entry 由 OpenCode 按 repository 异步 materialize。
 
@@ -269,7 +284,7 @@ OpenCode v1.18.3 正式支持根级 `references`。`runtime_extensions.reference
 
 ## 8. LSP
 
-`runtime_extensions.lsp` 与 MobileWork bundled OpenCode v1.18.3 对齐，根值只接受三种官方 shape：
+`runtime_extensions.lsp` 使用管理器通用合同支持的三种 shape：
 `true`、`false` 或非空 server mapping，并原样投影到 `opencode.json.lsp`。未声明时必须省略根键；
 省略与显式 `false` 语义不同。显式空 mapping `{}` 没有可执行含义，必须拒绝并提示省略字段。
 
@@ -334,7 +349,7 @@ OpenCode v1.18.3 正式支持根级 `references`。`runtime_extensions.reference
 }
 ```
 
-也可以声明 OpenCode v1.18.3 支持的完整客户端配置：
+也可以声明 capability contract 支持的完整客户端配置：
 
 ```json
 {
@@ -367,7 +382,7 @@ OpenCode v1.18.3 正式支持根级 `references`。`runtime_extensions.reference
 - 真实 token、key 和私有 endpoint 不得明文写入包。
 - 角色 `mcp[]` 只能引用已声明 MCP，生成权限与运行配置必须一致。
 - 同名 MCP、未知字段、local/remote 交叉字段、缺失 command/URL 必须在生成前失败，不能静默覆盖或补占位。
-- 当前 MobileWork sidecar 固定 OpenCode v1.18.3；schema 中未声明的 local
+- 目标版本与能力必须由 CLI、环境、host contract 或可信 sidecar 显式证明；schema 中未声明的 local
   `cwd` 不属于当前合同。
 
 ## 10. 环境变量
@@ -383,16 +398,16 @@ OpenCode v1.18.3 正式支持根级 `references`。`runtime_extensions.reference
 
 ## 11. CLI 安装投影
 
-完整安装目标为 `<workspace>/.mobilework-engine/`，配置文件为
-`.mobilework-engine/mobilework-engine.jsonc`，receipt 为
-`.mobilework-engine/.expert-installs/<slug>.json`。
+完整安装目标为 `<workspace>/.opencode/`，配置文件为
+`.opencode/opencode.jsonc`，receipt 为
+`.opencode/.expert-installs/<slug>.json`。
 
-CLI 安装把 reference 和 instruction 文件路径统一改写为 `.mobilework-engine/` 下的实际路径：
+CLI 安装把 reference 和 instruction 文件路径统一改写为 `.opencode/` 下的实际路径：
 
 | 包内配置 | workspace 文件 | 安装后配置 |
 |---|---|---|
-| `.opencode/references/<slug>/<alias>` | `.mobilework-engine/references/<slug>/<alias>/*` | `references/<slug>/<alias>`（位于 namespaced `references` entry） |
-| `.opencode/instructions/<slug>/*.md` | `.mobilework-engine/instructions/<slug>/*.md` | `.mobilework-engine/instructions/<slug>/*.md` |
+| `.opencode/references/<slug>/<alias>` | `.opencode/references/<slug>/<alias>/*` | `references/<slug>/<alias>`（位于 namespaced `references` entry） |
+| `.opencode/instructions/<slug>/*.md` | `.opencode/instructions/<slug>/*.md` | `.opencode/instructions/<slug>/*.md` |
 
 安装前完成结构、内容、hash、路径和 ownership 冲突预检。
 `agent`、`mcp`、`references`、`plugin`、`instructions` 与 `lsp` 按键或条目合并；local reference

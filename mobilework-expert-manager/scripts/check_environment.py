@@ -13,10 +13,19 @@ from pathlib import Path
 from typing import Any
 
 import execution_context
+import manager_contract
 
 
 MINIMUM_PYTHON = (3, 10)
-FEATURES = ("core", "excel", "package")
+FEATURES = (
+    "core",
+    "excel",
+    "package",
+    "bundle-docx",
+    "git",
+    "config-load",
+    "coverage",
+)
 
 
 def module_status(name: str) -> dict[str, Any]:
@@ -27,6 +36,33 @@ def module_status(name: str) -> dict[str, Any]:
 def command_status(name: str) -> dict[str, Any]:
     path = shutil.which(name)
     return {"kind": "command", "name": name, "available": path is not None, "path": path}
+
+
+def explicit_sidecar_status(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {
+            "kind": "explicit-path",
+            "name": "trusted-opencode-sidecar",
+            "available": False,
+            "required": True,
+            "path": None,
+            "reason": "config-load requires an explicit --sidecar path",
+        }
+    lexical = path.expanduser().absolute()
+    resolved = lexical.resolve()
+    available = (
+        not lexical.is_symlink()
+        and resolved.is_file()
+        and os.access(resolved, os.X_OK)
+    )
+    return {
+        "kind": "explicit-path",
+        "name": "trusted-opencode-sidecar",
+        "available": available,
+        "required": True,
+        "path": str(resolved),
+        "reason": None if available else "sidecar must be an executable regular file and not a symlink",
+    }
 
 
 def selected_features(values: list[str]) -> list[str]:
@@ -41,6 +77,8 @@ def check_environment(
     *,
     env: dict[str, str] | None = None,
     workspace_root: Path | None = None,
+    sidecar: Path | None = None,
+    host_contract: Path | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     python_ok = sys.version_info >= MINIMUM_PYTHON
@@ -57,7 +95,47 @@ def check_environment(
         checks.append(module_status("openpyxl"))
     if "package" in features:
         checks.append(command_status("unzip"))
-    missing = [check["name"] for check in checks if not check["available"]]
+    if "bundle-docx" in features:
+        checks.append(module_status("zipfile"))
+        checks.append(module_status("xml.etree.ElementTree"))
+    if "git" in features:
+        checks.append(command_status("git"))
+    if "coverage" in features:
+        checks.append(module_status("coverage"))
+    if "config-load" in features:
+        checks.append(explicit_sidecar_status(sidecar))
+        try:
+            target = manager_contract.resolve_target(
+                env=os.environ if env is None else env,
+                host_contract=host_contract,
+            )
+            checks.append(
+                {
+                    "kind": "target-contract",
+                    "name": "target-opencode-contract",
+                    "available": True,
+                    "required": False,
+                    "version": target.version,
+                    "source": target.source,
+                    "capabilityVerified": target.capability_verified,
+                    "hostContractPath": target.host_contract_path or None,
+                }
+            )
+        except manager_contract.ManagerContractError as error:
+            checks.append(
+                {
+                    "kind": "target-contract",
+                    "name": "target-opencode-contract",
+                    "available": False,
+                    "required": True,
+                    "reason": str(error),
+                }
+            )
+    missing = [
+        check["name"]
+        for check in checks
+        if check.get("required", True) and not check["available"]
+    ]
     routing: dict[str, Any]
     routing_error: dict[str, str] | None = None
     try:
@@ -101,12 +179,26 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Feature dependencies to check; repeat as needed (default: core)",
     )
+    parser.add_argument(
+        "--sidecar",
+        type=Path,
+        help="Explicit trusted OpenCode sidecar path for config-load preflight; never executed",
+    )
+    parser.add_argument(
+        "--host-contract",
+        type=Path,
+        help="Optional explicit read-only host contract for config-load preflight",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    result = check_environment(selected_features(args.feature))
+    result = check_environment(
+        selected_features(args.feature),
+        sidecar=args.sidecar,
+        host_contract=args.host_contract,
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 1
 

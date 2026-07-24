@@ -12,6 +12,12 @@ prompt。旧 manifest 没有自主度字段时保持原模板行为。
 frontmatter 只允许官方键 `steps`，不得出现仅供 `expert.json` 兼容读取的 `max_turns`、`maxTurns`
 或已弃用的 `maxSteps`。
 
+## 目录
+
+1. [单专家 Agent](#单专家-agent)
+2. [专家团团长](#专家团团长)
+3. [专家团团员](#专家团团员)
+
 ## 单专家 Agent
 
 <!-- mobilework-template:expert-agent:start -->

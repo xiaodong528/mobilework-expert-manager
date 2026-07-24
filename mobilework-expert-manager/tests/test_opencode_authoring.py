@@ -125,7 +125,7 @@ class OpenCodeAuthoringTests(unittest.TestCase):
 
         permission = runtime["agent"]["contract-reviewer"]["permission"]
         self.assertEqual(permission["edit"], "allow")
-        self.assertEqual(permission["bash"]["*"], "allow")
+        self.assertEqual(permission["bash"]["*"], "ask")
         self.assertEqual(permission["webfetch"], "allow")
         self.assertIn("## 配置与环境变量", (self.package / "README.md").read_text(encoding="utf-8"))
 

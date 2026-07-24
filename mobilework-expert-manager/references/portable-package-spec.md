@@ -2,6 +2,17 @@
 
 本文件定义包 allowlist、`package_resources[]`、业务运行产物位置、便携性扫描和 zip 分发合同。
 
+## 目录
+
+1. [根目录与运行资源](#1-根目录与运行资源)
+2. [package_resources](#2-package_resources)
+3. [包内便携性](#3-包内便携性)
+4. [业务运行产物](#4-业务运行产物)
+5. [Validator 合同](#5-validator-合同)
+6. [Zip 分发](#6-zip-分发)
+7. [安装边界](#7-安装边界)
+8. [最终检查](#8-最终检查)
+
 ## 1. 根目录与运行资源
 
 ```text
@@ -10,6 +21,7 @@
 ├── opencode.json
 ├── README.md
 ├── .env.example                 # 可选，仅占位值
+├── .gitignore                   # 管理器 required block，可分发
 ├── avatars/
 └── .opencode/
     ├── agents/
@@ -22,7 +34,8 @@
     └── package.json             # 可选，不携带 node_modules
 ```
 
-根级 `AGENTS.md`、`references/`、`instructions/`、真实 `.env`、额外配置和其他隐藏目录非法。
+可信源目录可有根 `.git/`，但分发包中禁止任何 `.git/**`。根级 `AGENTS.md`、`references/`、
+`instructions/`、真实 `.env`、额外配置和其他隐藏目录非法。
 需要影响整个 workspace 的专家包指令必须放入 `.opencode/instructions/<slug>/`，并由
 `opencode.json.instructions` 索引。
 `.opencode/` 中的 agents、skills、commands、tools、plugins、references 和 instructions 是随包
@@ -154,9 +167,13 @@ packager 在目标目录内创建 sibling temporary zip，依次运行 Python CR
 
 ## 7. 安装边界
 
-完整 CLI 安装把运行资源复制到 `<workspace>/.mobilework-engine/`，并写 receipt 追踪每个 slug 的
-文件、配置键与依赖 ownership。安装结构、路径重写、冲突和回滚规则见
+完整 CLI 安装读取包根 `opencode.json`，把配置合并到
+`<workspace>/.opencode/opencode.jsonc`，并把包内 `.opencode/**` 复制到工作区对应目录；receipt
+追踪每个 slug 的文件、配置键与依赖 ownership。安装结构、路径重写、冲突和回滚规则见
 `runtime-extensions-spec.md`。
+
+旧 `.mobilework-engine` 只作为迁移检测和禁止的业务产物目录保留；安装器不读取、不写入、
+不双写也不自动删除它。重新安装专家是迁移到 `.opencode` 的支持路径。
 
 桌面端“立即使用”不保证安装所有 runtime extensions；依赖 commands、tools、plugins、references、
 instructions、LSP、MCP 或 `.opencode/package.json` 时，使用 `scripts/install_expert.py` 验证。

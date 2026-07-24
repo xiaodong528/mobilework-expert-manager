@@ -35,7 +35,7 @@ EXPECTED = {
     "expert-json": (
         "expert-json-spec.md",
         "json",
-        "caecddfc82ce874e4ebfc37397f23a6442dc66571683f53fe26e2b603f16acbc",
+        "aab4d124cf3e353e04bfd1184e60f13169042cbf9d074f756db6a937ba075997",
     ),
     "primary-agent": (
         "agent-md-spec.md",

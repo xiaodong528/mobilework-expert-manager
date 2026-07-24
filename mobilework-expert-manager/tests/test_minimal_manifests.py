@@ -10,10 +10,13 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
+TESTS = Path(__file__).resolve().parent
 CREATE = SCRIPTS / "create_expert.py"
 VALIDATE = SCRIPTS / "validate_expert.py"
+INSTALL = SCRIPTS / "install_expert.py"
 
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(TESTS))
 from generator_test_support import managed_generator_env
 
 
@@ -43,12 +46,19 @@ class MinimalManifestTests(unittest.TestCase):
         self.assertEqual(generated.returncode, 0, generated.stderr)
         package = output / str(manifest["slug"])
         validated = subprocess.run(
-            [sys.executable, str(VALIDATE), str(package)],
+            [sys.executable, str(VALIDATE), str(package), "--format", "json"],
             text=True,
             capture_output=True,
             check=False,
         )
         self.assertEqual(validated.returncode, 0, validated.stdout + validated.stderr)
+        payload = json.loads(validated.stdout)
+        legacy = [
+            item for item in payload["findings"]
+            if item["code"] == "LEGACY_PERMISSION_BASELINE"
+        ]
+        self.assertTrue(legacy)
+        self.assertTrue(all("HIGH RISK" in item["message"] for item in legacy))
         return package
 
     def assert_minimal_projection(self, package: Path, expected_agents: set[str]) -> None:
@@ -79,7 +89,10 @@ class MinimalManifestTests(unittest.TestCase):
             ".opencode/package.json",
         ):
             self.assertFalse((package / relative).exists(), relative)
-        for directory in (path for path in package.rglob("*") if path.is_dir()):
+        for directory in (
+            path for path in package.rglob("*")
+            if path.is_dir() and ".git" not in path.relative_to(package).parts
+        ):
             self.assertTrue(any(directory.iterdir()), f"orphan empty directory: {directory}")
 
     def test_minimal_expert_manifest_omits_every_optional_projection(self) -> None:
@@ -98,6 +111,23 @@ class MinimalManifestTests(unittest.TestCase):
             }
         )
         self.assert_minimal_projection(package, {"minimal-agent"})
+        workspace = self.root / "legacy-workspace"
+        workspace.mkdir()
+        installed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--package-dir",
+                str(package),
+                "--workspace-dir",
+                str(workspace),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        self.assertTrue((workspace / ".opencode/opencode.jsonc").is_file())
 
     def test_minimal_team_manifest_omits_every_optional_projection(self) -> None:
         package = self.generate_and_validate(

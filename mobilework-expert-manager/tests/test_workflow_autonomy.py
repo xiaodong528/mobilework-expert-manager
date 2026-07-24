@@ -11,9 +11,11 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
+TESTS = Path(__file__).resolve().parent
 CREATE = SCRIPTS / "create_expert.py"
 TEAM_EXAMPLE = SKILL_ROOT / "evals" / "files" / "software-dev-team.expert.json"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(TESTS))
 
 import validate_expert
 import workflow_autonomy
@@ -36,6 +38,10 @@ class WorkflowAutonomyTests(unittest.TestCase):
         return json.loads(TEAM_EXAMPLE.read_text(encoding="utf-8"))
 
     def add_single_contract(self, data: dict[str, object]) -> None:
+        agent = data["agent"]
+        assert isinstance(agent, dict)
+        agent["permission"] = {}
+        agent.pop("tools", None)
         runtime = data.setdefault("runtime_extensions", {})
         assert isinstance(runtime, dict)
         runtime.setdefault("custom_tools", []).append(
@@ -96,6 +102,13 @@ class WorkflowAutonomyTests(unittest.TestCase):
         ]
 
     def add_team_contract(self, data: dict[str, object]) -> None:
+        primary = data["primary_agent"]
+        subagents = data["subagents"]
+        assert isinstance(primary, dict) and isinstance(subagents, list)
+        for item in [primary, *subagents]:
+            assert isinstance(item, dict)
+            item["permission"] = {}
+            item.pop("tools", None)
         data["workflows"] = [
             {
                 "name": "方案评审",
@@ -195,6 +208,11 @@ class WorkflowAutonomyTests(unittest.TestCase):
 
     def test_five_levels_and_three_layer_inheritance(self) -> None:
         data = self.single_manifest()
+        runner = (
+            ".opencode/skills/contract-review-expert-contract-reviewer-role-guidelines/"
+            "scripts/verify.py"
+        )
+        data["package_resources"] = [{"path": runner, "kind": "text"}]
         phases: list[dict[str, object]] = []
         for level in workflow_autonomy.AUTONOMY_LEVELS:
             phase: dict[str, object] = {
@@ -211,7 +229,7 @@ class WorkflowAutonomyTests(unittest.TestCase):
                     "executors": (
                         []
                         if level == "guided"
-                        else [{"kind": "programming-tool", "ref": "verified-runner"}]
+                        else [{"kind": "programming-tool", "ref": f"python3 {runner} *"}]
                     ),
                     "standards": [
                         "关键决定先确认" if level == "guided" else "按已确认输入输出合同执行"
@@ -547,7 +565,7 @@ class WorkflowAutonomyTests(unittest.TestCase):
 
         phase["autonomy"] = "fixed"
         phase["execution"] = {
-            "executors": [{"kind": "programming-tool", "ref": "bash"}],
+            "executors": [{"kind": "programming-tool", "ref": f"python3 {script_path} *"}],
             "standards": ["只运行批准的只读检查命令"],
         }
         data["agent"]["permission"]["bash"] = "deny"
@@ -556,8 +574,28 @@ class WorkflowAutonomyTests(unittest.TestCase):
             "permission denies programming tool",
         ):
             self.normalize(data)
-        data["agent"]["permission"]["bash"] = "allow"
+        data["agent"]["permission"]["bash"] = {f"python3 {script_path} *": "allow"}
         self.assertEqual(self.normalize(data)[0]["phases"][0]["effective_autonomy"], "fixed")
+
+    def test_programming_tool_requires_owned_resource_and_rejects_shell_controls(self) -> None:
+        data = self.single_manifest()
+        self.add_single_contract(data)
+        phase = data["workflows"][0]["phases"][0]
+        phase["execution"]["executors"] = [
+            {"kind": "programming-tool", "ref": "python3 missing.py *"}
+        ]
+        with self.assertRaisesRegex(workflow_autonomy.WorkflowContractError, "declared package resource"):
+            self.normalize(data)
+        resource = (
+            ".opencode/skills/contract-review-expert-contract-reviewer-role-guidelines/"
+            "scripts/check.py"
+        )
+        data["package_resources"] = [{"path": resource, "kind": "text"}]
+        phase["execution"]["executors"] = [
+            {"kind": "programming-tool", "ref": f"python3 {resource} *; touch escaped"}
+        ]
+        with self.assertRaisesRegex(workflow_autonomy.WorkflowContractError, "unsafe programming-tool"):
+            self.normalize(data)
 
     def test_validator_rejects_tampered_workflow_projections(self) -> None:
         targets = {

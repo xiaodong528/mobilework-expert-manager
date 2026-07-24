@@ -134,7 +134,7 @@
       "expectations": [
         "Does not reopen design clarification after the prompt explicitly marks the design confirmed.",
         "Declares and generates the command, tool, MCP, reference and placeholder-only environment example.",
-        "Installs into .mobilework-engine with correctly rebased namespaced paths.",
+        "Installs into .opencode with correctly rebased namespaced paths and merges configuration into .opencode/opencode.jsonc.",
         "Reads back merged configuration, installed resources and the same-slug receipt.",
         "Keeps complete runtime installation distinct from a lightweight desktop copy."
       ]
@@ -301,6 +301,176 @@
         "Does not propose weakening receipt ownership or silently overwriting another package's resources.",
         "Requires individual installs plus sequential coexistence installation into one clean temporary workspace.",
         "Uses receipts, owned hashes and merged config readback to distinguish authoring collisions from MobileWork projection loss or corruption."
+      ]
+    },
+    {
+      "id": 121,
+      "name": "verify-five-autonomy-permission-baselines",
+      "prompt": "以下测试设计已经确认，请用当前 MobileWork 专家管理技能创建并校验 scripted、fixed、bounded、guided、adaptive 五个最小单专家。每个专家只声明对应自主度和完成职责所需的最少能力；输出权限矩阵、生成配置与结构化校验证据，不要启动真实 Runtime。",
+      "expected_output": "Five trusted packages are generated with exact dual-axis permission baselines, adaptive doom_loop allow, and no unconditional Bash wildcard allow.",
+      "files": [],
+      "expectations": [
+        "Generates one package for each autonomy level and reports literal wildcard defaults scripted=deny and fixed/bounded/guided/adaptive=ask so future unknown tools are never implicitly allowed.",
+        "Projects pure adaptive doom_loop=allow while preserving the detailed edit, Bash, network, MCP, task, skill and external-directory baseline.",
+        "Never emits permission.bash with wildcard allow at any autonomy level.",
+        "Only enables exact owned executors and declared skills, tasks and MCP servers required by the role and workflow.",
+        "Uses static validation evidence and labels the result runtime-not-tested rather than claiming a loaded Runtime."
+      ]
+    },
+    {
+      "id": 122,
+      "name": "verify-mixed-autonomy-team-permissions",
+      "prompt": "请创建一个已确认设计的 MobileWork 专家团：团长同时参加 fixed 和 adaptive workflow，团员未参加任何 workflow；团长只可委派给该团员，workflow 只调用一个声明的 skill 和一个声明的 MCP tool。生成、校验并说明权限来源。",
+      "expected_output": "The lead merges effective autonomy safely, sensitive conflicts degrade to ask, the unused role falls back to bounded, and ownership boundaries remain exact.",
+      "files": [],
+      "expectations": [
+        "Calculates each role from effective workflow autonomy rather than one package-wide level.",
+        "Degrades conflicting sensitive actions, including doom_loop, to ask for the mixed fixed/adaptive lead.",
+        "Assigns the non-participating role the bounded fallback and emits a structured migration warning.",
+        "Allows task delegation only from the primary agent to the declared subagent and keeps the subagent task wildcard denied.",
+        "Allows only the declared skill, MCP server and exact MCP executor name; it does not broaden ownership wildcards."
+      ]
+    },
+    {
+      "id": 123,
+      "name": "diagnose-legacy-contract-zip-statically",
+      "prompt": "把 evals/files/broken-package 视为外部旧合同包，先在临时目录打成 ZIP，再用当前技能做静态诊断。请输出 JSON findings、root-cause 分组、原始问题数与根因数，并解释证据等级；不得安装或执行包内代码。",
+      "expected_output": "The legacy ZIP is diagnosed without execution and produces stable structured findings grouped by root cause.",
+      "files": [
+        "evals/files/broken-package/expert.json"
+      ],
+      "expectations": [
+        "Treats the ZIP as untrusted and runs diagnose_expert.py in static-only mode rather than install_expert.py or package code.",
+        "Returns stable finding codes with severity, phase, path/location, rootCause, remediation and redacted evidence.",
+        "Reports both rawFindingCount and rootCauseCount and groups repeated derived errors under shared root causes.",
+        "Uses exit code 1 for an invalid package and status invalid.",
+        "Does not call Python modules, scripts, plugins, tools, MCP commands, package managers or Runtime from the package."
+      ]
+    },
+    {
+      "id": 124,
+      "name": "diagnose-malicious-help-package-without-execution",
+      "prompt": "在 /private/tmp 创建一个外部测试包，包含 import 即写 sentinel 的 Python、--help 即写 sentinel 的 CLI、Shell/JavaScript/TypeScript、Plugin、Custom Tool、MCP command 和 package.json prepare 副作用。只用当前技能诊断目录和 ZIP，并给出 sentinel、子进程、网络三类零执行证据。",
+      "expected_output": "Directory and ZIP diagnostics remain static-only and produce no sentinel file, package-derived process, or network request.",
+      "files": [],
+      "expectations": [
+        "Treats --help as execution and never invokes it for any file in the test package.",
+        "Checks Python syntax with ast.parse or equivalent source parsing without importing a package module.",
+        "Does not run Shell, JavaScript, TypeScript, Plugin, Custom Tool, MCP or package-manager lifecycle code.",
+        "Shows that no sentinel file appeared and no package-derived subprocess or network request was attempted.",
+        "Reports static-only execution metadata for both the unknown directory and ZIP."
+      ]
+    },
+    {
+      "id": 125,
+      "name": "prove-opencode-workspace-install-projection",
+      "prompt": "以下 bounded 单专家测试设计已经确认，请在干净 /private/tmp workspace 完成 generate、validate、portable scan、package、clean extract、revalidate 和临时安装；读回包根 opencode.json、工作区 .opencode/opencode.jsonc、Agent、Skill、permission 和 receipt。不要运行 Runtime。",
+      "expected_output": "The package keeps root opencode.json while installation transactionally merges owned config and resources into workspace .opencode with complete receipt evidence.",
+      "files": [],
+      "expectations": [
+        "Keeps <package>/opencode.json and does not generate <package>/.opencode/opencode.json.",
+        "Merges the package config into <workspace>/.opencode/opencode.jsonc using ownership and collision rules.",
+        "Installs package-owned .opencode resources to the corresponding workspace paths and reads back Agent, Skill and permission entries.",
+        "Reads back a receipt that identifies owned config keys and resources and labels installation installable with runtime-not-tested.",
+        "Does not create or write .mobilework-engine and does not claim config-loadable or runtime-verified without separate evidence."
+      ]
+    },
+    {
+      "id": 126,
+      "name": "verify-version-independent-manager-contract",
+      "prompt": "用当前 MobileWork 专家管理技能校验同一个已知坏包三次：显式 --target-opencode-version、环境变量 MOBILEWORK_TARGET_OPENCODE_VERSION、host contract。比较 provenance 中版本来源，并证明仅有版本字符串时不会声称 capability 已验证；不要自动搜索 sidecar。",
+      "expected_output": "Version precedence and provenance are explicit, capability proof is conservative, and no fixed OpenCode version is assumed.",
+      "files": ["evals/files/broken-package/expert.json"],
+      "expectations": [
+        "Uses CLI over environment over host contract and reports unknown when all inputs are absent.",
+        "Records target version and source in schema-v2 provenance without hard-coding a bundled OpenCode version.",
+        "Does not treat a version string alone as verified capability evidence.",
+        "Rejects an invalid host contract with exit code 2 and a stable manager version-contract code.",
+        "Does not search the repository, installed applications or PATH for an implicit sidecar."
+      ]
+    },
+    {
+      "id": 127,
+      "name": "block-hostile-zip-and-ooxml-before-loading",
+      "prompt": "在 /private/tmp 构造只含 metadata 的恶意 ZIP/OOXML 夹具，覆盖超条目、超总大小、超单项、超压缩比、路径穿越、casefold/NFC 冲突、.git、macOS 元数据、宏、external links 和 embedded object。证明安全限制在 CRC、解压和 openpyxl 前生效。",
+      "expected_output": "Metadata preflight emits stable findings and prevents downstream loading for every blocked archive.",
+      "files": [],
+      "expectations": [
+        "Applies manager-contract archive and OOXML limits before testzip, extraction or openpyxl.",
+        "Rejects path escape, duplicate, casefold, NFC, Windows-reserved, symlink, encrypted and .git entries.",
+        "Reports macOS metadata as non-distributable and mojibake with a safe encoded summary.",
+        "Reports macros, external links and embedded objects as warning-first active-content findings without executing them.",
+        "Uses bounded extraction and proves blocked inputs created no extracted payload."
+      ]
+    },
+    {
+      "id": 128,
+      "name": "plan-legacy-migration-read-only",
+      "prompt": "对一个含字符串 Skills、maxTurns、根 AGENTS.md、旧 references/ 路径和 bash *=allow 的旧专家目录与 ZIP 运行迁移规划。输出 JSON Patch 候选、资源移动、权限变化、业务确认项和重生成列表，并用前后 tree hash 证明源不变。",
+      "expected_output": "The planner produces a complete read-only migration plan without applying it or executing package code.",
+      "files": [],
+      "expectations": [
+        "Produces mechanical actions and candidate JSON Patch without exposing an --apply mode.",
+        "Maps old Skills, steps and references while keeping root-instruction and Bash requirements as user decisions.",
+        "Lists permission changes and all derived artifacts that must be regenerated.",
+        "Produces equal before/after source hashes for both directory and ZIP inputs.",
+        "Does not import or execute package modules, commands, plugins, MCP or lifecycle scripts."
+      ]
+    },
+    {
+      "id": 129,
+      "name": "audit-supply-chain-warning-first",
+      "prompt": "静态审计一个专家包：package.json 同时含 prepare、latest、^range 和 Git URL dependency；npm Plugin 未锁版本；MCP enabled 且使用 npx -y。输出稳定风险码并说明哪些是 error、哪些只是 warning。",
+      "expected_output": "Lifecycle execution is blocked while reproducibility and enabled-runtime risks are surfaced as warnings.",
+      "files": [],
+      "expectations": [
+        "Classifies package lifecycle as an error without running it.",
+        "Classifies latest, semver range, Git URL, unpinned Plugin, enabled MCP and npx -y as warnings.",
+        "Keeps warnings non-fatal when no error exists and does not claim dependencies are fully reproducible.",
+        "Returns stable supply-chain codes, root causes, remediation and redacted evidence.",
+        "Performs no package-manager install, network request or MCP launch."
+      ]
+    },
+    {
+      "id": 130,
+      "name": "create-and-validate-manifest-driven-bundle",
+      "prompt": "把六个已校验专家 ZIP 组成 bundle，生成 bundle-manifest.json 和受控 Markdown 摘要，记录每包 slug/version/hash、测试统计和可选来源。再构造 DOCX 受控字段并故意漂移 packageCount，证明 validator 能稳定发现。",
+      "expected_output": "Bundle validation reconciles package hashes, test counts and controlled Markdown/DOCX fields against one manifest.",
+      "files": [],
+      "expectations": [
+        "Treats bundle-manifest.json as the only source of truth and records every package ZIP hash.",
+        "Runs static package validation and checks package count plus collected/passed/failed/skipped arithmetic.",
+        "Validates only controlled Markdown and DOCX fields instead of interpreting arbitrary prose.",
+        "Reads DOCX using bounded standard ZIP/XML handling without python-docx or macro execution.",
+        "Reports the deliberate document drift with a stable BUNDLE_DOCUMENT_FIELD_DRIFT code."
+      ]
+    },
+    {
+      "id": 131,
+      "name": "version-trusted-expert-with-local-git-semver",
+      "prompt": "创建并校验一个可信 MobileWork 专家，检查自动 git init 但没有 commit/tag；确认首次 v1.0.0 release，再做一次兼容修改，检查 .git 历史和用户 .gitignore 规则保留、累计 diff 建议 v1.0.1，并在未再次确认前不发布。",
+      "expected_output": "Trusted source versioning is local, user-confirmed, SemVer-aware and distribution-safe.",
+      "files": [],
+      "expectations": [
+        "Initializes a Git repository whose root exactly equals the expert directory and emits versionPending without auto-committing.",
+        "Creates a release commit and annotated v1.0.0 tag only after explicit confirmation and matches expert.json.version.",
+        "Preserves .git history and user rules outside the managed .gitignore block across regeneration.",
+        "Uses the last reachable release tag for a cumulative patch proposal and asks again after the real modification.",
+        "Excludes .git metadata from ZIP, install, bundle and hashes and performs no remote Git operation."
+      ]
+    },
+    {
+      "id": 132,
+      "name": "verify-owned-custom-tool-across-autonomy",
+      "prompt": "为五档自主度各建一个专家：包声明 tools/validate.ts，角色通过 custom_tools 精确拥有它；另加未拥有 future_tool 和另一路径同名 validate.ts 负例。验证 owned tool 五档 allow，而未知、跨角色和冲突路径不会被 wildcard 放行。",
+      "expected_output": "Custom-tool allow follows exact package ownership rather than autonomy wildcard or free-text responsibility.",
+      "files": [],
+      "expectations": [
+        "Allows the exact owned validate tool for scripted through adaptive roles.",
+        "Keeps future, cross-role and cross-package tools deny or ask according to the literal unknown baseline.",
+        "Rejects role custom_tools entries that do not match runtime_extensions.custom_tools paths.",
+        "Rejects two declared paths that map to the same OpenCode tool name.",
+        "Does not use legacy tools mapping or role prose as custom-tool ownership evidence."
       ]
     }
   ]

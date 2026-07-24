@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": "2.0.0",
+  "findingCatalogVersion": 2,
+  "evidenceSchemaVersion": 2,
+  "packageConfigFile": "opencode.json",
+  "workspaceConfigFile": ".opencode/opencode.jsonc",
+  "receiptDirectory": ".opencode/.expert-installs",
+  "archiveLimits": {
+    "maxEntries": 5000,
+    "maxTotalUncompressedBytes": 536870912,
+    "maxEntryUncompressedBytes": 134217728,
+    "maxCompressionRatio": 200.0,
+    "maxPathCharacters": 512,
+    "maxPathDepth": 32
+  },
+  "ooxmlLimits": {
+    "maxEntries": 5000,
+    "maxTotalUncompressedBytes": 536870912,
+    "maxEntryUncompressedBytes": 134217728,
+    "maxCompressionRatio": 200.0
+  }
+}

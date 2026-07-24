@@ -5,6 +5,16 @@
 需要判断 `opencode.json` 根字段、agent 投影或官方字段是否归专家包所有时，同时读取
 `opencode-json-spec.md`。
 
+## 目录
+
+1. [转译边界](#转译边界)
+2. [Agent 编写](#agent-编写)
+3. [Skill 编写](#skill-编写)
+4. [Command 编写](#command-编写)
+5. [运行资源选择](#运行资源选择)
+6. [Structure 与配置](#structure-与配置)
+7. [Authoring 检查](#authoring-检查)
+
 ## 转译边界
 
 - 使用 `expert.json` 管理业务结构和资源所有权，并由生成器派生 `opencode.json`、`.opencode/agents/`、`.opencode/skills/` 与其他运行资源。
@@ -50,9 +60,10 @@ generator 不推断参数。`reasoningEffort`、`textVerbosity` 等 provider-spe
 
 ### Permissions
 
-优先在 `permission` 中表达能力，`tools` 只保留为旧 manifest 的布尔兼容输入。显式权限应与真实职责对应，并在 agent Markdown 与 `opencode.json.agent.<id>` 中保持一致。
-
-本技能为兼容现有 MobileWork 专家保留当前默认 permission；创建高风险或只读角色时，应在 manifest 中显式收紧 `edit`、`bash`、网络、MCP 和 `external_directory` 权限。
+优先在 `permission` 中表达无法由 execution 与 ownership 推导的能力，`tools` 只保留为旧 manifest
+的布尔兼容输入。启用 workflow autonomy 后，默认 permission 按
+`references/permission-policy-spec.md` 的双轴最小权限策略生成；显式提权必须有
+`permission_reason`。Agent Markdown 与 `opencode.json.agent.<id>` 必须完全一致。
 
 ## Skill 编写
 

@@ -5,7 +5,7 @@
   {"query":"给现有 expert.json 增加 remote MCP、reference 和 {env:API_TOKEN}，然后重生成专家包。","should_trigger":true},
   {"query":"把这个旧 Claude/Qoder 插件迁成可分发的 MobileWork expert，不要带旧宿主配置。","should_trigger":true},
   {"query":"创建一个由产品经理、架构师、开发和 QA 组成的 MobileWork 专家团，设置串并行 workflow。","should_trigger":true},
-  {"query":"将这个 MobileWork 专家完整安装到临时 workspace，检查 .mobilework-engine receipt 和合并配置。","should_trigger":true},
+  {"query":"将这个 MobileWork 专家完整安装到临时 workspace，检查 .opencode receipt 和 opencode.jsonc 合并配置。","should_trigger":true},
   {"query":"把已经校验通过的 MobileWork expert 打包成便携 zip，并对干净解压包复验。","should_trigger":true},
   {"query":"专家团里的团员权限引用了别人的 supplemental skill，按 expert.json 合同修好并重建。","should_trigger":true},
   {"query":"我的专家把报告写进 .opencode 了，请按 MobileWork 专家包规则修正产物目录并做便携性扫描。","should_trigger":true},

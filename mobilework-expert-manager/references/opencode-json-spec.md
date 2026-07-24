@@ -6,6 +6,16 @@ OpenCode 官方实时 JSON Schema 位于 `https://opencode.ai/config.json`，它
 配置字段的通用语义。本文只定义 MobileWork 专家包拥有并能从 `expert.json` 稳定重建的子集。
 一个字段被官方 schema 接受，不代表它自动成为专家包可拥有的字段。
 
+## 目录
+
+1. [真相源与验证边界](#1-真相源与验证边界)
+2. [包级支持字段](#2-包级支持字段)
+3. [Agent 投影](#3-agent-投影)
+4. [文件型扩展与根配置的关系](#4-文件型扩展与根配置的关系)
+5. [Workspace 或用户级字段](#5-workspace-或用户级字段)
+6. [官方弃用字段](#6-官方弃用字段)
+7. [上游更新检查](#7-上游更新检查)
+
 ## 1. 真相源与验证边界
 
 - `expert.json` 是结构、运行能力和资源所有权的唯一真相源。
@@ -46,13 +56,13 @@ lsp
 和精确回读不接受上游字符串简写；local `path` 必须等于
 `.opencode/references/<slug>/<alias>`，并至少匹配一个 `reference_files[]`。
 
-`mcp` 的 package-owned 子集与 MobileWork 固定 OpenCode sidecar v1.18.3 对齐：local 支持
+`mcp` 的 package-owned 子集由版本无关管理器合同定义：local 支持
 `type/command/environment/enabled/timeout`，remote 支持
 `type/url/headers/oauth/enabled/timeout`。remote `oauth` 为 `false` 或只包含
 `clientId/clientSecret/scope/callbackPort/redirectUri` 的对象；生成器和 validator 必须与
 `expert.json.mcp_servers[]` 做完整等值投影，不能只检查 `enabled`。
 
-`lsp` 与 bundled OpenCode v1.18.3 的官方 union 对齐：根值为布尔值或 server mapping。mapping
+`lsp` 使用管理器合同的通用 union：根值为布尔值或 server mapping。mapping
 中的 server 要么精确为 `{"disabled": true}`，要么声明非空 `command: string[]` 和非空
 `extensions: string[]`，并可带布尔 `disabled`、字符串映射 `env`、对象 `initialization`。
 未知 server 字段拒绝；`extensions` 不额外要求点前缀。未声明 `runtime_extensions.lsp` 时根键
@@ -116,7 +126,7 @@ permission
 
 文件内容、路径、hash 与配置索引都必须能回到 `expert.json` 的声明输入。
 OpenCode 自动发现 `.opencode/plugins/` 与 `.opencode/tools/`，所以本地 plugin 和 custom tool
-不需要也不得伪造根配置字段。MobileWork 固定的 OpenCode v1.18.3 正式支持根级 `references`：
+不需要也不得伪造根配置字段。目标 capability contract 支持时，根级 `references` 使用：
 local entry 使用 namespaced alias 和包内目录 `path`，并由 `reference_files[]` 提供真实文件；Git
 entry 使用 `repository`，可带 `branch`、`description`、`hidden`。`instructions` 只索引显式
 `instruction_files[]`，不再承载 local reference 文件。
@@ -154,7 +164,7 @@ OpenCode 官方支持项目根级 `AGENTS.md`，但 MobileWork 专家包不拥�
 截至 2026-07-17 的官方 schema 中，以下字段已标记弃用或被新字段替代：
 
 - 根级 `mode` 改用 `agent`；
-- 根级单数 `reference` 不属于当前合同；复数 `references` 是 OpenCode v1.18.3 的正式包配置字段；
+- 根级单数 `reference` 不属于当前合同；复数 `references` 仅在目标 capability contract 支持时使用；
 - `autoshare` 改用 `share`；
 - agent `maxSteps` 改用 `steps`；
 - agent `tools` 改用 `permission`；

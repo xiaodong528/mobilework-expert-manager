@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a validated MobileWork expert package into .mobilework-engine."""
+"""Install a validated MobileWork expert package into workspace .opencode."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import package_contract as contract
+import provenance
 import validate_expert
 
 
@@ -598,8 +599,32 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
 
+    receipt_file = receipt_path(runtime_dir, slug)
+    evidence = provenance.collect(input_path=package_dir)
+    evidence.update({
+        "temporaryInstallTarget": str(workspace_dir),
+        "receipt": {
+            "path": str(receipt_file),
+            "sha256": contract.sha256_file(receipt_file),
+            "fileCount": len(file_hashes),
+            "configSections": sorted(config_values),
+        },
+    })
     return {
         "ok": True,
+        "schemaVersion": 2,
+        "evidenceLevel": "installable",
+        "gates": {
+            "archive": "not-run",
+            "contract": "passed",
+            "portability": "passed",
+            "install": "passed",
+            "configLoad": "not-run",
+        },
+        "runtime": {"status": "not-tested", "reason": "install-only"},
+        "provenance": evidence,
+        "status": "installable",
+        "runtime_status": "runtime-not-tested",
         "workspace": str(workspace_dir),
         "package": str(package_dir),
         "slug": slug,
@@ -609,7 +634,7 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
         "references": sorted((runtime.get("references") or {}).keys()),
         "instructions": runtime.get("instructions") or [],
         "required_environment": contract.extract_env_references(runtime),
-        "receipt": str(receipt_path(runtime_dir, slug)),
+        "receipt": str(receipt_file),
     }
 
 

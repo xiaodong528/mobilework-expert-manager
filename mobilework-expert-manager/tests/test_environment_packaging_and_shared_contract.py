@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -54,8 +55,52 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         )
         self.assertEqual(
             check_environment.selected_features(["all"]),
-            ["core", "excel", "package"],
+            [
+                "core",
+                "excel",
+                "package",
+                "bundle-docx",
+                "git",
+                "config-load",
+                "coverage",
+            ],
         )
+
+    def test_coverage_and_config_load_features_report_without_execution(self) -> None:
+        sidecar = self.root / "opencode"
+        sidecar.write_text("fixture", encoding="utf-8")
+        sidecar.chmod(0o700)
+        host = self.root / "host.json"
+        host.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "opencodeVersion": "9.8.7",
+                    "capabilities": {"references": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(check_environment.importlib.util, "find_spec", return_value=None):
+            result = check_environment.check_environment(
+                ["config-load", "coverage"],
+                env={},
+                workspace_root=self.root,
+                sidecar=sidecar,
+                host_contract=host,
+            )
+        by_name = {item["name"]: item for item in result["checks"]}
+        self.assertTrue(by_name["trusted-opencode-sidecar"]["available"])
+        self.assertEqual(by_name["target-opencode-contract"]["version"], "9.8.7")
+        self.assertTrue(by_name["target-opencode-contract"]["capabilityVerified"])
+        self.assertFalse(by_name["coverage"]["available"])
+        self.assertEqual(result["missing"], ["coverage"])
+        self.assertFalse(result["ok"])
+
+        missing = check_environment.check_environment(
+            ["config-load"], env={}, workspace_root=self.root
+        )
+        self.assertEqual(missing["missing"], ["trusted-opencode-sidecar"])
 
     def test_core_environment_does_not_require_pyyaml(self) -> None:
         original = importlib.util.find_spec
@@ -173,7 +218,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
     def test_excel_scan_reports_optional_dependency_only_when_needed(self) -> None:
         workbook = self.root / "report.xlsx"
-        workbook.write_bytes(b"not-a-real-workbook")
+        with zipfile.ZipFile(workbook, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr("xl/workbook.xml", "<workbook/>")
         original_import = builtins.__import__
 
         def guarded_import(name, *args, **kwargs):
@@ -235,14 +282,19 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
     def test_skill_contract_is_compact_portable_and_autonomous(self) -> None:
         skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(skill_text.splitlines()), 240)
-        self.assertIn("compatibility:", skill_text)
+        frontmatter = skill_text.split("---", 2)[1]
+        frontmatter_keys = {
+            line.split(":", 1)[0].strip()
+            for line in frontmatter.splitlines()
+            if line and not line.startswith(" ") and ":" in line
+        }
+        self.assertEqual(frontmatter_keys, {"name", "description"})
+        self.assertTrue((SKILL / "agents" / "openai.yaml").is_file())
         self.assertIn("<skill-root>/scripts/create_expert.py", skill_text)
         self.assertNotIn("~/.agents/skills/mobilework-expert-manager/scripts", skill_text)
         self.assertIn("references/requirements-discovery.md", skill_text)
-        self.assertIn("确认前不得创建 `expert.json`、调用生成器或覆盖现有包", skill_text)
-        self.assertIn("纯修错、诊断、校验、安装和打包", skill_text)
-        self.assertNotIn("用户已明确要求创建且无高影响歧义时直接生成", skill_text)
-        self.assertNotIn("其他低风险、可逆细节可作合理假设", skill_text)
+        self.assertIn("取得明确确认后才能", skill_text)
+        self.assertIn("只读诊断、校验、安装和打包可直接执行", skill_text)
 
     def test_requirements_discovery_contract_has_design_gate_and_direct_lane(self) -> None:
         discovery = (SKILL / "references" / "requirements-discovery.md").read_text(
@@ -274,10 +326,10 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             SKILL / "references" / "opencode-authoring-best-practices.md"
         ).read_text(encoding="utf-8")
 
-        for text in (skill_text, discovery, runtime, authoring):
+        for text in (discovery, runtime, authoring):
             self.assertIn("可由用户直接触发", text)
             self.assertIn("$ARGUMENTS", text)
-        self.assertIn("多个工作流使用多个 command", skill_text)
+        self.assertIn("references/opencode-authoring-best-practices.md", skill_text)
         self.assertIn("不要让 validator 或生成器自动补建", discovery)
         self.assertIn("属于宿主消息层", runtime)
         self.assertIn("不新增附件", runtime)
@@ -312,31 +364,37 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             SKILL / "references" / "opencode-authoring-best-practices.md"
         ).read_text(encoding="utf-8")
 
-        for text in (skill_text, discovery, runtime, authoring):
+        for text in (discovery, runtime, authoring):
             self.assertIn("领域资料", text)
             self.assertIn("`.opencode/references", text)
             self.assertIn("`.opencode/plugins/`", text)
             self.assertIn("`.opencode/tools/`", text)
             self.assertIn("`.opencode/instructions/", text)
             self.assertIn("AGENTS.md", text)
-        self.assertIn("generator 与 validator 不得根据附件或描述自动补建", skill_text)
-        self.assertIn("本地 plugins 与 custom tools 由 OpenCode 自动发现", skill_text)
+        self.assertIn("references/runtime-extensions-spec.md", skill_text)
         self.assertIn("PDF、DOCX、图片等先转换", discovery)
         self.assertIn("不要用 plugin 代替", runtime)
         self.assertIn("不开发根级 `AGENTS.md`", authoring)
-        for text in (skill_text, runtime, authoring):
+        for text in (runtime, authoring):
             self.assertIn("跨包冲突审计", text)
-        self.assertIn("slug 命名空间", skill_text)
+        self.assertIn("<slug>-<name>", runtime)
         self.assertIn("同一干净 workspace 顺序安装", runtime)
 
-    def test_reference_contract_targets_opencode_1183(self) -> None:
+    def test_reference_contract_is_version_independent(self) -> None:
         skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         runtime = (SKILL / "references/runtime-extensions-spec.md").read_text(encoding="utf-8")
         opencode = (SKILL / "references/opencode-json-spec.md").read_text(encoding="utf-8")
+        manager = (SKILL / "references/manager-contract.md").read_text(encoding="utf-8")
         for text in (skill_text, runtime, opencode):
-            self.assertIn("1.18.3", text)
+            self.assertNotIn("1.18.3", text)
             self.assertNotIn("1.16.2", text)
-            self.assertIn("opencode.json.references", text)
+        self.assertIn("--target-opencode-version", skill_text)
+        self.assertIn("MOBILEWORK_TARGET_OPENCODE_VERSION", skill_text)
+        self.assertIn("--target-opencode-version", manager)
+        self.assertIn("MOBILEWORK_TARGET_OPENCODE_VERSION", manager)
+        self.assertIn("--host-contract", manager)
+        self.assertIn("opencode.json.references", runtime)
+        self.assertIn("opencode.json.references", opencode)
         self.assertIn("`repository`", runtime)
         self.assertIn("`branch`", runtime)
         self.assertIn("`hidden`", runtime)
@@ -363,7 +421,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
     def test_eval_fixtures_and_trigger_balance_are_complete(self) -> None:
         evals = json.loads((SKILL / "evals" / "evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(evals["evals"]), 20)
+        self.assertEqual(len(evals["evals"]), 32)
         names = {item["name"] for item in evals["evals"]}
         self.assertEqual(
             names,
@@ -388,6 +446,18 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
                 "generate-declared-agent-runtime-options",
                 "reject-invalid-agent-runtime-options",
                 "audit-cross-package-workspace-collisions",
+                "verify-five-autonomy-permission-baselines",
+                "verify-mixed-autonomy-team-permissions",
+                "diagnose-legacy-contract-zip-statically",
+                "diagnose-malicious-help-package-without-execution",
+                "prove-opencode-workspace-install-projection",
+                "verify-version-independent-manager-contract",
+                "block-hostile-zip-and-ooxml-before-loading",
+                "plan-legacy-migration-read-only",
+                "audit-supply-chain-warning-first",
+                "create-and-validate-manifest-driven-bundle",
+                "version-trusted-expert-with-local-git-semver",
+                "verify-owned-custom-tool-across-autonomy",
             },
         )
         for item in evals["evals"]:
@@ -402,7 +472,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
     def test_broken_fixture_reports_unique_validator_roots(self) -> None:
         fixture = SKILL / "evals" / "files" / "broken-package"
         result = validate_expert.validate_package(fixture)
-        self.assertEqual(len(result.errors), 25)
+        self.assertEqual(len(result.errors), 27)
+        self.assertLess(result.as_dict()["rootCauseCount"], result.as_dict()["rawFindingCount"])
+        self.assertIn("README_SECTION_MISSING", {item.code for item in result.findings})
         self.assertFalse(any(error.startswith("subagents: must contain") for error in result.errors))
 
 

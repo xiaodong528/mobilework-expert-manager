@@ -99,15 +99,15 @@ class InstallerTests(unittest.TestCase):
             command.append("--force")
         return subprocess.run(command, text=True, capture_output=True, check=False)
 
-    def test_installs_into_mobilework_engine_and_rebases_paths(self) -> None:
+    def test_installs_into_opencode_and_rebases_paths(self) -> None:
         package = self.generate()
         result = self.run_install(package)
         self.assertEqual(result.returncode, 0, result.stderr)
-        runtime = self.workspace / ".mobilework-engine"
-        self.assertFalse((self.workspace / ".opencode").exists())
+        runtime = self.workspace / ".opencode"
+        self.assertFalse((self.workspace / ".mobilework-engine").exists())
         self.assertTrue((runtime / "references/contract-review-expert/playbook/overview.md").is_file())
         self.assertTrue((runtime / "instructions/contract-review-expert/evidence.md").is_file())
-        config = json.loads((runtime / "mobilework-engine.jsonc").read_text(encoding="utf-8"))
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
         self.assertEqual(
             config["references"],
             {
@@ -119,7 +119,7 @@ class InstallerTests(unittest.TestCase):
         )
         self.assertEqual(
             config["instructions"],
-            [".mobilework-engine/instructions/contract-review-expert/*.md"],
+            [".opencode/instructions/contract-review-expert/*.md"],
         )
         receipt = json.loads(
             (runtime / ".expert-installs/contract-review-expert.json").read_text(encoding="utf-8")
@@ -157,8 +157,8 @@ class InstallerTests(unittest.TestCase):
             ["reference-expert-playbook", "reference-expert-upstream"],
         )
 
-        runtime = self.workspace / ".mobilework-engine"
-        config_path = runtime / "mobilework-engine.jsonc"
+        runtime = self.workspace / ".opencode"
+        config_path = runtime / "opencode.jsonc"
         receipt_path = runtime / ".expert-installs/reference-expert.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         expected = {
@@ -245,8 +245,8 @@ class InstallerTests(unittest.TestCase):
             ["OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET"],
         )
 
-        runtime = self.workspace / ".mobilework-engine"
-        config_path = runtime / "mobilework-engine.jsonc"
+        runtime = self.workspace / ".opencode"
+        config_path = runtime / "opencode.jsonc"
         receipt_path = runtime / ".expert-installs/oauth-expert.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -318,9 +318,9 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("mcp.shared-oauth is owned by another expert", conflict.stderr)
 
     def test_jsonc_comments_urls_and_trailing_commas_are_parsed(self) -> None:
-        runtime = self.workspace / ".mobilework-engine"
+        runtime = self.workspace / ".opencode"
         runtime.mkdir()
-        (runtime / "mobilework-engine.jsonc").write_text(
+        (runtime / "opencode.jsonc").write_text(
             """{
   // keep this pre-existing value
   "server": {
@@ -333,7 +333,7 @@ class InstallerTests(unittest.TestCase):
         package = self.generate()
         result = self.run_install(package)
         self.assertEqual(result.returncode, 0, result.stderr)
-        config = json.loads((runtime / "mobilework-engine.jsonc").read_text(encoding="utf-8"))
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
         self.assertEqual(config["server"]["url"], "https://example.com/a/*literal*/b//c")
 
     def test_same_slug_requires_force_and_force_upgrades_owned_files(self) -> None:
@@ -386,8 +386,8 @@ class InstallerTests(unittest.TestCase):
         upgraded = self.run_install(package, force=True)
         self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
 
-        runtime = self.workspace / ".mobilework-engine"
-        config = json.loads((runtime / "mobilework-engine.jsonc").read_text(encoding="utf-8"))
+        runtime = self.workspace / ".opencode"
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
         self.assertNotIn("references", config)
         self.assertNotIn("instructions", config)
         self.assertFalse((runtime / "references/upgrade-expert/playbook/overview.md").exists())
@@ -422,8 +422,8 @@ class InstallerTests(unittest.TestCase):
         installed = self.run_install(package)
         self.assertEqual(installed.returncode, 0, installed.stderr)
 
-        runtime = self.workspace / ".mobilework-engine"
-        config_path = runtime / "mobilework-engine.jsonc"
+        runtime = self.workspace / ".opencode"
+        config_path = runtime / "opencode.jsonc"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual(config["agent"]["runtime-agent"]["options"], {"reasoningEffort": "high"})
 
@@ -639,7 +639,7 @@ class InstallerTests(unittest.TestCase):
             installed = self.run_install(package)
             self.assertEqual(installed.returncode, 0, installed.stderr)
         config = json.loads(
-            (self.workspace / ".mobilework-engine/mobilework-engine.jsonc").read_text(encoding="utf-8")
+            (self.workspace / ".opencode/opencode.jsonc").read_text(encoding="utf-8")
         )
         self.assertEqual(
             config["references"],
@@ -658,7 +658,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(set(config["lsp"]), {"first-merge-lsp", "second-merge-lsp"})
 
     def test_commit_transaction_rolls_back_on_replace_failure(self) -> None:
-        runtime = self.workspace / ".mobilework-engine"
+        runtime = self.workspace / ".opencode"
         runtime.mkdir()
         original = runtime / "agents/demo.md"
         original.parent.mkdir()
@@ -684,7 +684,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(original.read_text(encoding="utf-8"), "original\n")
 
     def test_commit_transaction_preserves_backup_when_rollback_fails(self) -> None:
-        runtime = self.workspace / ".mobilework-engine"
+        runtime = self.workspace / ".opencode"
         runtime.mkdir()
         original = runtime / "agents/demo.md"
         original.parent.mkdir()
@@ -725,7 +725,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn(str(backup), str(raised.exception))
 
     def test_commit_transaction_reports_written_target_when_cleanup_fails(self) -> None:
-        runtime = self.workspace / ".mobilework-engine"
+        runtime = self.workspace / ".opencode"
         runtime.mkdir()
         staging = self.root / "staging"
         first_staged = staging / "agents/first.md"
@@ -771,13 +771,13 @@ class InstallerTests(unittest.TestCase):
         with patch.object(INSTALLER, "commit_transaction", side_effect=OSError("simulated install failure")):
             with self.assertRaisesRegex(OSError, "simulated install failure"):
                 INSTALLER.install_package(package, self.workspace, force=False)
-        self.assertFalse((self.workspace / ".mobilework-engine").exists())
+        self.assertFalse((self.workspace / ".opencode").exists())
 
     def test_installer_rejects_runtime_symlink_before_writing(self) -> None:
         if not hasattr(os, "symlink"):
             self.skipTest("symlink is unavailable")
         package = self.generate()
-        runtime = self.workspace / ".mobilework-engine"
+        runtime = self.workspace / ".opencode"
         runtime.mkdir()
         outside = self.root / "outside"
         outside.mkdir()

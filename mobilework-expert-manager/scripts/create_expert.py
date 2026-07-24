@@ -24,7 +24,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import package_contract as contract
 import execution_context
+import gitignore_contract
 import manifest_contract
+import permission_policy
 import renderers
 import workflow_autonomy
 
@@ -150,7 +152,7 @@ def calculate_package_revision(package_dir: Path) -> str:
         current = Path(current_root)
         for directory in list(dir_names):
             candidate = current / directory
-            if directory == "__pycache__":
+            if directory in {"__pycache__", ".git"}:
                 dir_names.remove(directory)
             elif candidate.is_symlink():
                 fail(f"expert package cannot contain symlink: {candidate.relative_to(package_dir)}")
@@ -823,7 +825,11 @@ def normalize_role(raw: Any, field: str, *, expected_mode: str, default_max_turn
         "handoff_contract": text_list(raw.get("handoff_contract"), f"{field}.handoff_contract"),
         "skill_purposes": skill_purposes,
         "mcp": text_list(raw.get("mcp"), f"{field}.mcp"),
+        "custom_tools": text_list(raw.get("custom_tools"), f"{field}.custom_tools"),
         "permission": normalize_permission(raw.get("permission"), f"{field}.permission"),
+        "permission_reason": optional_text(
+            raw.get("permission_reason"), f"{field}.permission_reason"
+        ),
         "tools": raw.get("tools", {}),
     }
     if not isinstance(role["tools"], dict):
@@ -971,9 +977,11 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
                     fail(
                         f"{role['id']}.permission.skill references undeclared skill {skill_name}"
                     )
-        role["permission"] = build_role_permission(
+        role["permission"], role["permission_audit"] = build_role_permission(
             role,
+            workflows=workflows,
             mcp_names=list(mcp.keys()),
+            custom_tool_paths=[item["path"] for item in runtime_extensions["custom_tools"]],
             subagent_ids=[item["id"] for item in subagents],
             is_primary=role["id"] == primary["id"],
         )
@@ -981,6 +989,7 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
     return {
         "slug": slug,
         "type": expert_type,
+        "version": raw.get("version"),
         "name": name,
         "summary": summary,
         "description": description,
@@ -1010,61 +1019,29 @@ def bullet_list(items: list[str], fallback: str) -> str:
     return "\n".join(f"- {item}" for item in values)
 
 
-def merge_permission(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    result = dict(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            nested = dict(result[key])
-            nested.update(value)
-            result[key] = nested
-        else:
-            result[key] = value
-    return result
-
-
-def tools_to_permission(raw: dict[str, Any], field: str) -> dict[str, Any]:
-    permission: dict[str, Any] = {}
-    for key, value in raw.items():
-        if not isinstance(key, str):
-            fail(f"{field} keys must be strings")
-        if isinstance(value, bool):
-            permission_key = "edit" if key in {"write", "patch"} else key
-            permission[permission_key] = "allow" if value else "deny"
-        else:
-            fail(f"{field}.{key} must be a boolean for compatibility conversion")
-    return permission
-
-
 def build_role_permission(
     role: dict[str, Any],
     *,
+    workflows: list[dict[str, Any]],
     mcp_names: list[str],
+    custom_tool_paths: list[str],
     subagent_ids: list[str],
     is_primary: bool,
-) -> dict[str, Any]:
-    permission: dict[str, Any] = {
-        "read": "allow",
-        "edit": "allow",
-        "bash": {"*": "allow", "git status*": "allow", "git diff*": "allow"},
-        "webfetch": "allow",
-        "skill": {"*": "deny", **{skill: "allow" for skill in role["allowed_skills"]}},
-        "task": {"*": "deny"},
-    }
-    expected_task = {"*": "deny"}
-    if is_primary:
-        expected_task.update({agent_id: "allow" for agent_id in subagent_ids})
-    permission["task"] = expected_task
-    for name in mcp_names:
-        permission[f"{name}_*"] = "allow" if name in role["mcp"] else "deny"
-    permission = merge_permission(permission, tools_to_permission(role["tools"], f"{role['id']}.tools"))
-    permission = merge_permission(permission, role["permission"])
-    explicit_task = role["permission"].get("task")
-    if explicit_task is not None and explicit_task != expected_task:
-        fail(
-            f"{role['id']}.permission.task must equal the generated task routing policy: {expected_task}"
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        return permission_policy.build_role_permission(
+            role,
+            workflows=workflows,
+            mcp_names=mcp_names,
+            custom_tool_paths=custom_tool_paths,
+            subagent_ids=subagent_ids,
+            is_primary=is_primary,
+            legacy_tools_permission=permission_policy.tools_to_permission(
+                role["tools"], f"{role['id']}.tools"
+            ),
         )
-    permission["task"] = expected_task
-    return permission
+    except permission_policy.PermissionPolicyError as exc:
+        fail(f"{role['id']}: {exc}")
 
 
 def role_skill_lines(role: dict[str, Any]) -> str:
@@ -1598,12 +1575,50 @@ def render_agent_runtime_summary(manifest: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
+def render_permission_summary(manifest: dict[str, Any]) -> str:
+    rows = [
+        "| Agent | 来源 | 生效自主度 | 参与档位 | `*` | edit | bash | webfetch | external_directory | doom_loop | 提权理由 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for role in [manifest["primary_agent"], *manifest["subagents"]]:
+        permission = role["permission"]
+        audit = role["permission_audit"]
+        bash = permission.get("bash")
+        bash_action = bash.get("*") if isinstance(bash, dict) else bash
+        external = permission.get("external_directory")
+        external_action = external.get("*") if isinstance(external, dict) else external
+        levels = "、".join(audit["levels"]) if audit["levels"] else "未声明"
+        reason = audit["permission_reason"] or "无"
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{role['id']}`",
+                    audit["source"],
+                    audit["effective"],
+                    levels,
+                    str(permission.get("*", "legacy")),
+                    str(permission.get("edit", "继承")),
+                    str(bash_action or "继承"),
+                    str(permission.get("webfetch", "继承")),
+                    str(external_action or "继承"),
+                    str(permission.get("doom_loop", "继承")),
+                    reason,
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(rows)
+
+
 def render_readme_runtime_extensions(manifest: dict[str, Any]) -> str:
     rows = [
         render_runtime_extensions_summary(manifest),
         "\n### Agent 运行参数",
         render_agent_runtime_summary(manifest),
         "\n未声明的可选参数继承 OpenCode、模型或 provider 默认值。",
+        "\n### Agent 权限基线",
+        render_permission_summary(manifest),
     ]
     if manifest["mcp"]:
         rows.append("\n### MCP")
@@ -1763,6 +1778,12 @@ def _write_project_locked(manifest: dict[str, Any], output_root: Path, *, force:
         json.dumps(manifest["source_manifest"], ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    existing_gitignore = ""
+    if project_dir.is_dir() and (project_dir / ".gitignore").is_file():
+        existing_gitignore = (project_dir / ".gitignore").read_text(encoding="utf-8")
+    (staged_project / ".gitignore").write_text(
+        gitignore_contract.merge_content(existing_gitignore), encoding="utf-8"
+    )
     runtime_config = render_runtime_config(manifest)
     (staged_project / RUNTIME_CONFIG).write_text(
         json.dumps(runtime_config, ensure_ascii=False, indent=2) + "\n",
@@ -1872,12 +1893,16 @@ def _write_project_locked(manifest: dict[str, Any], output_root: Path, *, force:
     replaced = False
     installed = False
     committed = False
+    git_history_moved = False
     try:
         if project_dir.exists():
             os.replace(project_dir, backup)
             replaced = True
         os.replace(staged_project, project_dir)
         installed = True
+        if replaced and (backup / ".git").is_dir():
+            os.replace(backup / ".git", project_dir / ".git")
+            git_history_moved = True
         validate_generated_project(project_dir, output_root, manifest["slug"])
         validation = validate_expert.validate_package(project_dir)
         if not validation.ok:
@@ -1885,6 +1910,8 @@ def _write_project_locked(manifest: dict[str, Any], output_root: Path, *, force:
             fail(f"generated live package failed validation: {details}")
         committed = True
     except BaseException:
+        if git_history_moved and (project_dir / ".git").is_dir() and backup.is_dir():
+            os.replace(project_dir / ".git", backup / ".git")
         if not committed and installed and project_dir.exists():
             shutil.rmtree(project_dir, ignore_errors=True)
         if not committed and replaced and backup.exists():
@@ -1947,6 +1974,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if shutil.which("git") is None:
+        fail("Git is required to create or modify a version-controlled expert source")
     if args.manifest.name != MANIFEST_FILE:
         fail(f"manifest file must be named {MANIFEST_FILE}")
     raw = load_json(args.manifest)
@@ -2015,6 +2044,18 @@ def main() -> int:
     else:
         project_dir = write_project(manifest, output_dir, force=args.force)
     validate_generated_project(project_dir, output_dir, manifest["slug"])
+    import expert_vcs
+
+    try:
+        vcs = expert_vcs.initialize_repository(project_dir)
+    except expert_vcs.ExpertVcsError as exc:
+        fail(f"expert was generated but local Git initialization failed: {exc}")
+    print(
+        "VERSION_PENDING: expert source changed successfully; ask the user whether to "
+        "publish the proposed SemVer with version_expert.py. "
+        + json.dumps(vcs, ensure_ascii=False),
+        file=sys.stderr,
+    )
     print(project_dir)
     return 0
 

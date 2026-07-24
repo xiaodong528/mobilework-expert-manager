@@ -40,7 +40,7 @@ execution 对象不接受其他字段；每个 executor 对象只接受 `kind` �
 | `skill-script` | `<完整-skill-id>:scripts/<path>`，且 `package_resources[]` 中有真实文件 |
 | `custom-tool` | `runtime_extensions.custom_tools[].path` |
 | `mcp-tool` | `<mcp-name>/<tool-name>`，且参与角色拥有该 MCP |
-| `programming-tool` | 明确工具或受控命令入口，standards 限定输入、输出和用途 |
+| `programming-tool` | 精确 Bash pattern，且至少一个 token 必须是 `package_resources[]` 中声明的包资源；standards 限定输入、输出和用途 |
 | `agent` | 已声明 Agent id；`scripted` 禁止 |
 
 `scripted`、`fixed`、`bounded` 必须有 executors 和 standards；`guided` 必须有关键确认点 standards，
@@ -78,3 +78,5 @@ workflow，README、Agent 和 Skill 继续使用原有详细投影，不增加�
 - `fixed` 只走声明分支；`bounded` 穷尽批准方法后升级；`guided` 到确认点先询问；`adaptive`
   可调整方法，但验证失败不得宣称完成。
 - 所有等级都禁止静默降低验收标准。
+- Agent 静态 permission 由全部 effective autonomy 合并，完整矩阵、冲突降级和提权规则见
+  `references/permission-policy-spec.md`。

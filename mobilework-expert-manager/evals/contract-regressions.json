@@ -109,7 +109,7 @@
       "id": 12,
       "name": "runtime-extensions-full-package",
       "prompt": "从 references/expert-json-spec.md 的 expert-json 模板块创建一个可真实运行的单专家包：expert.json.runtime_extensions 同时声明 commands、带非空源码的 custom_tools、plugins.npm、plugins.local、plugins.package_json、reference_files 及其 local references alias、一个带 branch/description/hidden 的 Git repository reference、instruction_files 及其 instructions glob、LSP；expert.json.mcp_servers 声明一个使用 {env:MOBILEWORK_EVAL_TOKEN} 的远程 MCP。为每个 local 声明提供真实 backing file 和非空内容，生成后校验包、解析 expert.json/opencode.json/.env.example，安装到临时 workspace，再检查所有资源落位、alias、环境变量占位和安装配置投影。",
-      "expected_output": "A generated, validated, and installed single-expert package where every declared runtime extension has a real package-local backing file, aliases and environment placeholders are exact, and the installed .mobilework-engine projection contains no unresolved placeholders or foreign-host leakage.",
+      "expected_output": "A generated, validated, and installed single-expert package where every declared runtime extension has a real package-local backing file, aliases and environment placeholders are exact, and the installed .opencode projection contains no unresolved placeholders or foreign-host leakage.",
       "files": [],
       "expectations": [
         "Creates .opencode/commands/<name>.md for each runtime_extensions.commands entry.",
@@ -120,9 +120,9 @@
         "Preserves {env:MOBILEWORK_EVAL_TOKEN} in the generated remote MCP configuration, emits enabled exactly as declared, and creates .env.example containing exactly MOBILEWORK_EVAL_TOKEN=<required> with no real secret.",
         "Generated expert.json, opencode.json, command Markdown, tool/plugin source, references, and instructions contain no unresolved [TODO], empty template/source/file bodies, or empty required placeholder values.",
         "Generated package content contains no WorkBuddy/CodeBuddy host leakage such as .codebuddy-plugin, plugin.json, WORKBUDDY_CONFIG_DIR, TeamCreate, or SendMessage.",
-        "install_expert.py copies commands, tools, plugins, references, instructions, package.json, and the MCP configuration into the workspace .mobilework-engine projection.",
-        "install_expert.py merges agent, mcp, plugin, references, instructions, and lsp into .mobilework-engine/mobilework-engine.jsonc; reference aliases remain <slug>-<alias>, reference paths rebase under references/<slug>/<alias>, and instruction globs rebase under .mobilework-engine/instructions/<slug>.",
-        "install_expert.py writes .mobilework-engine/.expert-installs/<slug>.json, every receipt-owned path exists, and the installed config is accepted by opencode debug config --pure."
+        "install_expert.py copies commands, tools, plugins, references, instructions, package.json, and the MCP configuration into the workspace .opencode projection.",
+        "install_expert.py merges agent, mcp, plugin, references, instructions, and lsp into .opencode/opencode.jsonc; reference aliases remain <slug>-<alias>, reference paths rebase under references/<slug>/<alias>, and instruction globs rebase under .opencode/instructions/<slug>.",
+        "install_expert.py writes .opencode/.expert-installs/<slug>.json, every receipt-owned path exists, and a repository-pinned OpenCode sidecar may be used only for a trusted-package pure config readback."
       ]
     },
     {
@@ -274,11 +274,11 @@
       "id": 18,
       "name": "installer-ownership-and-rollback",
       "prompt": "在临时 workspace 依次安装两个专家，验证 references/instructions 路径重写、package.json 依赖与 LSP 合并；再测试同 slug --force、跨 slug 路径冲突、依赖版本冲突和模拟写入失败回滚。",
-      "expected_output": "The CLI installs into .mobilework-engine with receipts, merges non-conflicting entries, protects cross-slug ownership, and restores the workspace after failure.",
+      "expected_output": "The CLI installs into .opencode with receipts, merges non-conflicting entries, protects cross-slug ownership, and restores the workspace after failure.",
       "files": [],
       "expectations": [
-        "Installs configuration at .mobilework-engine/mobilework-engine.jsonc and records .mobilework-engine/.expert-installs/<slug>.json.",
-        "Rebases references to config-relative references/<slug>/<alias> and instructions to workspace-relative .mobilework-engine/instructions/<slug> patterns.",
+        "Installs configuration at .opencode/opencode.jsonc and records .opencode/.expert-installs/<slug>.json.",
+        "Rebases references to config-relative references/<slug>/<alias> and instructions to workspace-relative .opencode/instructions/<slug> patterns.",
         "Merges dependencies by package name and LSP by server name, and rejects different versions of the same dependency before writing.",
         "Allows --force to replace resources owned by the same slug but rejects paths or config keys owned by another slug.",
         "Restores all prior files and config after a simulated transactional write failure."
@@ -371,7 +371,7 @@
     {
       "id": 25,
       "name": "lsp-and-strict-runtime-contract",
-      "prompt": "生成并校验 bundled OpenCode 1.18.3 的 LSP true、false、custom mapping 和省略形态；同时检查空 mapping、空 command/extensions、错误 env/initialization、未知字段、重复 plugins/instructions/Agent MCP、普通 command 的 Agent/model 引用、旧 title 回退和 loopback Git reference。",
+      "prompt": "使用显式输入的目标 OpenCode 版本合同生成并校验 LSP true、false、custom mapping 和省略形态；同时检查空 mapping、空 command/extensions、错误 env/initialization、未知字段、重复 plugins/instructions/Agent MCP、普通 command 的 Agent/model 引用、旧 title 回退和 loopback Git reference。",
       "expected_output": "Generator and validator enforce one exact manifest/projection contract without emitting meaningless LSP roots or silently dropping unsupported fields.",
       "files": [],
       "expectations": [

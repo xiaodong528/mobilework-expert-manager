@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
+import ast
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -19,8 +22,13 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import package_contract as contract
+import gitignore_contract
 import manifest_contract
+import manager_contract
+import permission_policy
 import renderers
+import supply_chain_audit
+from validation_result import ValidationResult
 import workflow_autonomy
 
 
@@ -95,32 +103,25 @@ NON_PORTABLE_TEXT_PATTERNS = [
 ]
 
 
-class Result:
-    def __init__(self) -> None:
-        self.errors: list[str] = []
-        self.warnings: list[str] = []
+Result = ValidationResult
 
-    def error(self, message: str) -> None:
-        self.errors.append(message)
 
-    def warn(self, message: str) -> None:
-        self.warnings.append(message)
+def iter_package_paths(package_dir: Path):
+    """Yield package paths while treating only the root `.git` as source metadata."""
 
-    @property
-    def ok(self) -> bool:
-        return not self.errors
-
-    def print_summary(self) -> None:
-        if self.errors:
-            print(f"ERRORS ({len(self.errors)}):")
-            for message in self.errors:
-                print(f"- {message}")
-        if self.warnings:
-            print(f"WARNINGS ({len(self.warnings)}):")
-            for message in self.warnings:
-                print(f"- {message}")
-        if self.ok:
-            print("Expert package is valid.")
+    for current_root, directory_names, file_names in os.walk(package_dir, followlinks=False):
+        current = Path(current_root)
+        is_root = current == package_dir
+        for name in sorted(list(directory_names)):
+            path = current / name
+            if name == ".git":
+                directory_names.remove(name)
+                if not is_root:
+                    yield path
+                continue
+            yield path
+        for name in sorted(file_names):
+            yield current / name
 
 
 def read_json(path: Path, result: Result) -> dict[str, Any] | None:
@@ -1193,6 +1194,8 @@ def check_readme_shape(package_dir: Path, manifest: dict[str, Any], result: Resu
 
     if "### Agent 运行参数" not in text:
         result.error("README.md: missing Agent runtime options summary")
+    if "### Agent 权限基线" not in text:
+        result.error("README.md: missing Agent permission baseline summary")
 
     type_specific = "## 团队角色" if manifest.get("type") == "team" else "## 专家能力"
     if type_specific not in text:
@@ -1336,6 +1339,93 @@ def check_package_owned_config_keys(
         f"Declare support through expert.json before adding it to this derived file; allowed keys: "
         f"{', '.join(sorted(allowed))}"
     )
+
+
+def check_permission_policy(
+    package_dir: Path,
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+    result: Result,
+) -> None:
+    workflows = normalized_autonomy_workflows(manifest)
+    roles = roles_from_manifest(manifest)
+    if not roles:
+        return
+    slug = manifest.get("slug")
+    if not isinstance(slug, str):
+        return
+    try:
+        common_skills = contract.common_skill_names(slug, manifest.get("common_skills"))
+        mcp_names = list(contract.normalize_mcp_servers(manifest.get("mcp_servers")))
+    except contract.ContractError:
+        return
+    runtime_raw = manifest.get("runtime_extensions", {})
+    custom_tool_paths = [
+        item["path"]
+        for item in runtime_raw.get("custom_tools", [])
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    ] if isinstance(runtime_raw, dict) else []
+    subagent_ids = [
+        str(role["id"])
+        for role in roles[1:]
+        if isinstance(role.get("id"), str)
+    ] if manifest.get("type") == "team" else []
+    config_agents = config.get("agent")
+    if not isinstance(config_agents, dict):
+        return
+    readme = read_markdown_body(package_dir / "README.md", result)
+    for index, role in enumerate(roles):
+        role_id = role.get("id")
+        if not isinstance(role_id, str):
+            continue
+        try:
+            role_skills = contract.role_skill_names(slug, role, f"roles[{index}]")
+            normalized_role = dict(role)
+            normalized_role["allowed_skills"] = [*common_skills, *role_skills]
+            normalized_role["mcp"] = role.get("mcp", [])
+            normalized_role["custom_tools"] = role.get("custom_tools", [])
+            normalized_role["permission"] = role.get("permission", {})
+            normalized_role["permission_reason"] = role.get("permission_reason", "")
+            tools = role.get("tools", {})
+            if not isinstance(tools, dict):
+                continue
+            expected, audit = permission_policy.build_role_permission(
+                normalized_role,
+                workflows=workflows,
+                mcp_names=mcp_names,
+                custom_tool_paths=custom_tool_paths,
+                subagent_ids=subagent_ids,
+                is_primary=index == 0,
+                legacy_tools_permission=permission_policy.tools_to_permission(
+                    tools, f"{role_id}.tools"
+                ),
+            )
+        except (contract.ContractError, permission_policy.PermissionPolicyError) as exc:
+            result.error(f"{role_id}: {exc}")
+            continue
+        config_agent = config_agents.get(role_id)
+        if isinstance(config_agent, dict) and config_agent.get("permission") != expected:
+            result.error(
+                f"{RUNTIME_CONFIG}: agent.{role_id}.permission must match the autonomy-derived policy"
+            )
+        if audit["warning"] == "legacy-permission-baseline":
+            result.warn(
+                f"{role_id}: HIGH RISK legacy-permission-baseline preserves historical permissions, including possible unconditional Bash wildcard allow; add workflow autonomy during the next structural modification"
+            )
+        elif audit["warning"] == "unused-role-bounded-fallback":
+            result.warn(
+                f"{role_id}: unused-role-bounded-fallback; role is not assigned to an autonomy-enabled workflow"
+            )
+        for expected_text in (
+            audit["source"],
+            audit["effective"],
+            audit["permission_reason"] or "无",
+        ):
+            if expected_text not in readme:
+                result.error(
+                    f"README.md: Agent permission baseline for {role_id} differs from expert.json"
+                )
+                break
 
 
 def check_runtime_config(package_dir: Path, config: dict[str, Any], manifest: dict[str, Any], result: Result) -> None:
@@ -1493,7 +1583,7 @@ def check_runtime_config(package_dir: Path, config: dict[str, Any], manifest: di
 
 
 def scan_secrets(package_dir: Path, result: Result) -> None:
-    for path in sorted(package_dir.rglob("*")):
+    for path in iter_package_paths(package_dir):
         if not path.is_file() or (path.suffix not in TEXT_SCAN_SUFFIXES and path.name not in TEXT_SCAN_NAMES):
             continue
         try:
@@ -1555,7 +1645,7 @@ def check_env_example(package_dir: Path, config: dict[str, Any], result: Result)
 
 
 def check_forbidden_files(package_dir: Path, result: Result) -> None:
-    for path in sorted(package_dir.rglob("*")):
+    for path in iter_package_paths(package_dir):
         rel = path.relative_to(package_dir)
         if path == package_dir:
             continue
@@ -1586,7 +1676,7 @@ def check_declared_file_allowlist(package_dir: Path, manifest: dict[str, Any], r
     except contract.ContractError as exc:
         result.error(str(exc))
         return
-    for path in sorted(package_dir.rglob("*")):
+    for path in iter_package_paths(package_dir):
         if not path.is_file():
             continue
         relative = path.relative_to(package_dir).as_posix()
@@ -1596,8 +1686,43 @@ def check_declared_file_allowlist(package_dir: Path, manifest: dict[str, Any], r
             result.error(f"undeclared package file: {relative}")
 
 
+def check_gitignore(package_dir: Path, manifest: dict[str, Any], result: Result) -> None:
+    path = package_dir / ".gitignore"
+    if not path.exists():
+        result.warn(
+            "root .gitignore is missing; legacy package remains installable but source VCS hygiene is pending",
+            code="GITIGNORE_MISSING",
+            phase="version-control",
+            path=".gitignore",
+            root_cause="legacy-source-without-gitignore",
+            remediation="Regenerate the trusted source package to add the managed .gitignore block.",
+        )
+        return
+    try:
+        content = path.read_text(encoding="utf-8")
+        declared = contract.declared_package_files(manifest)
+    except (OSError, UnicodeDecodeError, contract.ContractError) as exc:
+        result.error(
+            f"root .gitignore cannot be validated: {exc}",
+            code="GITIGNORE_INVALID",
+            phase="version-control",
+            path=".gitignore",
+            root_cause="invalid-gitignore",
+        )
+        return
+    for code, message in gitignore_contract.validate_content(content, declared):
+        result.error(
+            message,
+            code=code,
+            phase="version-control",
+            path=".gitignore",
+            root_cause="invalid-gitignore",
+            remediation="Restore the managed block and unignore every package-owned file.",
+        )
+
+
 def scan_portability(package_dir: Path, result: Result) -> None:
-    for path in sorted(package_dir.rglob("*")):
+    for path in iter_package_paths(package_dir):
         if not path.is_file() or (path.suffix not in TEXT_SCAN_SUFFIXES and path.name not in TEXT_SCAN_NAMES):
             continue
         try:
@@ -1612,10 +1737,36 @@ def scan_portability(package_dir: Path, result: Result) -> None:
                 break
 
 
-def validate_package(package_dir: Path) -> Result:
-    result = Result()
+def check_static_syntax(package_dir: Path, result: Result) -> None:
+    """Parse package Python as source text without importing or executing it."""
+
+    for path in iter_package_paths(package_dir):
+        if not path.is_file() or path.suffix != ".py":
+            continue
+        relative = path.relative_to(package_dir).as_posix()
+        try:
+            source = path.read_text(encoding="utf-8")
+            ast.parse(source, filename=relative)
+        except (OSError, UnicodeDecodeError, SyntaxError) as exc:
+            result.error(
+                f"Python syntax check failed in {relative}: {exc}",
+                code="PYTHON_STATIC_SYNTAX_INVALID",
+                phase="static-syntax",
+                path=relative,
+                root_cause="invalid-python-syntax",
+                evidence=str(exc),
+            )
+
+
+def validate_package(
+    package_dir: Path,
+    *,
+    target: manager_contract.TargetContract | None = None,
+) -> Result:
+    result = Result(input_path=package_dir, target=target)
     if not package_dir.exists() or not package_dir.is_dir():
         result.error(f"package directory does not exist: {package_dir}")
+        result.finalize_contract()
         return result
 
     try:
@@ -1628,17 +1779,31 @@ def validate_package(package_dir: Path) -> Result:
     check_forbidden_files(package_dir, result)
     if not manifest_path.exists():
         result.error(f"missing {MANIFEST_FILE}")
+        result.finalize_contract()
         return result
     if not config_path.exists():
         result.error(f"missing {RUNTIME_CONFIG}")
+        result.finalize_contract()
         return result
 
     manifest = read_json(manifest_path, result)
     config = read_json(config_path, result)
     if not manifest or not config:
+        result.finalize_contract()
         return result
+    if "version" not in manifest:
+        result.warn(
+            "expert.json version is absent; package is unreleased and remains compatible with the legacy manifest contract",
+            code="EXPERT_VERSION_UNRELEASED",
+            phase="version-control",
+            path="expert.json",
+            location="/version",
+            root_cause="unreleased-expert-source",
+            remediation="After a successful trusted-source modification, ask the user whether to publish a SemVer release.",
+        )
 
     check_declared_file_allowlist(package_dir, manifest, result)
+    check_gitignore(package_dir, manifest, result)
     check_files(package_dir, manifest, result)
     check_avatar_assets(package_dir, manifest, result)
     check_agent_markdown_shape(package_dir, manifest, result)
@@ -1646,19 +1811,86 @@ def validate_package(package_dir: Path) -> Result:
     check_readme_shape(package_dir, manifest, result)
     check_workflow_projection_parity(package_dir, manifest, result)
     check_runtime_config(package_dir, config, manifest, result)
+    check_permission_policy(package_dir, manifest, config, result)
     check_env_example(package_dir, config, result)
+    check_static_syntax(package_dir, result)
+    supply_chain_audit.add_to_result(result, package_dir, manifest, config)
     scan_secrets(package_dir, result)
     scan_portability(package_dir, result)
+    if result.gates["portability"] == "not-run":
+        result.set_gate("portability", "passed")
+    result.finalize_contract()
     return result
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("package_dir", type=Path, help="Generated expert package directory")
+    parser.add_argument("--format", choices=("human", "json"), default="human")
+    parser.add_argument("--schema-version", choices=(1, 2), type=int, default=2)
+    parser.add_argument("--target-opencode-version")
+    parser.add_argument("--host-contract", type=Path)
+    parser.add_argument(
+        "--runtime",
+        action="store_true",
+        help="Request runtime verification (blocked by this static validator)",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: validate_expert.py <path/to/generated-package-dir>")
+    args = parse_args()
+    package_dir = args.package_dir.expanduser().absolute()
+    try:
+        target = manager_contract.resolve_target(
+            cli_version=args.target_opencode_version,
+            host_contract=args.host_contract,
+        )
+        result = validate_package(package_dir, target=target)
+    except manager_contract.ManagerContractError as exc:
+        result = Result(
+            execution_reason="version-contract-error",
+            input_path=package_dir,
+            target=manager_contract.TargetContract(
+                version="unknown",
+                source="version-contract-error",
+                capabilities={},
+                capability_verified=False,
+            ),
+        )
+        result.error(
+            f"version contract error: {exc}",
+            code="MANAGER_VERSION_CONTRACT_ERROR",
+            phase="manager",
+            root_cause="invalid-version-contract",
+            evidence="",
+        )
+        result.print_summary(output_format=args.format, schema_version=args.schema_version)
         return 2
-    package_dir = Path(sys.argv[1]).expanduser().absolute()
-    result = validate_package(package_dir)
-    result.print_summary()
+    except Exception as exc:
+        result = Result(
+            execution_reason="manager-internal-error",
+            target=manager_contract.TargetContract(
+                version="unknown",
+                source="manager-internal-error",
+                capabilities={},
+                capability_verified=False,
+            ),
+        )
+        result.error(
+            f"internal manager failure: {exc}",
+            code="MANAGER_INTERNAL_ERROR",
+            phase="manager",
+            root_cause="manager-internal-error",
+            evidence="",
+        )
+        result.print_summary(output_format=args.format, schema_version=args.schema_version)
+        return 3
+    if args.runtime:
+        result.execution["reason"] = "runtime-request-blocked-use-sandboxed-trusted-flow"
+        result.print_summary(output_format=args.format, schema_version=args.schema_version)
+        return 4
+    result.print_summary(output_format=args.format, schema_version=args.schema_version)
     return 0 if result.ok else 1
 
 

@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 
 import package_contract as contract
+import archive_inspector
 import scan_portable_artifacts
 import validate_expert
 
@@ -102,15 +103,21 @@ def test_zip_external(zip_path: Path) -> None:
 def verify_extracted_package(zip_path: Path, output_dir: Path, slug: str) -> None:
     with tempfile.TemporaryDirectory(prefix=f".{slug}-extract-", dir=output_dir) as temp_dir:
         extract_root = Path(temp_dir)
-        with zipfile.ZipFile(zip_path) as archive:
-            archive.extractall(extract_root)
+        inspection = archive_inspector.inspect_archive(zip_path)
+        if inspection.errors:
+            fail(
+                "zip preflight failed: "
+                + ", ".join(sorted({item.code for item in inspection.errors}))
+            )
+        archive_inspector.safe_extract(zip_path, extract_root, inspection)
         extracted = extract_root / slug
         result = validate_expert.validate_package(extracted)
         if not result.ok:
             result.print_summary()
             fail("extracted package failed validation")
         findings = scan_portable_artifacts.scan_root(extracted)
-        if findings:
+        errors = [item for item in findings if item.get("severity", "error") == "error"]
+        if errors:
             print(json.dumps({"ok": False, "findings": findings}, ensure_ascii=False, indent=2))
             fail("extracted package failed portability scan")
 
