@@ -1,6 +1,6 @@
 # OpenCode 原生专家、Agent 与 Skill 编写规范
 
-创建专家、专家团、agent 或 supplemental skill 时读取本文件。这里吸收通用插件开发中的触发设计、结构组织、配置安全和渐进披露原则，但最终产物必须使用 MobileWork 当前兼容的 OpenCode 格式。
+创建专家、专家团、agent 或 skill 时读取本文件。这里吸收通用插件开发中的触发设计、结构组织、配置安全和渐进披露原则，但最终产物必须使用 MobileWork 当前兼容的 OpenCode 格式。
 
 需要判断 `opencode.json` 根字段、agent 投影或官方字段是否归专家包所有时，同时读取
 `opencode-json-spec.md`。
@@ -42,7 +42,7 @@
 - 角色身份、职责边界和不适用范围；
 - 典型触发场景和路由方式；
 - 可执行的工作流程；
-- 需要加载的 common/role/supplemental skills；
+- 分配给该角色的完整 skill 列表；
 - 输出格式、证据要求和质量门控；
 - 输入不足、工具不可用、越权、验证失败时的处理方式。
 
@@ -73,20 +73,16 @@ generator 不推断参数。`reasoningEffort`、`textVerbosity` 等 provider-spe
 
 ```yaml
 ---
-name: contract-review-expert-contract-reviewer-clause-checklist
+name: contract-clause-review
 description: 当合同审查专家需要定位高风险条款、引用证据并形成修改建议时使用。
 compatibility: opencode
-metadata:
-  package: contract-review-expert
-  role: contract-reviewer
-  type: role
 ---
 ```
 
 - `name` 必须与 skill 目录名一致并使用 kebab-case。
 - `description` 长度为 1–1024 个字符，写明能力和触发条件。
-- `compatibility` 固定为 `opencode`。
-- `metadata` 只使用字符串键和值，记录 package、role 和 skill 类型。
+- `compatibility` 可以按原技能声明保留；管理器不为上传技能补写字段。
+- 上传技能的 frontmatter 和正文默认逐字节保留，不增加 package、role 或类型 metadata。
 
 ### Progressive disclosure
 
@@ -97,7 +93,8 @@ metadata:
 - `assets/`、`templates/`：用于最终交付的模板或静态资源，不作为说明全文加载。
 - `examples/`：需要理解格式或边界时读取的完整示例。
 
-所有非 `SKILL.md` 文件继续通过 `package_resources[]` 声明。生成的 SKILL.md 必须列出自己拥有的资源及使用时机；没有资源时明确说明，不虚构目录。
+统一技能池把包括 `SKILL.md` 在内的所有文件通过 `package_resources[]` 声明并记录 SHA-256。
+`preserved` 技能不得为补充资源导航而改写；它自己的导航不完整时阻止或报告，不自动修复。
 
 ### Writing style
 
@@ -127,7 +124,7 @@ workflow 默认推荐一个 command；多个 workflow 使用多个 Markdown 文�
 
 只有 npm plugin package name 写入 `opencode.json.plugin`，本地 plugin 路径不写入。本地 reference
 文件只接受 UTF-8 文本；二进制资料先转换为 Markdown 或文本。Git reference 不声明本地文件。角色专属规则放在 agent Markdown
-或对应 supplemental skill。专家包不开发根级 `AGENTS.md`。
+或对应 skill。专家包不开发根级 `AGENTS.md`。
 
 ## Structure 与配置
 

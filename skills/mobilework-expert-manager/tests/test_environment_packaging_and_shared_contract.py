@@ -39,7 +39,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
     def make_package(self) -> Path:
         manifest_path = self.root / "expert.json"
-        manifest_path.write_text(load_spec_text("expert-json"), encoding="utf-8")
+        manifest_path.write_text(
+            load_spec_text("legacy-expert-json"), encoding="utf-8"
+        )
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         normalized = create_expert.normalize_manifest(data, manifest_dir=manifest_path.parent)
         create_expert.prepare_avatar_assets(normalized, manifest_path.parent)
@@ -165,7 +167,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         manifest = self.root / "expert.json"
-        manifest.write_text(load_spec_text("expert-json"), encoding="utf-8")
+        manifest.write_text(
+            load_spec_text("legacy-expert-json"), encoding="utf-8"
+        )
         output = self.root / "generated"
         output.mkdir()
         env = os.environ.copy()
@@ -264,7 +268,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         extracted.assert_called_once()
 
     def test_shared_contract_and_renderer_compatibility_wrappers(self) -> None:
-        data = json.loads(load_spec_text("expert-json"))
+        data = json.loads(load_spec_text("legacy-expert-json"))
         self.assertEqual(manifest_contract.collect_manifest_issues(data), [])
         invalid = dict(data)
         invalid["primary_agent"] = data["agent"]
@@ -421,7 +425,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
     def test_eval_fixtures_and_trigger_balance_are_complete(self) -> None:
         evals = json.loads((SKILL / "evals" / "evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(evals["evals"]), 32)
+        self.assertEqual(len(evals["evals"]), 35)
         names = {item["name"] for item in evals["evals"]}
         self.assertEqual(
             names,
@@ -458,6 +462,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
                 "create-and-validate-manifest-driven-bundle",
                 "version-trusted-expert-with-local-git-semver",
                 "verify-owned-custom-tool-across-autonomy",
+                "upload-and-auto-assign-single-expert-skill",
+                "upload-and-assign-skill-to-all-team-members",
+                "migrate-legacy-skills-during-upload",
             },
         )
         for item in evals["evals"]:
@@ -465,16 +472,22 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             for file_name in item["files"]:
                 self.assertTrue((SKILL / file_name).is_file(), file_name)
         triggers = json.loads((SKILL / "evals" / "trigger-evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(triggers), 20)
-        self.assertEqual(sum(1 for item in triggers if item["should_trigger"]), 10)
+        self.assertEqual(len(triggers), 21)
+        self.assertEqual(sum(1 for item in triggers if item["should_trigger"]), 11)
         self.assertEqual(sum(1 for item in triggers if not item["should_trigger"]), 10)
 
     def test_broken_fixture_reports_unique_validator_roots(self) -> None:
         fixture = SKILL / "evals" / "files" / "broken-package"
         result = validate_expert.validate_package(fixture)
-        self.assertEqual(len(result.errors), 27)
+        self.assertEqual(len(result.errors), 25)
         self.assertLess(result.as_dict()["rootCauseCount"], result.as_dict()["rawFindingCount"])
         self.assertIn("README_SECTION_MISSING", {item.code for item in result.findings})
+        self.assertTrue(
+            {
+                "LEGACY_README_PERMISSION_SECTION_MISSING",
+                "LEGACY_README_PERMISSION_PROJECTION_MISMATCH",
+            }.issubset({item.code for item in result.findings if item.severity == "warning"})
+        )
         self.assertFalse(any(error.startswith("subagents: must contain") for error in result.errors))
 
 

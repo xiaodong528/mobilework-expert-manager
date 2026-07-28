@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import package_contract
+import skill_contract
 import permission_policy
 
 
@@ -387,13 +388,8 @@ def _raw_roles(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _declared_skill_names(manifest: dict[str, Any]) -> set[str]:
-    slug = manifest.get("slug")
-    if not isinstance(slug, str):
-        return set()
     try:
-        names = set(package_contract.common_skill_names(slug, manifest.get("common_skills")))
-        for index, role in enumerate(_raw_roles(manifest)):
-            names.update(package_contract.role_skill_names(slug, role, f"roles[{index}]"))
+        names = set(skill_contract.catalog_names(manifest))
     except package_contract.ContractError:
         return set()
     return names

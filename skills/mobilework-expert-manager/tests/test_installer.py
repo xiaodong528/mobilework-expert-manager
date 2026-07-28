@@ -45,7 +45,7 @@ class InstallerTests(unittest.TestCase):
         self.temp.cleanup()
 
     def write_manifest(self, *, slug: str = "contract-review-expert", agent_id: str = "contract-reviewer") -> Path:
-        data = json.loads(load_spec_text("expert-json"))
+        data = json.loads(load_spec_text("legacy-expert-json"))
         old_slug = data["slug"]
         old_agent = data["agent"]["id"]
         data["slug"] = slug

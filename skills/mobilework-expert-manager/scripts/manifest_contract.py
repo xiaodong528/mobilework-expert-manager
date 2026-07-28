@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 import package_contract
+import skill_contract
 import workflow_autonomy
 
 
@@ -15,7 +16,7 @@ TOP_LEVEL_KEYS = frozenset(
     {
         "slug", "type", "version", "name", "summary", "description", "language",
         "profession", "category_id", "display_description", "avatar_url",
-        "tags", "quick_prompts", "default_prompt", "common_skills",
+        "tags", "quick_prompts", "default_prompt", "skills", "common_skills",
         "package_resources", "runtime_extensions", "mcp_servers", "agent",
         "primary_agent", "subagents", "workflows",
     }
@@ -86,13 +87,6 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
     if isinstance(prompts, list) and prompts and default_prompt is not None and default_prompt != prompts[0]:
         issues.append(ManifestIssue("default_prompt", "must match quick_prompts[0]"))
 
-    slug = manifest.get("slug")
-    if isinstance(slug, str):
-        try:
-            package_contract.common_skill_names(slug, manifest.get("common_skills"))
-        except package_contract.ContractError as exc:
-            issues.append(ManifestIssue("common_skills", str(exc)))
-
     roles = manifest_roles(manifest)
     role_ids: list[str] = []
     mcp_names = {
@@ -120,11 +114,6 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
             issues.append(
                 ManifestIssue(issue_field if separator else field, message if separator else issue_field)
             )
-        if isinstance(slug, str):
-            try:
-                package_contract.role_skill_names(slug, role, field)
-            except package_contract.ContractError as exc:
-                issues.append(ManifestIssue(f"{field}.skills", str(exc)))
         role_mcp = role.get("mcp", [])
         if isinstance(role_mcp, list):
             for name in role_mcp:
@@ -133,6 +122,16 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
 
     if len(role_ids) != len(set(role_ids)):
         issues.append(ManifestIssue("roles", "agent ids must be unique"))
+    try:
+        skill_contract.validate_manifest_skills(manifest)
+    except package_contract.ContractError as exc:
+        field, separator, message = str(exc).partition(": ")
+        issues.append(
+            ManifestIssue(
+                field if separator else "skills",
+                message if separator else field,
+            )
+        )
     try:
         package_contract.normalize_mcp_servers(manifest.get("mcp_servers"))
     except package_contract.ContractError as exc:

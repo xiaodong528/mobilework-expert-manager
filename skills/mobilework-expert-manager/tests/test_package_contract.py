@@ -59,7 +59,11 @@ class PackageContractTests(unittest.TestCase):
 
     def manifest(self, *, team: bool = False) -> tuple[Path, dict[str, object]]:
         path = self.root / "expert.json"
-        source = TEAM_EXAMPLE.read_text(encoding="utf-8") if team else load_spec_text("expert-json")
+        source = (
+            TEAM_EXAMPLE.read_text(encoding="utf-8")
+            if team
+            else load_spec_text("legacy-expert-json")
+        )
         data = json.loads(source)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return path, data

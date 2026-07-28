@@ -31,12 +31,12 @@
   "type": "expert",
   "name": "合同审查专家",
   "description": "审查合同并提供有证据的修改建议。",
-  "common_skills": [{"purpose": "delivery-quality"}],
+  "skills": [],
   "agent": {
     "id": "contract-reviewer",
     "name": "合同审查专家",
     "description": "审查合同条款并提出修改建议。",
-    "skills": [{"purpose": "clause-checklist"}]
+    "skills": []
   }
 }
 ```
@@ -52,19 +52,19 @@
   "type": "team",
   "name": "软件开发专家团",
   "description": "由多个专业角色协作完成软件交付。",
-  "common_skills": [{"purpose": "delivery-quality"}],
+  "skills": [],
   "primary_agent": {
     "id": "delivery-director",
     "name": "交付总监",
     "description": "编排、验收并集成跨角色交付。",
-    "skills": [{"purpose": "delivery-review"}]
+    "skills": []
   },
   "subagents": [
     {
       "id": "engineer",
       "name": "工程师",
       "description": "实现并验证代码变更。",
-      "skills": [{"purpose": "code-change"}]
+      "skills": []
     }
   ]
 }
@@ -75,7 +75,7 @@
 
 ## 2. 命名与展示字段
 
-`slug`、agent id、skill purpose 和 MCP name 必须匹配：
+`slug`、agent id、完整 skill name 和 MCP name 必须匹配：
 
 ```text
 ^[a-z0-9]+(-[a-z0-9]+)*$
@@ -96,10 +96,10 @@
 | `tags` | 字符串数组，建议 3 项。 |
 | `quick_prompts` | 快捷提示词数组，建议 3 项。 |
 | `default_prompt` | 如存在，必须等于 `quick_prompts[0]`。 |
-| `common_skills` | 非空 purpose 对象列表。 |
+| `skills` | 统一技能池；可省略或为空，条目声明完整 name、origin 与 edit_policy。 |
 | `mcp_servers` | 可选 MCP 声明；支持 local、remote、header auth、OAuth 与 timeout，详见 `runtime-extensions-spec.md`。 |
 | `runtime_extensions` | commands、tools、plugins、目标 capability contract 支持的 local/Git references、instructions、LSP。 |
-| `package_resources` | supplemental skill 中除生成 `SKILL.md` 外的声明资源。 |
+| `package_resources` | 统一技能池中包括 `SKILL.md` 在内的全部声明资源及 SHA-256。 |
 
 来源资料中的宿主产品、平台发布和智能体容器叙事，在展示草案前改为 MobileWork 口径。
 保留运行必需标识：slug、agent id、skill/MCP 名、文件名、命令、API、协议、第三方业务系统名，
@@ -107,30 +107,38 @@
 
 ## 3. Skill 声明
 
-`common_skills` 和每个角色的 `skills` 都必须是非空 purpose 对象列表：
+新 manifest 使用统一顶层技能池；不区分通用技能和角色专用技能，也不根据专家 slug 或角色 id
+拼接名称：
 
 ```json
 {
-  "common_skills": [
-    {"purpose": "delivery-quality"}
+  "skills": [
+    {
+      "name": "contract-clause-review",
+      "origin": "uploaded",
+      "edit_policy": "preserved"
+    }
   ],
   "agent": {
     "skills": [
-      {"purpose": "role-guidelines"},
-      {"purpose": "clause-checklist"}
+      "contract-clause-review"
     ]
   }
 }
 ```
 
-生成名称：
+- 顶层 `skills[]` 可省略或为空；名称不得重复。
+- `name` 是合法 kebab-case 完整技能名，必须与目录名及 `SKILL.md` frontmatter `name` 一致。
+- `origin` 只能是 `uploaded`、`managed` 或 `legacy-migrated`。
+- `edit_policy` 只能是 `preserved` 或 `managed`。用户上传时固定为 `preserved`；只有用户明确授权
+  修改包内副本时才可转为 `managed`，并且 `origin` 保持 `uploaded`。
+- 每个角色的 `skills[]` 是完整技能名字符串列表，可省略或为空，只能引用顶层已声明名称。
+- 同一技能可分配给一个、多个或全部角色；“全部成员”展开为团长和每个团员，不保存通配。
+- `permission.skill` 完全由角色 `skills[]` 派生，禁止在新 manifest 中手写。
+- `package_resources[]` 必须声明每个技能目录内包括 `SKILL.md` 在内的全部文件和匹配 SHA-256。
 
-- 通用：`<slug>-common-<purpose>`；
-- 角色专属：`<slug>-<agent-id>-<purpose>`。
-
-禁止旧字符串数组、完整 skill name、空或重复 purpose、缺失或空列表。
-每个 agent 加载全部通用 skill 和自己的全部专用 skill；第一项不具有特殊语义。
-`permission.skill` 除 `*` 外只能引用该 agent 实际拥有的计算后 skill。
+新 `skills[]` 与旧 `common_skills`/purpose schema 不得混用。未修改的旧包仍可读取、校验、安装和
+打包；任何结构性修改先按本页“修改已有包”迁移，不在新建流程继续使用旧命名规则。
 
 ## 4. Agent 字段与派生语义
 
@@ -355,23 +363,129 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
 - `runtime_extensions`、MCP、env 和 CLI 安装投影见 `runtime-extensions-spec.md`。
 - 头像规则见 `avatar-spec.md`。
 - `package_resources[]`、包 allowlist、业务产物和分发合同见 `portable-package-spec.md`。
-- agent 与 supplemental skill 编写方法见 `opencode-authoring-best-practices.md`。
+- agent 与 skill 编写方法见 `opencode-authoring-best-practices.md`。
 
 ## 8. 修改已有包
 
 1. 读取 `expert.json` 和它声明的真实资源文件。
-2. 保持 slug、agent id、skill purpose 不变，除非用户明确要求重命名。
-3. 在 manifest 用户可见字段中先完成 MobileWork 口径归一化。
-4. 修改 manifest 和必要输入资源，不直接修补派生 Markdown 或 runtime config。
-5. 经确认后使用 `create_expert.py --force` 重建。
-6. 运行 validator、便携性扫描、打包和解压后二次校验。
+2. 若包使用 `common_skills` 和 purpose 对象，结构性修改前先迁移到统一技能池：保留现有完整
+   技能名和全部文件字节，旧通用技能分配给全部角色，旧角色技能只保留原角色分配，并将条目标记
+   为 `origin: legacy-migrated`、`edit_policy: managed`。
+3. 保持 slug、agent id、完整 skill name 不变，除非用户明确要求重命名。
+4. `origin: uploaded`、`edit_policy: preserved` 的技能默认不得改写；明确授权后保留 origin，
+   仅将 edit_policy 转为 `managed`。
+5. 在 manifest 用户可见字段中先完成 MobileWork 口径归一化。
+6. 修改 manifest 和必要输入资源，不直接修补派生 Markdown 或 runtime config。
+7. 经确认后使用 `create_expert.py --force` 重建。
+8. 运行 validator、便携性扫描、打包和解压后二次校验。
 
 ## 9. 可复制单专家模板
 
-下方标记块是生成新 manifest 时的可复制模板。标记之间的 JSON 内容与迁移前的
-单专家模板保持逐字节一致。
+下方第一个标记块是生成新 manifest 时的可复制模板。它使用显式空技能池；需要技能时先准备
+完整技能目录，再将每个文件登记到 `package_resources[]` 并用完整名称分配给角色。第二个标记块
+只供兼容测试读取旧 schema，不用于新建。
 
 <!-- mobilework-template:expert-json:start -->
+````json
+{
+  "slug": "contract-review-expert",
+  "type": "expert",
+  "name": "合同审查专家",
+  "summary": "Single expert manifest with public display fields and derived permissions.",
+  "description": "Reviews contracts, identifies legal and business risks, and returns evidence-backed revision guidance.",
+  "language": "zh",
+  "avatar_url": "avatars/contract-review-expert.png",
+  "tags": [
+    "contract-review",
+    "risk-analysis",
+    "revision-advice"
+  ],
+  "quick_prompts": [
+    "帮我审查这份合同的关键风险并给出修改建议。",
+    "请提取合同中的付款、交付、违约和终止条款。",
+    "请把这份合同改写成更保护我方权益的版本。"
+  ],
+  "skills": [],
+  "package_resources": [],
+  "runtime_extensions": {
+    "reference_files": [
+      {
+        "path": ".opencode/references/contract-review-expert/playbook/overview.md",
+        "content": "# Contract review playbook\n\nUse this reference for clause-level review guidance.\n"
+      }
+    ],
+    "references": {
+      "playbook": {
+        "path": ".opencode/references/contract-review-expert/playbook",
+        "description": "Use for clause-level contract review guidance"
+      }
+    },
+    "instruction_files": [
+      {
+        "path": ".opencode/instructions/contract-review-expert/evidence.md",
+        "content": "# Evidence rule\n\nCite the relevant clause for every finding.\n"
+      }
+    ],
+    "instructions": [
+      ".opencode/instructions/contract-review-expert/*.md"
+    ]
+  },
+  "agent": {
+    "id": "contract-reviewer",
+    "name": "合同审查专家",
+    "display_name": "合同审查专家",
+    "description": "Reviews contract terms, identifies risk, and proposes precise amendments.",
+    "mode": "primary",
+    "steps": 80,
+    "color": "#2563eb",
+    "avatar_url": "avatars/contract-reviewer.png",
+    "skills": [],
+    "responsibilities": [
+      "Identify obligations, liabilities, rights, remedies, and ambiguous terms.",
+      "Separate legal risk, commercial risk, and missing information.",
+      "Produce a concise review memo with clause-level evidence."
+    ],
+    "workflow": [
+      "Clarify the contract type, parties, jurisdiction assumptions, and review goal.",
+      "Read the source contract and extract high-risk clauses.",
+      "Classify each issue by severity and explain the evidence.",
+      "Draft recommended revisions or negotiation points.",
+      "Verify the final memo against the requested review goal."
+    ],
+    "quality_gates": [
+      "Every finding cites the relevant clause or source text location.",
+      "Recommendations are actionable and preserve uncertainty where legal facts are missing.",
+      "Final output distinguishes legal information from legal advice when appropriate."
+    ],
+    "permission": {
+      "read": "allow",
+      "edit": "allow",
+      "bash": {
+        "*": "ask",
+        "git status*": "allow",
+        "git diff*": "allow"
+      },
+      "webfetch": "allow"
+    },
+    "profession": "合同风险审查专家",
+    "route_triggers": [
+      "用户要求审查合同风险、提取关键条款或生成修改建议。"
+    ],
+    "handoff_contract": [
+      "列出任务理解、关键风险、条款证据、修改建议、验证状态和未决风险。"
+    ]
+  },
+  "profession": "合同审查专家",
+  "category_id": "11-SecurityCompliance",
+  "display_description": "面向合同审查、风险识别和修改建议的单专家。",
+  "default_prompt": "帮我审查这份合同的关键风险并给出修改建议。"
+}
+````
+<!-- mobilework-template:expert-json:end -->
+
+### 旧 schema 兼容测试模板
+
+<!-- mobilework-template:legacy-expert-json:start -->
 ````json
 {
   "slug": "contract-review-expert",
@@ -478,4 +592,4 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
   "default_prompt": "帮我审查这份合同的关键风险并给出修改建议。"
 }
 ````
-<!-- mobilework-template:expert-json:end -->
+<!-- mobilework-template:legacy-expert-json:end -->

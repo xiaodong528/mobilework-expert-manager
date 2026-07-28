@@ -777,6 +777,8 @@ def is_allowed_package_path(relative: PurePosixPath) -> bool:
 def declared_package_files(manifest: dict[str, Any]) -> set[str]:
     """Return the exact file allowlist derived from a validated manifest."""
 
+    import skill_contract
+
     slug = manifest.get("slug")
     if not isinstance(slug, str) or not NAME_RE.fullmatch(slug):
         raise ContractError("expert.json slug is invalid")
@@ -792,14 +794,14 @@ def declared_package_files(manifest: dict[str, Any]) -> set[str]:
         raise ContractError("expert.json type must be expert or team")
     roles = [role for role in raw_roles if isinstance(role, dict)]
 
-    skill_names = set(common_skill_names(slug, manifest.get("common_skills")))
+    skill_names = set(skill_contract.catalog_names(manifest))
     for role_index, role in enumerate(roles):
         agent_id = role.get("id")
         if isinstance(agent_id, str):
             allowed.add(f"{PACKAGE_RUNTIME_DIR}/{AGENTS_SUBDIR}/{agent_id}.md")
-        skill_names.update(role_skill_names(slug, role, f"roles[{role_index}]"))
     for skill_name in skill_names:
-        allowed.add(f"{PACKAGE_RUNTIME_DIR}/{SKILLS_SUBDIR}/{skill_name}/SKILL.md")
+        if skill_contract.schema_mode(manifest) == "legacy":
+            allowed.add(f"{PACKAGE_RUNTIME_DIR}/{SKILLS_SUBDIR}/{skill_name}/SKILL.md")
 
     workflows = manifest.get("workflows", [])
     if isinstance(workflows, list):

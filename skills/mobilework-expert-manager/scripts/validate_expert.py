@@ -27,6 +27,7 @@ import manifest_contract
 import manager_contract
 import permission_policy
 import renderers
+import skill_contract
 import supply_chain_audit
 from validation_result import ValidationResult
 import workflow_autonomy
@@ -530,7 +531,10 @@ def check_package_resources_manifest(
         parts = Path(path).parts
         if len(parts) < 4 or parts[2] not in declared_skills:
             result.error(f"{field}.path: must be inside a declared supplemental skill")
-        if Path(path).name == "SKILL.md":
+        if (
+            Path(path).name == "SKILL.md"
+            and skill_contract.schema_mode(manifest) == "legacy"
+        ):
             result.error(f"{field}.path: generated SKILL.md must not be declared")
         if path in declared:
             result.error(f"{field}.path: duplicates {path}")
@@ -557,10 +561,23 @@ def check_package_resources_manifest(
                     result.error(f"{field}.path: kind text requires UTF-8 content")
         declared[path] = {"path": path, "kind": str(kind), "sha256": str(digest)}
 
+    if skill_contract.schema_mode(manifest) == "unified":
+        for skill_name in sorted(declared_skills):
+            required = f"{EXPERT_DIR}/{SKILLS_SUBDIR}/{skill_name}/SKILL.md"
+            if required not in declared:
+                result.error(
+                    f"skills.{skill_name}: package_resources must declare {required}"
+                )
+
     skills_root = package_dir / EXPERT_DIR / SKILLS_SUBDIR
     if skills_root.is_dir():
         for path in sorted(skills_root.rglob("*")):
-            if not path.is_file() or path.name == "SKILL.md":
+            if not path.is_file():
+                continue
+            if (
+                path.name == "SKILL.md"
+                and skill_contract.schema_mode(manifest) == "legacy"
+            ):
                 continue
             relative = path.relative_to(package_dir).as_posix()
             if relative not in declared:
@@ -607,10 +624,6 @@ def validate_role(role: Any, field: str, result: Result, *, expected_mode: str) 
             expected_mode=expected_mode,
             default_steps=default_steps,
         )
-    except contract.ContractError as exc:
-        result.error(str(exc))
-    try:
-        contract.skill_purposes(role.get("skills"), f"{field}.skills")
     except contract.ContractError as exc:
         result.error(str(exc))
     role_mcp = validate_string_list(role.get("mcp"), f"{field}.mcp", result)
@@ -661,61 +674,41 @@ def roles_from_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def expected_skill_names(manifest: dict[str, Any]) -> list[str]:
-    slug = manifest.get("slug")
-    if not isinstance(slug, str):
-        return []
     try:
-        skills = contract.common_skill_names(slug, manifest.get("common_skills"))
-        for index, role in enumerate(roles_from_manifest(manifest)):
-            skills.extend(contract.role_skill_names(slug, role, f"roles[{index}]"))
+        skills = skill_contract.catalog_names(manifest)
     except contract.ContractError:
         return []
     return sorted(skills)
 
 
 def check_skill_contract(manifest: dict[str, Any], result: Result) -> None:
-    slug = manifest.get("slug")
-    if not isinstance(slug, str) or not NAME_RE.fullmatch(slug):
-        return
     try:
-        common_skills = contract.common_skill_names(slug, manifest.get("common_skills"))
+        skill_contract.validate_manifest_skills(manifest)
     except contract.ContractError as exc:
         result.error(str(exc))
-        common_skills = []
-    all_names = list(common_skills)
-    subagents = manifest.get("subagents")
-    role_fields = (
-        ["agent"]
-        if manifest.get("type") == "expert"
-        else [
-            "primary_agent",
-            *[
-                f"subagents[{index}]"
-                for index, _ in enumerate(subagents if isinstance(subagents, list) else [])
-            ],
-        ]
-    )
-    for field, role in zip(role_fields, roles_from_manifest(manifest)):
-        try:
-            role_skills = contract.role_skill_names(slug, role, field)
-        except contract.ContractError:
-            continue
-        all_names.extend(role_skills)
+        return
+    for field, role in manifest_contract.manifest_roles(manifest):
         permission = role.get("permission")
         skill_permission = permission.get("skill") if isinstance(permission, dict) else None
         if skill_permission is None:
             continue
+        if skill_contract.schema_mode(manifest) == "unified":
+            result.error(
+                f"{field}.permission.skill: is derived from role skills and must be omitted"
+            )
+            continue
         if not isinstance(skill_permission, dict):
             result.error(f"{field}.permission.skill: must be a mapping")
             continue
-        allowed = set([*common_skills, *role_skills])
+        try:
+            allowed = set(skill_contract.role_skill_names(manifest, role, field))
+        except contract.ContractError:
+            continue
         for skill_name in skill_permission:
             if skill_name != "*" and skill_name not in allowed:
                 result.error(
                     f"{field}.permission.skill: references undeclared skill {skill_name}"
                 )
-    if len(all_names) != len(set(all_names)):
-        result.error("generated skill names must be unique")
 
 
 def manifest_issue_already_reported(
@@ -1025,7 +1018,7 @@ def check_skill_markdown_shape(package_dir: Path, manifest: dict[str, Any], resu
                 continue
             remainder = path[len(prefix) :]
             parts = remainder.split("/", 1)
-            if len(parts) == 2:
+            if len(parts) == 2 and parts[1] != "SKILL.md":
                 resources_by_skill.setdefault(parts[0], []).append(parts[1])
 
     for skill_name in expected_skill_names(manifest):
@@ -1044,18 +1037,42 @@ def check_skill_markdown_shape(package_dir: Path, manifest: dict[str, Any], resu
         elif len(description) > 1024:
             result.error(f"{path}: frontmatter description must be 1024 characters or fewer")
         compatibility = frontmatter.get("compatibility")
-        if compatibility is not None and compatibility != "opencode":
-            result.error(f"{path}: optional frontmatter compatibility must equal opencode")
+        if compatibility is not None:
+            if skill_contract.schema_mode(manifest) == "legacy":
+                if compatibility != "opencode":
+                    result.error(
+                        f"{path}: optional frontmatter compatibility must equal opencode"
+                    )
+            elif not isinstance(compatibility, str) or not compatibility.strip():
+                result.error(
+                    f"{path}: optional frontmatter compatibility must be a non-empty string"
+                )
         metadata = frontmatter.get("metadata")
-        if metadata is not None and (
-            not isinstance(metadata, dict)
-            or not all(isinstance(key, str) and isinstance(value, str) for key, value in metadata.items())
-        ):
-            result.error(f"{path}: optional frontmatter metadata must map strings to strings")
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                if skill_contract.schema_mode(manifest) == "legacy":
+                    result.error(
+                        f"{path}: optional frontmatter metadata must map strings to strings"
+                    )
+                else:
+                    result.error(
+                        f"{path}: optional frontmatter metadata must be a mapping"
+                    )
+            elif skill_contract.schema_mode(manifest) == "legacy" and not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in metadata.items()
+            ):
+                result.error(
+                    f"{path}: optional frontmatter metadata must map strings to strings"
+                )
         resources = sorted(resources_by_skill.get(skill_name, []))
-        if resources and "资源导航" not in body:
+        if (
+            resources
+            and skill_contract.schema_mode(manifest) == "legacy"
+            and "资源导航" not in body
+        ):
             result.error(f"{path}: generated skill with package_resources must include 资源导航")
-        for resource in resources:
+        for resource in resources if skill_contract.schema_mode(manifest) == "legacy" else []:
             if resource not in body:
                 result.error(f"{path}: resource navigation missing declared path {resource}")
 
@@ -1195,7 +1212,23 @@ def check_readme_shape(package_dir: Path, manifest: dict[str, Any], result: Resu
     if "### Agent 运行参数" not in text:
         result.error("README.md: missing Agent runtime options summary")
     if "### Agent 权限基线" not in text:
-        result.error("README.md: missing Agent permission baseline summary")
+        message = "README.md: missing Agent permission baseline summary"
+        workflows = normalized_autonomy_workflows(manifest)
+        if workflow_autonomy.has_autonomy_contract(workflows):
+            result.error(message)
+        else:
+            result.warn(
+                message,
+                code="LEGACY_README_PERMISSION_SECTION_MISSING",
+                phase="documentation",
+                path="README.md",
+                location="documentation",
+                root_cause="legacy-permission-contract",
+                remediation=(
+                    "Preserve compatibility now; add workflow autonomy and regenerate "
+                    "README.md during the next structural modification."
+                ),
+            )
 
     type_specific = "## 团队角色" if manifest.get("type") == "team" else "## 专家能力"
     if type_specific not in text:
@@ -1270,17 +1303,21 @@ def check_workflow_projection_parity(
     if primary_path.exists() and all_projection not in read_markdown_body(primary_path, result):
         result.error(f"{primary_path}: workflow autonomy projection differs from expert.json")
 
-    slug = manifest.get("slug")
-    if not isinstance(slug, str):
-        return
-    try:
-        common_skills = contract.common_skill_names(slug, manifest.get("common_skills"))
-    except contract.ContractError:
-        common_skills = []
-    for skill_name in common_skills:
-        skill_path = package_dir / EXPERT_DIR / SKILLS_SUBDIR / skill_name / "SKILL.md"
-        if skill_path.exists() and all_projection not in read_markdown_body(skill_path, result):
-            result.error(f"{skill_path}: workflow autonomy projection differs from expert.json")
+    if skill_contract.schema_mode(manifest) == "legacy":
+        try:
+            common_skills = skill_contract.legacy_common_names(manifest)
+        except contract.ContractError:
+            common_skills = []
+        for skill_name in common_skills:
+            skill_path = (
+                package_dir / EXPERT_DIR / SKILLS_SUBDIR / skill_name / "SKILL.md"
+            )
+            if skill_path.exists() and all_projection not in read_markdown_body(
+                skill_path, result
+            ):
+                result.error(
+                    f"{skill_path}: workflow autonomy projection differs from expert.json"
+                )
 
     for role_index, role in enumerate(roles):
         role_id = role.get("id")
@@ -1295,16 +1332,29 @@ def check_workflow_projection_parity(
                 result.error(
                     f"{agent_path}: Agent workflow autonomy projection differs from expert.json"
                 )
-        try:
-            role_skills = contract.role_skill_names(slug, role, f"roles[{role_index}]")
-        except contract.ContractError:
-            role_skills = []
-        for skill_name in role_skills:
-            skill_path = package_dir / EXPERT_DIR / SKILLS_SUBDIR / skill_name / "SKILL.md"
-            if skill_path.exists() and role_projection not in read_markdown_body(skill_path, result):
-                result.error(
-                    f"{skill_path}: Agent workflow autonomy projection differs from expert.json"
+        if skill_contract.schema_mode(manifest) == "legacy":
+            try:
+                role_skills = contract.role_skill_names(
+                    str(manifest.get("slug", "")),
+                    role,
+                    f"roles[{role_index}]",
                 )
+            except contract.ContractError:
+                role_skills = []
+            for skill_name in role_skills:
+                skill_path = (
+                    package_dir
+                    / EXPERT_DIR
+                    / SKILLS_SUBDIR
+                    / skill_name
+                    / "SKILL.md"
+                )
+                if skill_path.exists() and role_projection not in read_markdown_body(
+                    skill_path, result
+                ):
+                    result.error(
+                        f"{skill_path}: Agent workflow autonomy projection differs from expert.json"
+                    )
 
     for workflow in workflows:
         command = workflow["command"]
@@ -1351,11 +1401,7 @@ def check_permission_policy(
     roles = roles_from_manifest(manifest)
     if not roles:
         return
-    slug = manifest.get("slug")
-    if not isinstance(slug, str):
-        return
     try:
-        common_skills = contract.common_skill_names(slug, manifest.get("common_skills"))
         mcp_names = list(contract.normalize_mcp_servers(manifest.get("mcp_servers")))
     except contract.ContractError:
         return
@@ -1379,12 +1425,21 @@ def check_permission_policy(
         if not isinstance(role_id, str):
             continue
         try:
-            role_skills = contract.role_skill_names(slug, role, f"roles[{index}]")
+            role_skills = skill_contract.role_skill_names(
+                manifest,
+                role,
+                f"roles[{index}]",
+            )
             normalized_role = dict(role)
-            normalized_role["allowed_skills"] = [*common_skills, *role_skills]
+            normalized_role["allowed_skills"] = role_skills
             normalized_role["mcp"] = role.get("mcp", [])
             normalized_role["custom_tools"] = role.get("custom_tools", [])
-            normalized_role["permission"] = role.get("permission", {})
+            source_permission = role.get("permission", {})
+            if isinstance(source_permission, dict):
+                source_permission = dict(source_permission)
+                if skill_contract.schema_mode(manifest) == "unified":
+                    source_permission.pop("skill", None)
+            normalized_role["permission"] = source_permission
             normalized_role["permission_reason"] = role.get("permission_reason", "")
             tools = role.get("tools", {})
             if not isinstance(tools, dict):
@@ -1408,7 +1463,8 @@ def check_permission_policy(
             result.error(
                 f"{RUNTIME_CONFIG}: agent.{role_id}.permission must match the autonomy-derived policy"
             )
-        if audit["warning"] == "legacy-permission-baseline":
+        legacy_permission_baseline = audit["warning"] == "legacy-permission-baseline"
+        if legacy_permission_baseline:
             result.warn(
                 f"{role_id}: HIGH RISK legacy-permission-baseline preserves historical permissions, including possible unconditional Bash wildcard allow; add workflow autonomy during the next structural modification"
             )
@@ -1422,9 +1478,25 @@ def check_permission_policy(
             audit["permission_reason"] or "无",
         ):
             if expected_text not in readme:
-                result.error(
-                    f"README.md: Agent permission baseline for {role_id} differs from expert.json"
+                message = (
+                    f"README.md: Agent permission baseline for {role_id} "
+                    "differs from expert.json"
                 )
+                if legacy_permission_baseline:
+                    result.warn(
+                        message,
+                        code="LEGACY_README_PERMISSION_PROJECTION_MISMATCH",
+                        phase="documentation",
+                        path="README.md",
+                        location="documentation",
+                        root_cause="legacy-permission-contract",
+                        remediation=(
+                            "Preserve compatibility now; add workflow autonomy and "
+                            "regenerate README.md during the next structural modification."
+                        ),
+                    )
+                else:
+                    result.error(message)
                 break
 
 
@@ -1793,7 +1865,7 @@ def validate_package(
         return result
     if "version" not in manifest:
         result.warn(
-            "expert.json version is absent; package is unreleased and remains compatible with the legacy manifest contract",
+            "expert.json version is absent; package is unreleased and remains valid for local trusted-source iteration",
             code="EXPERT_VERSION_UNRELEASED",
             phase="version-control",
             path="expert.json",

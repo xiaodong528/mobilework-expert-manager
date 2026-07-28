@@ -26,6 +26,7 @@ SPEC_TEMPLATES: dict[str, SpecTemplate] = {
     "role-skill": SpecTemplate("skill-md-spec.md", "markdown"),
     "readme": SpecTemplate("package-docs-spec.md", "markdown"),
     "expert-json": SpecTemplate("expert-json-spec.md", "json"),
+    "legacy-expert-json": SpecTemplate("expert-json-spec.md", "json"),
 }
 
 REFERENCES_DIR = Path(__file__).resolve().parents[1] / "references"

@@ -31,7 +31,7 @@ ENTRIES = (
     _entry(r"Python syntax", "PYTHON_STATIC_SYNTAX_INVALID", "static-syntax", "invalid-python-syntax", "Fix Python syntax; static diagnosis never imports the module."),
     _entry(r"non-portable", "PACKAGE_NON_PORTABLE_CONTENT", "portability", "non-portable-content", "Replace machine-specific content with portable values."),
     _entry(r"secret-like|secret detected|contains secret", "PACKAGE_SECRET_DETECTED", "security", "secret-content", "Remove the secret and reference an environment variable."),
-    _entry(r"common_skills.*(?:string|purpose)|skills.*legacy", "MANIFEST_SKILL_LEGACY_FORMAT", "manifest", "legacy-manifest-contract", "Migrate skills to purpose objects and regenerate."),
+    _entry(r"common_skills.*(?:string|purpose)|skills.*legacy", "MANIFEST_SKILL_LEGACY_FORMAT", "manifest", "legacy-manifest-contract", "Migrate the package to the unified skills catalog before structural modification."),
     _entry(r"maxTurns|max_turns|maxSteps", "AGENT_LEGACY_STEP_FIELD", "manifest", "legacy-runtime-field", "Use steps in new manifests and regenerate."),
     _entry(r"permission_reason is required", "PERMISSION_REASON_REQUIRED", "permission", "unjustified-permission-escalation", "Add permission_reason or keep the calculated action."),
     _entry(r"permission\.bash.*(?:unconditional|wildcard)|generated permission\.bash", "PERMISSION_BASH_WILDCARD_ALLOW", "permission", "unsafe-bash-permission", "Use ask or deny for Bash wildcard and exact required patterns."),

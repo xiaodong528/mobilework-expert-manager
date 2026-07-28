@@ -40,7 +40,9 @@ class OutputDirectoryTests(unittest.TestCase):
         self.home.mkdir()
         self.cwd.mkdir()
         self.manifest = self.cwd / "expert.json"
-        self.manifest.write_text(load_spec_text("expert-json"), encoding="utf-8")
+        self.manifest.write_text(
+            load_spec_text("legacy-expert-json"), encoding="utf-8"
+        )
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
