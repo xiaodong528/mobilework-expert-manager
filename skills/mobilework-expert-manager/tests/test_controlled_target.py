@@ -40,7 +40,9 @@ class ControlledTargetTests(unittest.TestCase):
         self.home.mkdir()
         self.source.mkdir()
         self.manifest = self.source / "expert.json"
-        self.manifest.write_text(load_spec_text("expert-json"), encoding="utf-8")
+        self.manifest.write_text(
+            load_spec_text("legacy-expert-json"), encoding="utf-8"
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -101,7 +103,9 @@ class ControlledTargetTests(unittest.TestCase):
         target = self.home / ".mobilework" / "my-experts" / "contract-review-expert"
         target.mkdir(parents=True)
         source_manifest = target / "expert.json"
-        source_manifest.write_text(load_spec_text("expert-json"), encoding="utf-8")
+        source_manifest.write_text(
+            load_spec_text("legacy-expert-json"), encoding="utf-8"
+        )
         env = os.environ.copy()
         env["HOME"] = str(self.home)
         env["MOBILEWORK_EXPERT_MANAGER_HOST"] = "mobilework"

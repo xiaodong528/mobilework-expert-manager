@@ -257,15 +257,15 @@
     },
     {
       "id": 17,
-      "name": "declarative-resources-and-atomic-force",
-      "prompt": "给合同审查专家的 supplemental skill 增加一个 templates/input.xlsx 和一个 scripts/check.py，用 package_resources 声明后 --force 重建；随后分别测试省略输入 hash、正确 hash、错误 hash、未声明资源和生成中途失败。",
-      "expected_output": "The generator preserves declared skill resources with computed hashes, rejects mismatches and undeclared resources, and leaves the original package unchanged on failed regeneration.",
+      "name": "unified-skill-resources-and-atomic-force",
+      "prompt": "给合同审查专家的 managed skill 增加一个 templates/input.xlsx 和一个 scripts/check.py，并把包括 SKILL.md 在内的全部文件用 package_resources 和 SHA-256 声明后 --force 重建；随后测试正确 hash、错误 hash、未声明资源和生成中途失败。",
+      "expected_output": "The generator preserves every declared unified-skill byte, rejects mismatches and undeclared resources, and leaves the original package unchanged on failed regeneration.",
       "files": [],
       "expectations": [
-        "Accepts text or binary package_resources only inside declared supplemental skill subtrees and never requires generated SKILL.md to be declared.",
-        "Treats declared supplemental-skill resources such as templates/input.xlsx as legal business templates and does not confuse them with removed source-skill .tmpl rendering files.",
-        "Allows omitted input sha256, validates a provided digest, and always writes the calculated lowercase SHA-256 to generated expert.json.",
-        "Copies declared resource bytes exactly and validator rejects changed content or undeclared supplemental-skill files.",
+        "Accepts text or binary package_resources only inside top-level skills[] subtrees and requires every SKILL.md to be declared.",
+        "Treats declared skill resources such as templates/input.xlsx as legal business templates and does not confuse them with removed source-skill .tmpl rendering files.",
+        "Validates every provided digest and writes calculated lowercase SHA-256 values to generated expert.json.",
+        "Copies all declared skill bytes exactly and validator rejects changed content or any undeclared skill file.",
         "Rebuilds with sibling staging and atomically replaces the package only after complete validation.",
         "A failed --force run leaves the pre-existing package byte-for-byte unchanged."
       ]
@@ -301,13 +301,13 @@
     {
       "id": 20,
       "name": "opencode-native-single-expert-authoring",
-      "prompt": "创建一个 API 合规审查单专家，包含一个带 references/rules.md 与 scripts/check.py 的 supplemental skill，并为远程 MCP 使用 {env:API_TOKEN}。生成到指定临时目录后检查 agent、skill、README、opencode.json 和 .env.example。",
-      "expected_output": "A single-expert package whose agents and skills use OpenCode-native descriptions/frontmatter, whose skill navigates declared resources on demand, and whose environment placeholder is documented without a real secret.",
+      "prompt": "创建一个 API 合规审查单专家，使用完整名称 api-compliance-check 的 managed skill，内含 SKILL.md、references/rules.md 与 scripts/check.py，并为远程 MCP 使用 {env:API_TOKEN}。生成到指定临时目录后检查 agent、skill、README、opencode.json 和 .env.example。",
+      "expected_output": "A single-expert package whose exact managed skill is declared byte-for-byte and assigned to the sole Agent, and whose environment placeholder is documented without a real secret.",
       "files": [],
       "expectations": [
         "Agent description explains both capability and concrete trigger conditions and matches opencode.json.",
-        "Generated skill frontmatter includes matching kebab-case name, a 1-1024 character trigger-aware description, compatibility opencode, and string metadata.",
-        "The supplemental skill resource navigation lists references/rules.md and scripts/check.py with on-demand usage guidance.",
+        "The skill directory and existing frontmatter use the exact api-compliance-check name without an expert or Agent prefix.",
+        "package_resources declares SKILL.md, references/rules.md and scripts/check.py with matching hashes, without rewriting their bytes.",
         "opencode.json includes the official schema and .env.example contains only API_TOKEN=<required>.",
         "README includes a configuration and environment variables section without a real secret or another host's settings format."
       ]
@@ -323,7 +323,7 @@
         "Every agent body includes trigger/non-applicable scenarios, workflow, explicit output expectations, quality gates, and failure handling.",
         "Primary keeps task.subagent_type and task_id rework semantics while subagents keep permission.task set to deny all.",
         "Existing default edit, bash, and webfetch permissions remain allowed unless the manifest explicitly narrows them.",
-        "Role skills include OpenCode frontmatter and load only the resources needed by that role."
+        "Each exact skill name is assigned only to its intended role, and permission.skill is derived from those references."
       ]
     },
     {
@@ -334,24 +334,24 @@
       "files": [],
       "expectations": [
         "Uses existing description, route_triggers, quick_prompts, workflows, permission, runtime_extensions, mcp_servers, and package_resources fields without inventing settings schema.",
-        "Maps agents to .opencode/agents and skills to .opencode/skills with OpenCode-compatible frontmatter.",
+        "Maps agents to .opencode/agents and complete source skills to .opencode/skills without renaming or rewriting uploaded content.",
         "Maps configuration to opencode.json and {env:VARIABLE}, with placeholder-only .env.example guidance.",
         "Rejects copying .claude-plugin, ${CLAUDE_PLUGIN_ROOT}, .claude local settings, or XML example blocks into generated frontmatter.",
-        "Keeps expert.json as the source of truth and treats README, opencode.json, agents, and generated skills as derived artifacts; root AGENTS.md is not package-owned."
+        "Keeps expert.json as the source of truth, treats README, opencode.json and agents as derived artifacts, and treats declared skill bytes as owned inputs; root AGENTS.md is not package-owned."
       ]
     },
     {
       "id": 23,
-      "name": "purpose-derived-skill-naming",
-      "prompt": "创建一个合同审查专家和一个软件开发专家团。expert.json 中通用技能和每个智能体专用技能只填写 purpose 对象，由生成器生成完整技能名；同时检查旧字符串数组、空或重复 purpose、错误 agent 前缀、过期 permission.skill 和旧 package_resources 路径。",
-      "expected_output": "The generator creates only <slug>-common-<purpose> and <slug>-<agent-id>-<purpose> skill IDs and rejects every legacy or undeclared naming form.",
+      "name": "unified-skill-pool-and-assignment",
+      "prompt": "创建一个合同审查专家和一个软件开发专家团。使用顶层 skills[] 声明技能完整名称、origin 和 edit_policy，角色只引用完整名称；单专家自动分配上传技能，专家团分别测试指定一个、多个和 --all-members，同时检查 schema 混用、未知技能、未知 Agent、手写 permission.skill 与缺失文件 hash。",
+      "expected_output": "The generator and importer use one exact unified skill catalog, derive per-role permissions, and reject every mixed, unknown or divergent declaration.",
       "files": [],
       "expectations": [
-        "Requires non-empty common_skills and per-agent skills arrays containing only purpose mappings.",
-        "Generates common skill IDs as <slug>-common-<purpose> and role skill IDs as <slug>-<agent-id>-<purpose>.",
-        "Writes computed IDs consistently to directories, SKILL.md frontmatter, agent Markdown, README, runtime permission.skill, and package_resources validation.",
-        "Rejects legacy string arrays, complete skill names in purpose, empty or invalid purpose, duplicate purpose, and missing skill lists.",
-        "Rejects permission.skill references to another agent, undeclared skills, legacy names, and package_resources paths under old skill IDs."
+        "Allows an empty top-level skills[] and empty role skills[], while every non-empty role reference names an exact top-level skill.",
+        "Never invents <slug>-common or <slug>-<agent-id> prefixes and never rewrites uploaded SKILL.md content.",
+        "Writes exact names consistently to directories, Agent Markdown, README, derived runtime permission.skill, and package_resources validation.",
+        "Rejects mixed skills/common_skills schemas, duplicate or unknown skill names, unknown Agent IDs and explicit permission.skill in unified manifests.",
+        "Expands --all-members to the team leader and every member, while a single expert auto-assigns without an Agent flag."
       ]
     },
     {

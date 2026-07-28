@@ -35,7 +35,7 @@ class OpenCodeAuthoringTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.manifest = self.root / "expert.json"
-        self.data = json.loads(load_spec_text("expert-json"))
+        self.data = json.loads(load_spec_text("legacy-expert-json"))
         self.write_manifest()
 
     def tearDown(self) -> None:

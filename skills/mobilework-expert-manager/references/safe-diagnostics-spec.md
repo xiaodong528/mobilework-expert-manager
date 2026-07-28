@@ -4,7 +4,7 @@
 
 ## 默认无执行
 
-`scripts/diagnose_expert.py` 和 validator 默认 static-only，禁止：
+`scripts/diagnose_expert.py`、`scripts/diagnose_skill.py` 和 validator 默认 static-only，禁止：
 
 - 执行包内 Python、Shell、JavaScript 或 TypeScript；
 - 调用包脚本的 `--help`；
@@ -23,6 +23,11 @@ python scripts/diagnose_expert.py <package-dir-or-zip> --format json
 ```
 
 `--runtime` 只表达请求并以退出码 4 阻止宿主执行，不是放行开关。
+
+技能诊断额外要求：输入是一个完整技能目录或单根 ZIP；目录名与 `SKILL.md` frontmatter `name`
+必须是相同 kebab-case；扫描全部文件的 symlink、缓存、secret-like 内容、不可移植路径和静态
+Python 语法；计算逐文件 SHA-256 与确定性 tree hash。诊断通过不修改原技能，也不代表它已在
+OpenCode Runtime 加载。
 
 ## 信任等级
 

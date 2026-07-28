@@ -1,17 +1,19 @@
-# Supplemental Skill Markdown 生成规范
+# Skill Markdown 与旧包生成兼容规范
 
-标记区内模板由生成器直接读取。四反引号围栏与本页说明不属于生成结果。
+新统一技能池不生成、重命名或改写技能内容。用户上传技能经 `diagnose_skill.py` 静态诊断后，
+包括 `SKILL.md` 在内的所有文件按原字节复制到 `.opencode/skills/<name>/`；`name` 必须与目录名
+一致。管理器自建的 `managed` 技能也使用完整自选名称，不套用专家或角色名称前缀。
 
-启用 `workflow.autonomy` 时，common skill 追加全部 workflow 执行合同；角色 skill 的“角色工作流”
-改为该角色实际参与阶段的生效自主度、执行器、标准和验收。声明的 skill script 必须在资源导航和
-执行合同中同时可追溯，不得让 Agent 在运行时临时重写替代实现。旧 manifest 保持原模板行为。
+下方标记区仅供未修改旧 schema 包的兼容生成器读取。四反引号围栏与本页说明不属于生成结果。
+旧包启用 `workflow.autonomy` 时继续投影历史模板；结构性修改前先迁移到统一技能池，此后不再
+使用这些生成模板。
 
 ## 目录
 
-1. [通用技能](#通用技能)
-2. [角色专属技能](#角色专属技能)
+1. [旧通用技能兼容模板](#旧通用技能兼容模板)
+2. [旧角色技能兼容模板](#旧角色技能兼容模板)
 
-## 通用技能
+## 旧通用技能兼容模板
 
 <!-- mobilework-template:common-skill:start -->
 ````markdown
@@ -67,7 +69,7 @@ $resource_navigation
 ````
 <!-- mobilework-template:common-skill:end -->
 
-## 角色专属技能
+## 旧角色技能兼容模板
 
 <!-- mobilework-template:role-skill:start -->
 ````markdown

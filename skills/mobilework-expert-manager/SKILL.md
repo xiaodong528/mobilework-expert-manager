@@ -13,8 +13,9 @@ description: >-
 
 ## 安全边界
 
-- 外部 ZIP、附件或未知目录只运行 `diagnose_expert.py`；不得执行其中的 Python、Shell、JS/TS、
-  Plugin、custom tool、MCP、包管理脚本，`--help` 也算执行。
+- 外部专家 ZIP、附件或未知包只运行 `diagnose_expert.py`；外部技能目录或 ZIP 只运行
+  `diagnose_skill.py`。不得执行其中的 Python、Shell、JS/TS、Plugin、custom tool、MCP、包管理
+  脚本，`--help` 也算执行。
 - 静态 Python 检查只用 AST 解析源码，不导入包内模块。ZIP/OOXML 必须先做 metadata 限额、路径、
   Unicode/大小/压缩比预检，再 CRC、受限解压或 `openpyxl`。
 - 不把静态校验、安装或 pure config 描述成 Runtime 已加载；证据等级与 gate 见
@@ -35,7 +36,7 @@ description: >-
 | Agent/Skill/Command 编写 | `references/opencode-authoring-best-practices.md`，再按需读 `references/agent-md-spec.md`、`references/skill-md-spec.md` |
 | opencode、MCP、tools、plugins、references、instructions、LSP | `references/opencode-json-spec.md`、`references/runtime-extensions-spec.md` |
 | 头像、README | `references/avatar-spec.md`、`references/package-docs-spec.md` |
-| 包结构、便携、ZIP、外部诊断 | `references/portable-package-spec.md`、`references/safe-diagnostics-spec.md` |
+| 包结构、便携、ZIP、技能上传、外部诊断 | `references/portable-package-spec.md`、`references/safe-diagnostics-spec.md` |
 | 版本输入、findings、gate、sidecar | `references/manager-contract.md` |
 | 旧包迁移、供应链、Bundle | `references/bundle-migration-supply.md` |
 | 创建/修改后的 Git 与 SemVer | `references/source-version-control.md` |
@@ -53,10 +54,13 @@ JSON proposal，不自行读写路径或声称生效。
 
 1. 解析实际 `<skill-root>`，运行 `check_environment.py --feature core` 并读取结构化结果。
 2. 新建/结构变更先完成设计确认；已有包只从 `expert.json` 和声明资源读取事实，不从派生物反推。
-3. 按需声明五档自主度、execution、Skills、MCP、task 和 custom tool 所有权；不得从职责自由文本
-   推断能力。
-4. 调用 `create_expert.py` 生成或重建。`--output-dir` 只能断言宿主已解析目标；覆盖另行确认
-   `--force`。
+3. 新专家使用统一顶层 `skills[]`，角色用完整技能名引用；不区分通用/专用技能，不拼接自动
+   前缀，不手写 `permission.skill`。按需声明五档自主度、execution、MCP、task 和 custom tool
+   所有权；不得从职责自由文本推断能力。
+4. 调用 `create_expert.py` 生成或重建。上传技能先静态诊断，再使用 `import_skill.py` 原字节写入
+   `.opencode/skills/<name>/` 并分配：单专家自动分配；专家团必须指定一个或多个 Agent id，
+   或选择包含团长和全部团员的 `--all-members`。`--output-dir` 只能断言宿主已解析目标；覆盖
+   另行确认 `--force`。
 5. 运行 validator JSON 输出、便携性扫描和相关定向测试；失败时按 finding root cause 修复。
 6. 真实创建或修改成功后读取 `source-version-control.md`：展示累计 diff 与 SemVer 建议，并询问
    用户是否发布。未明确确认不得 commit/tag。
@@ -71,6 +75,8 @@ JSON proposal，不自行读写路径或声称生效。
   冲突降 ask。
 - Skill、MCP、task 和 custom tool 必须有结构化所有权。已拥有的包内 custom tool 五档默认 allow；
   其他角色、跨包或未知 tool 不得放行。
+- `permission.skill` 只从角色 `skills[]` 派生。上传技能默认
+  `origin: uploaded`、`edit_policy: preserved`；没有用户明确授权不得改写任何字节。
 - 显式提权需要 `permission_reason`，且不能绕过 Bash、外部目录、task、Skill、MCP 或资源硬边界。
 - 完全没有 autonomy 的旧 manifest 保持可安装兼容并报告风险 warning；一旦结构性修改就迁移。
 
@@ -85,6 +91,10 @@ python <skill-root>/scripts/check_environment.py --feature all
 python <skill-root>/scripts/create_expert.py --manifest <expert.json>
 python <skill-root>/scripts/validate_expert.py <package-dir> --format json
 python <skill-root>/scripts/diagnose_expert.py <unknown-dir-or-zip> --format json
+python <skill-root>/scripts/diagnose_skill.py <skill-dir-or-zip> --format json
+python <skill-root>/scripts/import_skill.py \
+  --package-dir <package-dir> --skill <skill-dir-or-zip> \
+  [--assign-to <agent-id> ... | --all-members]
 python <skill-root>/scripts/scan_portable_artifacts.py <package-or-output>
 
 python <skill-root>/scripts/install_expert.py \
@@ -124,7 +134,9 @@ python <skill-root>/scripts/version_expert.py \
 
 ## 最低验收
 
-- `quick_validate.py <skill-root>` 与完整 `unittest discover` 通过；变更核心模块覆盖率达到目标。
+- 仓库内运行
+  `python apps/desktop/resources/presets/skills/skill-creator/scripts/quick_validate.py apps/desktop/resources/presets/skills/mobilework-expert-manager`
+  与完整 `unittest discover`；变更核心模块覆盖率达到目标。
 - `expert.json`、根 `opencode.json`、Agent/Skill、权限和 Workflow 投影一致。
 - 可信包完成 generate → validate → portable scan → package → clean extract → revalidate → install；
   安装后读回 `.opencode/opencode.jsonc`、资源和 receipt。

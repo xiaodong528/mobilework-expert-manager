@@ -43,31 +43,33 @@
 
 ## 2. `package_resources[]`
 
-`package_resources[]` 声明 supplemental skill 内除生成 `SKILL.md` 外的真实资源：
+新统一技能池的 `package_resources[]` 声明每个技能内包括 `SKILL.md` 在内的全部真实文件：
 
 ```json
 {
   "package_resources": [
     {
-      "path": ".opencode/skills/contract-review-expert-contract-reviewer-clause-checklist/references/rules.md",
-      "kind": "text"
+      "path": ".opencode/skills/contract-clause-review/SKILL.md",
+      "kind": "text",
+      "sha256": "<required-lowercase-sha256>"
     },
     {
-      "path": ".opencode/skills/contract-review-expert-contract-reviewer-clause-checklist/templates/input.xlsx",
+      "path": ".opencode/skills/contract-clause-review/templates/input.xlsx",
       "kind": "binary",
-      "sha256": "<optional-lowercase-sha256>"
+      "sha256": "<required-lowercase-sha256>"
     }
   ]
 }
 ```
 
-- `path` 必须位于 manifest 已声明的 supplemental skill 子树。
-- 生成器管理的 `SKILL.md` 不重复声明。
+- `path` 必须位于 manifest 顶层 `skills[]` 已声明的完整 skill name 子树。
+- 每个技能的 `SKILL.md` 必须声明。
 - `kind` 只能是 `text` 或 `binary`；text 必须是 UTF-8。
-- 输入可省略 `sha256`；提供时必须为匹配真实字节的小写 SHA-256。
-- 输出 `expert.json` 始终写入重新计算的 SHA-256。
-- skill 子树内除 `SKILL.md` 外的所有文件都必须声明；孤儿文件校验失败。
-- 生成的 skill 资源导航逐项列出自己拥有的资源和使用时机。
+- 每个条目都必须记录与真实字节匹配的小写 SHA-256；导入和迁移流程重新计算并写入。
+- skill 子树内所有文件都必须声明；孤儿文件校验失败。
+- `origin: uploaded`、`edit_policy: preserved` 的技能不因生成、重建、打包或安装而改变任何字节。
+- 旧 schema 未修改时仍按历史规则由生成器拥有 `SKILL.md`、只声明额外资源；结构性修改先迁移，
+  迁移后立即适用统一规则。
 
 `--force` 在 sibling staging 中重建，只保留当前 manifest 声明的资源。staging 完整校验通过后
 才原子替换；失败必须保持旧包逐字节不变。

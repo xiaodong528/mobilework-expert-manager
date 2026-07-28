@@ -30,9 +30,14 @@ EXPECTED = {
     "expert-agent": (
         "agent-md-spec.md",
         "markdown",
-        "9b7c7aff45fe8101572e9d6c323af2f828e4328c45f9b532eef08d999be9fb74",
+        "69a8ae6b5bd8f139a42575d00a9bbdc9df47112e30c541fb44123de0dc538d86",
     ),
     "expert-json": (
+        "expert-json-spec.md",
+        "json",
+        "590c238aa474aa49fdd7af87b866a47d050f9f3fc4184cfd86b931bc9907be86",
+    ),
+    "legacy-expert-json": (
         "expert-json-spec.md",
         "json",
         "aab4d124cf3e353e04bfd1184e60f13169042cbf9d074f756db6a937ba075997",
@@ -40,12 +45,12 @@ EXPECTED = {
     "primary-agent": (
         "agent-md-spec.md",
         "markdown",
-        "6d7d709821aa0c7c96c02b20917172bcb2ee3b9af7289aef06561ab41fa27646",
+        "817b71723d3112922d3cccc06ce275737a83aab49d755cd9a5f9840a464ffb86",
     ),
     "readme": (
         "package-docs-spec.md",
         "markdown",
-        "bd9b93438ebc548d9c0843756af7ca4eac27d92aff79742ce8f817068fde0f3d",
+        "d80ed2cf0d004ef220835eaa55f5a99bcdbee0a28d23604d6365ac49a38320d9",
     ),
     "role-skill": (
         "skill-md-spec.md",
@@ -55,7 +60,7 @@ EXPECTED = {
     "subagent": (
         "agent-md-spec.md",
         "markdown",
-        "5dd9d75c37976017be6803b69b04de90cd812a0112219698ff823218bae1ebee",
+        "da5174ebb6c1018229d2c4138e4238f4c799e1d026905bcc0e989c37d92f041a",
     ),
 }
 

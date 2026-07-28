@@ -32,7 +32,7 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.base = json.loads(load_spec_text("expert-json"))
+        self.base = json.loads(load_spec_text("legacy-expert-json"))
 
     def tearDown(self) -> None:
         self.temp.cleanup()

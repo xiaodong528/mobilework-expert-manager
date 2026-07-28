@@ -1,7 +1,7 @@
 # MobileWork Expert Manager
 
-用于创建、转换、修改、诊断、校验、安装、打包和版本发布 MobileWork 专家与专家团的独立
-Claude Code 插件。
+用于创建、转换、修改、诊断、校验、安装、打包和版本发布 MobileWork 专家与专家团，并为角色
+导入和分配技能的独立 Claude Code 插件。
 
 本仓库只发布 `mobilework-expert-manager` 插件，不提供面向实习分组的 marketplace。各组组长应维护
 自己的 marketplace GitHub 仓库，并从本仓库引用公共专家管理插件。
@@ -11,7 +11,7 @@ Claude Code 插件。
 | 项目 | 值 |
 |---|---|
 | 插件名 | `mobilework-expert-manager` |
-| 当前版本 | `0.1.0` |
+| 当前版本 | `0.2.0` |
 | Skill | `mobilework-expert-manager` |
 | Skill 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
 
@@ -51,6 +51,8 @@ claude --plugin-dir .
 - 支持单专家和专家团，以及角色路由、交接、验收、返工与最终集成。
 - 支持串行、并行和团长协调 Workflow，以及 `scripted`、`fixed`、`bounded`、`guided`、
   `adaptive` 五档自主度。
+- 新专家使用统一顶层 `skills[]`，角色通过完整技能名引用拥有的技能。
+- 支持把技能目录或 ZIP 原字节导入 `.opencode/skills/<name>/`，并明确分配给一个、多个或全部成员。
 - 支持 Skills、MCP、custom tools、commands、plugins、references、instructions 与 LSP。
 - 支持外部 ZIP、附件和未知目录的无执行静态诊断。
 - 支持结构化 findings、root cause、证据 gate、可信 sidecar 和 OpenCode pure config 验证。
@@ -81,7 +83,7 @@ claude --plugin-dir .
 ├── avatars/
 └── .opencode/
     ├── agents/                         # 生成的 Agent Markdown
-    ├── skills/                         # 通用与角色专属 Skill
+    ├── skills/                         # 统一技能池及导入的完整 Skill
     ├── commands/                       # 可选；Workflow 或自定义命令
     ├── tools/                          # 可选；custom tools
     ├── plugins/                        # 可选；本地 plugins
@@ -92,8 +94,9 @@ claude --plugin-dir .
 
 能力、角色、展示字段、Workflow、权限或资源发生变化时，应先修改 `expert.json` 和其中声明的真实
 资源，再用生成器重建；不要直接修补 `opencode.json`、README、Agent 或 Skill 等派生文件。
-`package_resources[]` 用于声明 supplemental Skill 子树中的脚本、规则、模板和二进制资源，生成器
-会校验真实文件、归属和 SHA-256。
+顶层 `skills[]` 记录完整技能名、来源和编辑策略，角色 `skills[]` 只引用完整技能名。
+`package_resources[]` 声明技能目录内包括 `SKILL.md` 在内的全部文件及 SHA-256，生成器会校验
+真实文件、归属和完整性。
 
 专家包不生成根目录 `AGENTS.md`、`references/` 或 `instructions/`，也不包含真实 `.env`、
 `.mobilework-engine`、`node_modules`、缓存或日志。可信源目录可由管理器初始化根 `.git/`，
@@ -106,7 +109,7 @@ claude --plugin-dir .
 |---|---|---|
 | 展示信息 | `name`、`summary`、`description`、`tags`、`quick_prompts`、头像等 | 生成专家包 README、公开信息和可解析的本地头像引用 |
 | 角色与路由 | `agent`，或 `primary_agent` + `subagents[]`；每个角色可声明职责、触发条件、质量门和交接合同 | 生成角色 Markdown、运行时 Agent 配置和专家团委派边界 |
-| Skills | `common_skills` 与角色 `skills` | 生成 `<slug>-common-<purpose>` 和 `<slug>-<agent-id>-<purpose>`，并只授权给实际拥有者 |
+| Skills | 顶层 `skills[]` 与角色 `skills[]` 完整名称引用 | 只复制声明技能并从角色引用派生 `permission.skill`；不生成通用/专属前缀 |
 | Workflow | `primary`、`serial`、`parallel` phases，及可选 Workflow command | 生成可执行流程说明；可将稳定 Workflow 暴露为 `.opencode/commands/<name>.md` |
 | 自主度 | `scripted`、`fixed`、`bounded`、`guided`、`adaptive` | 按 Workflow、Phase、Agent override 的优先级计算执行边界；任何档位都不能降低安全和验收标准 |
 | 执行器 | `skill-script`、`custom-tool`、`mcp-tool`、`programming-tool`、`agent` | 校验执行器引用、真实资源、参与角色和权限所有权，不从职责文本猜测能力 |
@@ -127,14 +130,20 @@ claude --plugin-dir .
 2. **设计确认**：新建、资料转化或结构性修改时，先确认角色、Workflow、Skills、权限及运行能力。
 3. **生成或重建**：以 `expert.json` 和声明资源为输入运行 `create_expert.py`；覆盖已有包时在 sibling
    staging 中完整重建，校验通过后才原子替换。
-4. **静态验证**：运行 `validate_expert.py`，检查 manifest、派生文件、角色、权限、Workflow、
+4. **技能导入与分配**：先用 `diagnose_skill.py` 静态检查目录或 ZIP，再用 `import_skill.py` 原字节
+   导入。单专家自动分配；专家团必须指定 `--assign-to`，或用 `--all-members` 分配给团长和全部团员。
+5. **静态验证**：运行 `validate_expert.py`，检查 manifest、派生文件、角色、权限、Workflow、
    runtime config 与资源归属的一致性。
-5. **可移植性扫描**：运行 `scan_portable_artifacts.py`，排查绝对路径、secret、symlink、缓存和
+6. **可移植性扫描**：运行 `scan_portable_artifacts.py`，排查绝对路径、secret、symlink、缓存和
    未声明资源。
-6. **打包与干净复验**：运行 `package_expert.py`，完成 ZIP 结构与 CRC 检查、干净解压、再次校验
+7. **打包与干净复验**：运行 `package_expert.py`，完成 ZIP 结构与 CRC 检查、干净解压、再次校验
    和可移植性扫描后才发布 ZIP。
-7. **安装与读回**：运行 `install_expert.py`，投影到 `<workspace>/.opencode/`，再读回
+8. **安装与读回**：运行 `install_expert.py`，投影到 `<workspace>/.opencode/`，再读回
    `.opencode/opencode.jsonc`、安装资源和 `.opencode/.expert-installs/<slug>.json` receipt。
+
+上传技能默认保持 `edit_policy: preserved`。同名同内容复用；同名异内容默认阻止，只有同时提供
+`--replace --confirm-managed` 才允许替换，并把编辑策略改为 `managed`。未修改旧专家继续兼容；
+发生结构性修改时迁移到统一技能合同。
 
 真实创建或修改完成后，管理器会根据累计 diff 给出 SemVer 建议；只有用户明确确认，才执行包根
 本地 commit 和 `vX.Y.Z` tag。静态校验通过只证明 package-valid，安装读回只证明 installed；
@@ -186,6 +195,7 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 
 - 外部或未知输入默认只允许静态诊断，不执行其中的 Python、Shell、JavaScript/TypeScript、
   Plugin、custom tool、MCP 或包管理脚本。
+- 上传技能未经明确授权不得改写，任何已声明文件的 SHA-256 漂移都会使验证失败。
 - 不把静态校验、安装成功或 pure config 加载成功描述为 Runtime 已验证。
 - 未经明确确认，不自动 commit、tag、配置 remote 或发布专家包版本。
 - `.git`、真实 `.env`、`node_modules`、lockfile、缓存、日志、密钥和个人配置不得进入分发包。
@@ -193,6 +203,8 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 ## 本地验证
 
 ```bash
+python3 /path/to/skill-creator/scripts/quick_validate.py \
+  skills/mobilework-expert-manager
 claude plugin validate . --strict
 python3 -m unittest discover \
   -s skills/mobilework-expert-manager/tests \

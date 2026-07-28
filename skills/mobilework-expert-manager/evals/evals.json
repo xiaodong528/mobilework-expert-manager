@@ -24,7 +24,7 @@
       "expectations": [
         "Does not create expert.json, a team directory, or invoke the generator before confirmation.",
         "Identifies missing team-leader and member responsibilities, delegation conditions and final acceptance ownership.",
-        "Identifies missing common-skill and role-specific-skill purposes.",
+        "Identifies missing skill sources, complete names, trigger roles and per-role assignment decisions.",
         "Plans to clarify serial and parallel workflow, handoff, rework and quality gates.",
         "Limits the current round to tightly related questions rather than presenting a large questionnaire."
       ]
@@ -40,7 +40,7 @@
       "expectations": [
         "Uses the supplied SOP as evidence and does not re-ask for stages, responsibilities or acceptance rules already present there.",
         "Separates source facts, candidate design and unresolved items.",
-        "Asks about the expert-versus-team decision and missing skill purposes in a dependency-aware order.",
+        "Asks about the expert-versus-team decision and missing skill source, complete name and role assignment in a dependency-aware order.",
         "Does not generate expert.json or call the generator before a design confirmation.",
         "Offers a recommendation in business language instead of requiring the user to design manifest fields."
       ]
@@ -48,13 +48,13 @@
     {
       "id": 104,
       "name": "generate-explicitly-confirmed-complete-design",
-      "prompt": "以下 MobileWork 单专家设计已经逐项确认，请直接生成到任务临时目录并验证：名称是合同审查专家；目标是识别付款、交付、违约和争议条款并输出风险清单；唯一角色 contract-reviewer 负责条款提取、风险分级、证据引用和审查报告，不负责提供最终法律意见；工作流是材料检查、条款提取、风险审查、交叉核对、报告交付；专用 skills 是 clause-extraction（提取并定位条款）和 risk-review（分级风险并给出依据）；质量门要求每个结论有原文证据，缺页时停止；不需要 MCP、runtime extensions 或额外权限。我确认按这个设计开始生成。",
+      "prompt": "以下 MobileWork 单专家设计已经逐项确认，请直接生成到任务临时目录并验证：名称是合同审查专家；目标是识别付款、交付、违约和争议条款并输出风险清单；唯一角色 contract-reviewer 负责条款提取、风险分级、证据引用和审查报告，不负责提供最终法律意见；工作流是材料检查、条款提取、风险审查、交叉核对、报告交付；由管理器创建两个 managed skills，完整名称分别是 clause-extraction（提取并定位条款）和 risk-review（分级风险并给出依据），都分配给唯一角色；质量门要求每个结论有原文证据，缺页时停止；不需要 MCP、runtime extensions 或额外权限。我确认按这个设计开始生成。",
       "expected_output": "The confirmed complete design is generated and validated without redundant clarification.",
       "files": [],
       "expectations": [
         "Treats the explicit confirmation as satisfying the design gate and does not ask redundant questions.",
         "Creates a type: expert manifest with one primary agent and no team delegation narrative.",
-        "Maps the two confirmed skill purposes and the confirmed workflow without inventing MCP or runtime extensions.",
+        "Uses the two exact confirmed skill names, declares origin managed and edit_policy managed, and assigns both to the sole role without inventing prefixes, MCP or runtime extensions.",
         "Uses the requested temporary output directory.",
         "Runs JSON parsing, validator and portability checks before claiming completion."
       ]
@@ -69,7 +69,7 @@
       ],
       "expectations": [
         "Reads the existing expert.json example as the source of truth.",
-        "Classifies role ownership, workflow placement, skill purposes and acceptance gates as structural decisions.",
+        "Classifies role ownership, workflow placement, skill source/name/assignment and acceptance gates as structural decisions, including legacy migration before modification.",
         "Shows or promises a before-versus-candidate-after design diff before rebuilding.",
         "Asks only for unresolved security-design decisions and may offer two or three meaningful candidate allocations.",
         "Does not modify or regenerate the package before explicit confirmation."
@@ -83,7 +83,7 @@
       "files": [],
       "expectations": [
         "Interprets 'you decide' as authority to propose a design, not authority to generate immediately.",
-        "Produces a coherent candidate covering leader, members, responsibilities, workflow, common and role-specific skill purposes and quality gates.",
+        "Produces a coherent candidate covering leader, members, responsibilities, workflow, unified skills with exact role assignments and quality gates.",
         "Labels user facts, candidate design and unresolved items separately.",
         "Ends with an explicit request to confirm the design.",
         "Does not create expert.json, an expert directory or call the generator."
@@ -182,7 +182,7 @@
         "Recommends a local plugin under .opencode/plugins for event hooks, with dependencies in .opencode/package.json and no local path in opencode.json.plugin.",
         "Recommends a custom JavaScript or TypeScript tool under .opencode/tools and does not invent a root tools field.",
         "Recommends instruction_files under .opencode/instructions/<slug>/ and an explicit opencode.json.instructions file or glob for workspace-wide rules.",
-        "Does not create or recommend root AGENTS.md, and keeps role-specific rules in agent Markdown or the owning supplemental skill.",
+        "Does not create or recommend root AGENTS.md, and keeps role-specific rules in agent Markdown or a skill assigned to that role.",
         "Does not let the generator or validator infer and auto-create undeclared resources."
       ]
     },
@@ -471,6 +471,48 @@
         "Rejects role custom_tools entries that do not match runtime_extensions.custom_tools paths.",
         "Rejects two declared paths that map to the same OpenCode tool name.",
         "Does not use legacy tools mapping or role prose as custom-tool ownership evidence."
+      ]
+    },
+    {
+      "id": 133,
+      "name": "upload-and-auto-assign-single-expert-skill",
+      "prompt": "在临时目录创建一个合法的完整 skill 目录 uploaded-review，内含 SKILL.md、scripts/check.py、references/rules.md 和一个二进制 asset。把它上传到一个已校验的 MobileWork 单专家包，不指定 Agent；读回 expert.json、skill 全部文件、Agent Markdown、README 和 opencode.json 权限，并证明源目录与包内副本逐文件 hash 一致。",
+      "expected_output": "The uploaded skill is statically diagnosed, copied byte-for-byte, auto-assigned to the sole Agent and projected consistently without runtime claims.",
+      "files": [],
+      "expectations": [
+        "Runs diagnose_skill.py without importing or executing uploaded content and reports static-only evidence.",
+        "Stores the exact skill under .opencode/skills/uploaded-review with origin uploaded and edit_policy preserved.",
+        "Declares SKILL.md and every other file in package_resources with matching SHA-256.",
+        "Auto-assigns only the single Agent and derives permission.skill from that role reference.",
+        "Reports equal source/package per-file and tree hashes and keeps Runtime explicitly not-tested."
+      ]
+    },
+    {
+      "id": 134,
+      "name": "upload-and-assign-skill-to-all-team-members",
+      "prompt": "在临时目录生成一个已校验的 MobileWork 专家团和完整 skill all-review，然后用 --all-members 导入。证明全部成员包含团长与所有团员，读回每个角色 skills[]、permission.skill、Agent Markdown、README、安装 workspace 文件和 receipt；同时证明不传分配参数与未知 Agent 都失败且包 hash 不变。",
+      "expected_output": "The team import expands all members exactly, derives permissions and preserves the package transactionally on every rejected assignment.",
+      "files": [],
+      "expectations": [
+        "Rejects a team import without --assign-to or --all-members and rejects unknown Agent IDs before committing.",
+        "Expands --all-members to the primary leader and every subagent with no wildcard stored in expert.json.",
+        "Gives all and only the selected roles an allow entry for all-review while keeping skill wildcard deny.",
+        "Keeps all uploaded bytes unchanged through generation and installation and records owned files in the receipt.",
+        "Shows identical target package hashes before and after each rejected import."
+      ]
+    },
+    {
+      "id": 135,
+      "name": "migrate-legacy-skills-during-upload",
+      "prompt": "生成一个仍使用 common_skills 与 role purpose 对象的合法旧专家团，记录全部旧 skill 文件 hash；然后上传一个新 skill 并指定一个团员，触发结构迁移。读回统一顶层 skills[]、所有角色引用、权限和全部文件 hash，并测试同名同内容复用、同名异内容默认阻止及 --replace --confirm-managed。",
+      "expected_output": "Structural import migrates the legacy package without byte drift, preserves assignment semantics and enforces explicit managed replacement.",
+      "files": [],
+      "expectations": [
+        "Migrates every old complete skill name to origin legacy-migrated and edit_policy managed without changing file bytes.",
+        "Assigns every old common skill to the leader and all members and keeps each old role skill only on its original role.",
+        "Adds the uploaded skill only to the requested member with origin uploaded and edit_policy preserved.",
+        "Reuses same-name identical content, blocks different content by default and leaves the target byte-for-byte unchanged.",
+        "Allows replacement only with both --replace and --confirm-managed, retains origin uploaded and changes edit_policy to managed."
       ]
     }
   ]

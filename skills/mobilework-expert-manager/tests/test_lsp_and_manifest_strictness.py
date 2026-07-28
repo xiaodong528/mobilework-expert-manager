@@ -35,7 +35,7 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.base = json.loads(load_spec_text("expert-json"))
+        self.base = json.loads(load_spec_text("legacy-expert-json"))
         self.base["runtime_extensions"] = {}
         self.base.pop("mcp_servers", None)
 

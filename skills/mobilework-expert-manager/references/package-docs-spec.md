@@ -55,7 +55,7 @@ $quick_prompts
 - `.opencode/plugins/`：可选的本地插件；依赖只通过 `.opencode/package.json` 声明，不携带 `node_modules`。
 - `.opencode/references/<slug>/<alias>/`：可选的包内引用资料目录。
 - `.opencode/instructions/<slug>/`：可选的 workspace 全局指令文件；必须由 `opencode.json.instructions` 索引。
-- `package_resources[]`：声明 supplemental skill 内脚本、规则、模板和二进制资源；实际文件保留在对应 skill 子树。
+- `package_resources[]`：统一声明 skill 子树内包括 `SKILL.md` 在内的全部文件及 SHA-256；实际文件保留在对应 skill 子树。
 
 本包保留 MobileWork 项目结构，不生成根级 `AGENTS.md`，也不包含非运行必需的根级配置或隐藏目录。
 

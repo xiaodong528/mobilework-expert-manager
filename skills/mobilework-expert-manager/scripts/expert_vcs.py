@@ -176,7 +176,13 @@ def classify_change(previous: dict[str, Any] | None, current: dict[str, Any]) ->
         return "major", "a command was removed or renamed"
     if _role_ids(previous) != _role_ids(current) or old_workflows != new_workflows or old_commands != new_commands:
         return "minor", "compatible roles, workflows, or commands were added"
-    structural_keys = ("common_skills", "mcp_servers", "runtime_extensions", "package_resources")
+    structural_keys = (
+        "skills",
+        "common_skills",
+        "mcp_servers",
+        "runtime_extensions",
+        "package_resources",
+    )
     if any(previous.get(key) != current.get(key) for key in structural_keys):
         return "minor", "capability or owned resource contract changed; user review is required"
     previous_roles = {role.get("id"): role for role in _roles(previous)}

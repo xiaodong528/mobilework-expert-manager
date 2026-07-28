@@ -28,6 +28,7 @@ import gitignore_contract
 import manifest_contract
 import permission_policy
 import renderers
+import skill_contract
 import workflow_autonomy
 
 
@@ -721,6 +722,7 @@ def normalize_package_resources(
     *,
     declared_skills: set[str],
     manifest_dir: Path,
+    skill_mode: str,
 ) -> tuple[list[dict[str, str]], dict[str, bytes]]:
     if raw is None:
         return [], {}
@@ -741,7 +743,7 @@ def normalize_package_resources(
         parts = Path(path).parts
         if len(parts) < 4 or parts[2] not in declared_skills:
             fail(f"{field}.path must be inside a declared supplemental skill")
-        if Path(path).name == "SKILL.md":
+        if Path(path).name == "SKILL.md" and skill_mode == "legacy":
             fail(f"{field}.path must not declare generated SKILL.md")
         if path in seen:
             fail(f"{field}.path duplicates {path}")
@@ -762,6 +764,8 @@ def normalize_package_resources(
                 fail(f"{field}.path must contain UTF-8 text")
         digest = contract.sha256_bytes(content)
         provided = item.get("sha256")
+        if skill_mode == "unified" and provided is None:
+            fail(f"{field}.sha256 is required for unified skill files")
         if provided is not None and (not isinstance(provided, str) or not contract.SHA256_RE.fullmatch(provided)):
             fail(f"{field}.sha256 must be a lowercase SHA-256 digest")
         if provided is not None and provided != digest:
@@ -778,7 +782,14 @@ def normalize_mcp(raw: Any) -> dict[str, dict[str, Any]]:
         fail(str(exc))
 
 
-def normalize_role(raw: Any, field: str, *, expected_mode: str, default_max_turns: int) -> dict[str, Any]:
+def normalize_role(
+    raw: Any,
+    field: str,
+    *,
+    expected_mode: str,
+    default_max_turns: int,
+    skill_mode: str,
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         fail(f"{field} must be a mapping")
     role_id = validate_slug(raw.get("id"), f"{field}.id")
@@ -804,7 +815,11 @@ def normalize_role(raw: Any, field: str, *, expected_mode: str, default_max_turn
     except contract.ContractError as exc:
         fail(str(exc))
     try:
-        skill_purposes = contract.skill_purposes(raw.get("skills"), f"{field}.skills")
+        role_skills = (
+            skill_contract.normalize_role_refs(raw.get("skills"), f"{field}.skills")
+            if skill_mode == "unified"
+            else contract.skill_purposes(raw.get("skills"), f"{field}.skills")
+        )
     except contract.ContractError as exc:
         fail(str(exc))
     role = {
@@ -823,7 +838,7 @@ def normalize_role(raw: Any, field: str, *, expected_mode: str, default_max_turn
         "quality_gates": text_list(raw.get("quality_gates"), f"{field}.quality_gates"),
         "route_triggers": text_list(raw.get("route_triggers"), f"{field}.route_triggers"),
         "handoff_contract": text_list(raw.get("handoff_contract"), f"{field}.handoff_contract"),
-        "skill_purposes": skill_purposes,
+        "skills" if skill_mode == "unified" else "skill_purposes": role_skills,
         "mcp": text_list(raw.get("mcp"), f"{field}.mcp"),
         "custom_tools": text_list(raw.get("custom_tools"), f"{field}.custom_tools"),
         "permission": normalize_permission(raw.get("permission"), f"{field}.permission"),
@@ -853,6 +868,15 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
     if expert_type not in {"expert", "team"}:
         fail("type must be expert or team")
     source_manifest = json.loads(json.dumps(raw, ensure_ascii=False))
+    skill_mode = skill_contract.schema_mode(raw)
+    try:
+        skill_catalog = (
+            skill_contract.normalize_catalog(raw.get("skills"))
+            if skill_mode == "unified"
+            else []
+        )
+    except contract.ContractError as exc:
+        fail(str(exc))
 
     name = optional_text(raw.get("name"), "name", default=slug.replace("-", " ").title())
     summary = optional_text(raw.get("summary"), "summary")
@@ -869,7 +893,11 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
     if raw.get("default_prompt") is not None and quick_prompts and default_prompt != quick_prompts[0]:
         fail("default_prompt must match quick_prompts[0]")
     try:
-        common_skills = contract.common_skill_names(slug, raw.get("common_skills"))
+        common_skills = (
+            contract.common_skill_names(slug, raw.get("common_skills"))
+            if skill_mode == "legacy"
+            else []
+        )
     except contract.ContractError as exc:
         fail(str(exc))
 
@@ -877,7 +905,13 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         if "subagents" in raw or "primary_agent" in raw:
             fail("type expert must use agent and must not define primary_agent or subagents")
         raw_agent = raw.get("agent")
-        agent = normalize_role(raw_agent, "agent", expected_mode="primary", default_max_turns=80)
+        agent = normalize_role(
+            raw_agent,
+            "agent",
+            expected_mode="primary",
+            default_max_turns=80,
+            skill_mode=skill_mode,
+        )
         top_profession = optional_text(raw.get("profession"), "profession")
         agent["name"] = name
         agent["title"] = name
@@ -896,14 +930,24 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         if "agent" in raw:
             fail("type team must use primary_agent and subagents, not agent")
         primary = normalize_role(
-            raw.get("primary_agent"), "primary_agent", expected_mode="primary", default_max_turns=150
+            raw.get("primary_agent"),
+            "primary_agent",
+            expected_mode="primary",
+            default_max_turns=150,
+            skill_mode=skill_mode,
         )
         subagents_raw = raw.get("subagents")
         if not isinstance(subagents_raw, list) or not subagents_raw:
             fail("subagents must contain at least one role for type team")
         subagent_items = cast(list[Any], subagents_raw)
         subagents = [
-            normalize_role(item, f"subagents[{index}]", expected_mode="subagent", default_max_turns=50)
+            normalize_role(
+                item,
+                f"subagents[{index}]",
+                expected_mode="subagent",
+                default_max_turns=50,
+                skill_mode=skill_mode,
+            )
             for index, item in enumerate(subagent_items)
         ]
 
@@ -917,20 +961,36 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
     )
 
     role_skills: list[str] = []
-    for role in [primary, *subagents]:
-        for purpose in role["skill_purposes"]:
-            if purpose.startswith(f"{slug}-"):
-                fail(
-                    f"{role['id']}.skills purpose must be a purpose, not a complete skill name"
+    if skill_mode == "legacy":
+        for role in [primary, *subagents]:
+            for purpose in role["skill_purposes"]:
+                if purpose.startswith(f"{slug}-"):
+                    fail(
+                        f"{role['id']}.skills purpose must be a purpose, not a complete skill name"
+                    )
+            role["skills"] = [
+                f"{slug}-{role['id']}-{purpose}"
+                for purpose in role.pop("skill_purposes")
+            ]
+            role_skills.extend(role["skills"])
+        for skill_name in [*common_skills, *role_skills]:
+            validate_slug(skill_name, "skill name")
+        if len([*common_skills, *role_skills]) != len(
+            set([*common_skills, *role_skills])
+        ):
+            fail("generated skill names must be unique")
+    else:
+        declared = {item["name"] for item in skill_catalog}
+        for role in [primary, *subagents]:
+            try:
+                role["skills"] = skill_contract.normalize_role_refs(
+                    role["skills"],
+                    f"{role['id']}.skills",
+                    declared=declared,
                 )
-        role["skills"] = [
-            f"{slug}-{role['id']}-{purpose}" for purpose in role.pop("skill_purposes")
-        ]
-        role_skills.extend(role["skills"])
-    for skill_name in [*common_skills, *role_skills]:
-        validate_slug(skill_name, "skill name")
-    if len([*common_skills, *role_skills]) != len(set([*common_skills, *role_skills])):
-        fail("generated skill names must be unique")
+            except contract.ContractError as exc:
+                fail(str(exc))
+            role_skills.extend(role["skills"])
 
     mcp = normalize_mcp(raw.get("mcp_servers"))
     runtime_extensions = normalize_runtime_extensions(
@@ -953,12 +1013,26 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         ]
     ):
         source_manifest["runtime_extensions"] = runtime_extensions
-    declared_skills = set([*common_skills, *role_skills])
+    declared_skills = (
+        set([*common_skills, *role_skills])
+        if skill_mode == "legacy"
+        else {item["name"] for item in skill_catalog}
+    )
     package_resources, package_resource_assets = normalize_package_resources(
         raw.get("package_resources"),
         declared_skills=declared_skills,
         manifest_dir=manifest_dir,
+        skill_mode=skill_mode,
     )
+    if skill_mode == "unified":
+        declared_paths = {item["path"] for item in package_resources}
+        for skill_name in sorted(declared_skills):
+            required = f"{EXPERT_DIR}/{SKILLS_SUBDIR}/{skill_name}/SKILL.md"
+            if required not in declared_paths:
+                fail(
+                    f"skills.{skill_name}: package_resources must declare {required}"
+                )
+        source_manifest["skills"] = skill_catalog
     if package_resources:
         source_manifest["package_resources"] = package_resources
     else:
@@ -967,8 +1041,16 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         for name_ in role["mcp"]:
             if name_ not in mcp:
                 fail(f"agent {role['id']} references unknown mcp server {name_}")
-        role["allowed_skills"] = [*common_skills, *role["skills"]]
+        role["allowed_skills"] = (
+            [*common_skills, *role["skills"]]
+            if skill_mode == "legacy"
+            else list(role["skills"])
+        )
         explicit_skill_permission = role["permission"].get("skill")
+        if skill_mode == "unified" and explicit_skill_permission is not None:
+            fail(
+                f"{role['id']}.permission.skill is derived from role skills and must be omitted"
+            )
         if explicit_skill_permission is not None:
             if not isinstance(explicit_skill_permission, dict):
                 fail(f"{role['id']}.permission.skill must be a mapping")
@@ -1004,6 +1086,8 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         "workflows": workflows,
         "primary_agent": primary,
         "subagents": subagents,
+        "skill_mode": skill_mode,
+        "skill_catalog": skill_catalog,
         "common_skills": common_skills,
         "role_skills": role_skills,
         "mcp": mcp,
@@ -1520,6 +1604,22 @@ def render_readme_roles_section(manifest: dict[str, Any]) -> tuple[str, str]:
 
 
 def render_readme_skills(manifest: dict[str, Any]) -> str:
+    if manifest["skill_mode"] == "unified":
+        rows = ["| 技能 | 来源 | 编辑策略 | 分配角色 |", "|---|---|---|---|"]
+        roles = [manifest["primary_agent"], *manifest["subagents"]]
+        for item in manifest["skill_catalog"]:
+            assigned = [
+                f"`{role['id']}`"
+                for role in roles
+                if item["name"] in role["skills"]
+            ]
+            rows.append(
+                f"| `{item['name']}` | `{item['origin']}` | "
+                f"`{item['edit_policy']}` | {', '.join(assigned) or '未分配'} |"
+            )
+        if not manifest["skill_catalog"]:
+            rows.append("| 无 | — | — | — |")
+        return "\n".join(rows)
     rows = ["| 技能 | 用途 |", "|---|---|"]
     for skill_name in manifest["common_skills"]:
         rows.append(f"| `{skill_name}` | 通用工作方法、交付格式和质量门控 |")
@@ -1806,77 +1906,86 @@ def _write_project_locked(manifest: dict[str, Any], output_root: Path, *, force:
             render_agent(sub, manifest, is_primary=False), encoding="utf-8"
         )
 
-    for skill_name in manifest["common_skills"]:
-        common_content = renderers.render_spec("common-skill",
-            expert_name=manifest["name"],
-            description=manifest["description"],
-            expert_type=manifest["type"],
-            when_to_use="\n".join(f"- {item}" for item in manifest["quick_prompts"][:4])
-            or "- 本包任一 agent 需要统一任务澄清、证据、验证和交付格式时。",
-            resource_navigation=render_skill_resource_navigation(manifest, skill_name),
-        )
-        if workflow_autonomy.has_autonomy_contract(manifest["workflows"]):
-            common_content += (
-                "\n## Workflow 自主度合同\n\n"
-                + render_workflows(manifest)
-                + "\n"
+    if manifest["skill_mode"] == "legacy":
+        for skill_name in manifest["common_skills"]:
+            common_content = renderers.render_spec(
+                "common-skill",
+                expert_name=manifest["name"],
+                description=manifest["description"],
+                expert_type=manifest["type"],
+                when_to_use="\n".join(
+                    f"- {item}" for item in manifest["quick_prompts"][:4]
+                )
+                or "- 本包任一 agent 需要统一任务澄清、证据、验证和交付格式时。",
+                resource_navigation=render_skill_resource_navigation(
+                    manifest, skill_name
+                ),
             )
-        skill_path = skills_dir / skill_name
-        skill_path.mkdir()
-        (skill_path / "SKILL.md").write_text(
-            render_skill(
-                skill_name,
-                render_common_skill_description(manifest),
-                common_content,
-                metadata={
-                    "package": manifest["slug"],
-                    "role": "all",
-                    "type": "common",
-                },
-            ),
-            encoding="utf-8",
-        )
-    for role in [primary, *manifest["subagents"]]:
-        for skill_name in role["skills"]:
+            if workflow_autonomy.has_autonomy_contract(manifest["workflows"]):
+                common_content += (
+                    "\n## Workflow 自主度合同\n\n"
+                    + render_workflows(manifest)
+                    + "\n"
+                )
             skill_path = skills_dir / skill_name
             skill_path.mkdir()
-            content = renderers.render_spec("role-skill",
-                title=role["title"],
-                expert_name=manifest["name"],
-                responsibilities=bullet_list(
-                    role["responsibilities"],
-                    f"为 {role['title']} 提供聚焦的专业指引。",
-                ),
-                when_to_use=render_trigger_examples(
-                    role,
-                    manifest,
-                    is_primary=role["id"] == primary["id"],
-                ),
-                workflow=render_role_workflow(
-                    role,
-                    manifest,
-                    "在专业范围内执行方法并验证结果。",
-                ),
-                resource_navigation=render_skill_resource_navigation(manifest, skill_name),
-                handoff_contract=render_handoff_contract(role),
-                quality_gates=bullet_list(
-                    role["quality_gates"],
-                    "交付前验证专业工作是否满足要求。",
-                ),
-            )
             (skill_path / "SKILL.md").write_text(
                 render_skill(
                     skill_name,
-                    render_role_skill_description(role, manifest),
-                    content,
+                    render_common_skill_description(manifest),
+                    common_content,
                     metadata={
                         "package": manifest["slug"],
-                        "role": role["id"],
-                        "type": "role",
+                        "role": "all",
+                        "type": "common",
                     },
                 ),
                 encoding="utf-8",
             )
+        for role in [primary, *manifest["subagents"]]:
+            for skill_name in role["skills"]:
+                skill_path = skills_dir / skill_name
+                skill_path.mkdir()
+                content = renderers.render_spec(
+                    "role-skill",
+                    title=role["title"],
+                    expert_name=manifest["name"],
+                    responsibilities=bullet_list(
+                        role["responsibilities"],
+                        f"为 {role['title']} 提供聚焦的专业指引。",
+                    ),
+                    when_to_use=render_trigger_examples(
+                        role,
+                        manifest,
+                        is_primary=role["id"] == primary["id"],
+                    ),
+                    workflow=render_role_workflow(
+                        role,
+                        manifest,
+                        "在专业范围内执行方法并验证结果。",
+                    ),
+                    resource_navigation=render_skill_resource_navigation(
+                        manifest, skill_name
+                    ),
+                    handoff_contract=render_handoff_contract(role),
+                    quality_gates=bullet_list(
+                        role["quality_gates"],
+                        "交付前验证专业工作是否满足要求。",
+                    ),
+                )
+                (skill_path / "SKILL.md").write_text(
+                    render_skill(
+                        skill_name,
+                        render_role_skill_description(role, manifest),
+                        content,
+                        metadata={
+                            "package": manifest["slug"],
+                            "role": role["id"],
+                            "type": "role",
+                        },
+                    ),
+                    encoding="utf-8",
+                )
 
     write_package_resources(staged_project, manifest)
     (staged_project / "README.md").write_text(render_readme(manifest), encoding="utf-8")

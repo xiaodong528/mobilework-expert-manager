@@ -32,7 +32,7 @@ class WorkflowAutonomyTests(unittest.TestCase):
         self.temp.cleanup()
 
     def single_manifest(self) -> dict[str, object]:
-        return json.loads(load_spec_text("expert-json"))
+        return json.loads(load_spec_text("legacy-expert-json"))
 
     def team_manifest(self) -> dict[str, object]:
         return json.loads(TEAM_EXAMPLE.read_text(encoding="utf-8"))
