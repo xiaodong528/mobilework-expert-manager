@@ -1,0 +1,37 @@
+{
+  "name": "mobilework-expert-manager",
+  "version": "0.4.0",
+  "description": "Design, analyze, create, modify, diagnose, and validate MobileWork experts and expert teams, including installation, packaging, versioning, and skill assignment.",
+  "author": {
+    "name": "xiaodong528",
+    "url": "https://github.com/xiaodong528"
+  },
+  "homepage": "https://github.com/xiaodong528/mobilework-expert-manager",
+  "repository": "https://github.com/xiaodong528/mobilework-expert-manager",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mobilework",
+    "opencode",
+    "experts",
+    "agent-teams"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MobileWork Expert Manager",
+    "shortDescription": "Design and manage MobileWork expert packages",
+    "longDescription": "Create, convert, modify, diagnose, validate, install, package, and version MobileWork experts and expert teams.",
+    "developerName": "xiaodong528",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/xiaodong528/mobilework-expert-manager",
+    "defaultPrompt": [
+      "Design a MobileWork expert and confirm its roles, workflow, skills, and permissions.",
+      "Diagnose this MobileWork expert package and propose evidence-backed fixes.",
+      "Import this skill into a MobileWork expert team and assign it to the right roles."
+    ]
+  }
+}

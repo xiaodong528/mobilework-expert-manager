@@ -1,21 +1,51 @@
 # MobileWork Expert Manager
 
 用于创建、转换、修改、诊断、校验、安装、打包和版本发布 MobileWork 专家与专家团，并为角色
-导入和分配技能的独立 Claude Code 插件。
+导入和分配技能的 Claude Code 与 Codex 插件。
 
-本仓库只发布 `mobilework-expert-manager` 插件，不提供面向实习分组的 marketplace。各组组长应维护
-自己的 marketplace GitHub 仓库，并从本仓库引用公共专家管理插件。
+本仓库发布 `mobilework-expert-manager` 插件，并通过 `mobilework-tools` marketplace 为
+Claude Code 与 Codex 提供直接安装。其他团队仍可从自己的 marketplace 引用本仓库中的公共插件。
 
 ## 插件接口
 
 | 项目 | 值 |
 |---|---|
 | 插件名 | `mobilework-expert-manager` |
-| 当前版本 | `0.3.0` |
+| Marketplace | `mobilework-tools` |
+| 当前版本 | `0.4.0` |
 | Skill | `mobilework-expert-manager` |
-| Skill 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
+| Claude Code 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
+| Codex 调用 | `$mobilework-expert-manager:mobilework-expert-manager` |
 
-## 在 Marketplace 中引用
+## 安装
+
+### Claude Code
+
+```bash
+claude plugin marketplace add xiaodong528/mobilework-expert-manager
+claude plugin install mobilework-expert-manager@mobilework-tools
+```
+
+安装后启动新会话，或在已有会话中执行 `/reload-plugins`，再调用：
+
+```text
+/mobilework-expert-manager:mobilework-expert-manager
+```
+
+### Codex
+
+```bash
+codex plugin marketplace add xiaodong528/mobilework-expert-manager
+codex plugin add mobilework-expert-manager@mobilework-tools
+```
+
+安装后启动新任务，再使用：
+
+```text
+$mobilework-expert-manager:mobilework-expert-manager
+```
+
+## 在其他 Marketplace 中引用
 
 组长在本组 `.claude-plugin/marketplace.json` 的 `plugins` 数组中加入：
 
@@ -35,9 +65,6 @@
 /plugin install mobilework-expert-manager@<marketplace-name>
 /reload-plugins
 ```
-
-本仓库不是 marketplace，因此不要执行
-`/plugin marketplace add xiaodong528/mobilework-expert-manager`。
 
 开发者也可以直接在仓库根目录加载插件：
 
@@ -175,7 +202,12 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 
 ```text
 .
+├── .agents/plugins/
+│   └── marketplace.json
 ├── .claude-plugin/
+│   ├── marketplace.json
+│   └── plugin.json
+├── .codex-plugin/
 │   └── plugin.json
 ├── skills/
 │   └── mobilework-expert-manager/
@@ -206,14 +238,19 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 python3 /path/to/skill-manager/scripts/quick_validate.py \
   skills/mobilework-expert-manager
 claude plugin validate . --strict
+python3 /path/to/plugin-creator/scripts/validate_plugin.py .
+python3 -m unittest discover \
+  -s tests \
+  -p 'test_*.py'
 python3 -m unittest discover \
   -s skills/mobilework-expert-manager/tests \
   -p 'test_*.py'
 ```
 
-CI 使用 Node.js 22、`@anthropic-ai/claude-code@2.1.218`、Python 3.11、
-`PyYAML==6.0.3` 和固定提交的官方 `skills-ref` 执行相同校验。发布新能力或修复时必须同步升级
-`.claude-plugin/plugin.json` 的 SemVer。
+CI 使用 Node.js 22、`@anthropic-ai/claude-code@2.1.218`、`@openai/codex@0.145.0`、
+Python 3.11、`PyYAML==6.0.3` 和固定提交的官方 `skills-ref` 执行相同校验，并在隔离配置目录中
+真实添加本地 marketplace、安装插件和读回 Skill。发布新能力或修复时必须同步升级 Claude Code
+与 Codex 两个 `plugin.json` 的 SemVer。
 
 ## 详细规范
 
@@ -230,6 +267,7 @@ CI 使用 Node.js 22、`@anthropic-ai/claude-code@2.1.218`、Python 3.11、
 - [Claude Code 插件开发](https://code.claude.com/docs/en/plugins)
 - [Claude Code 插件技术参考](https://code.claude.com/docs/en/plugins-reference)
 - [Claude Code 插件市场](https://code.claude.com/docs/en/plugin-marketplaces)
+- [OpenAI 插件打包](https://developers.openai.com/plugins/build/plugins)
 - [OpenCode 官方文档](https://opencode.ai/docs/)
 
 ## License

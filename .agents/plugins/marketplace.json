@@ -1,0 +1,20 @@
+{
+  "name": "mobilework-tools",
+  "interface": {
+    "displayName": "MobileWork Tools"
+  },
+  "plugins": [
+    {
+      "name": "mobilework-expert-manager",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/xiaodong528/mobilework-expert-manager.git"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

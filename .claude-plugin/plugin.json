@@ -2,13 +2,14 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "mobilework-expert-manager",
   "displayName": "MobileWork Expert Manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Design, analyze, create, modify, diagnose, and validate MobileWork experts and expert teams, including installation, packaging, versioning, and skill assignment.",
   "author": {
     "name": "xiaodong528"
   },
   "repository": "https://github.com/xiaodong528/mobilework-expert-manager",
   "license": "Apache-2.0",
+  "skills": "./skills/",
   "keywords": [
     "mobilework",
     "opencode",

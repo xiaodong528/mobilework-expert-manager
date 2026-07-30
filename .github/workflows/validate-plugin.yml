@@ -29,6 +29,39 @@ jobs:
       - name: Validate plugin
         run: claude plugin validate . --strict
 
+  distribution-validation:
+    name: Dual-host marketplace installation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install plugin hosts
+        run: >-
+          npm install --global
+          @anthropic-ai/claude-code@2.1.218
+          @openai/codex@0.145.0
+
+      - name: Validate distribution manifests
+        run: >-
+          python -m unittest discover
+          -s tests
+          -p 'test_*.py'
+
+      - name: Install and discover plugin in isolated profiles
+        run: python tests/host_installation_smoke.py
+
   expert-manager-tests:
     name: MobileWork Expert Manager tests
     runs-on: ubuntu-latest
@@ -55,3 +88,6 @@ jobs:
           python -m unittest discover
           -s skills/mobilework-expert-manager/tests
           -p 'test_*.py'
+
+      - name: Validate skill package
+        run: skills-ref validate skills/mobilework-expert-manager
