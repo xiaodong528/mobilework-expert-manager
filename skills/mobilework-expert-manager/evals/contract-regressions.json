@@ -395,6 +395,77 @@
         "Runs each package installation independently and then installs both sequentially into one clean workspace.",
         "Attributes an exact receipt/path/key collision to expert authoring unless independent runtime evidence shows MobileWork lost or corrupted a namespaced projection."
       ]
+    },
+    {
+      "id": 27,
+      "name": "official-agent-skills-frontmatter-contract",
+      "prompt": "创建 legacy Skill 并分别静态诊断、导入 unified 专家包：验证 name/description 边界，以及 license、compatibility、metadata、allowed-tools 和未知字段。所有成功产物必须符合 agentskills.io specification，上传内容不得自动改写。",
+      "expected_output": "One shared internal validator gates generation, diagnosis, import, package validation, packaging and installation, while a pinned official skills-ref independently validates successful outputs in CI.",
+      "files": [],
+      "expectations": [
+        "Allows only name, description, license, compatibility, metadata and allowed-tools in SKILL.md frontmatter.",
+        "Enforces 1-64 lowercase ASCII kebab-case names matching the directory, non-empty descriptions up to 1024 characters and compatibility up to 500 characters.",
+        "Requires metadata to map strings to strings and allowed-tools to use a non-empty string without coercing YAML lists, mappings or numeric values.",
+        "Rejects an invalid uploaded skill before package writes and preserves the target package plus uploaded bytes exactly.",
+        "Blocks validation, packaging and installation for existing noncompliant skills without grandfathering or automatic repair.",
+        "Uses a pinned official skills-ref only as a CI oracle; production creation and import depend on the shared internal validator."
+      ]
+    },
+    {
+      "id": 28,
+      "name": "optional-modern-workflow-and-bounded-default",
+      "prompt": "分别创建没有顶层 workflows 的 unified 单专家和专家团，并保留一个普通 runtime_extensions command；再检查声明了 Workflow 但缺 autonomy、Phase 或 acceptance 的现代 manifest，以及未修改的 legacy 无自主度包。",
+      "expected_output": "Modern packages may omit Workflow and receive bounded safe permissions, while every declared modern Workflow is complete and legacy compatibility remains explicit.",
+      "files": [],
+      "expectations": [
+        "Accepts omitted or empty workflows for unified expert and team manifests without creating an implicit Phase.",
+        "Derives no-workflow-bounded-default permissions with unknown capabilities ask, role ownership and system todowrite allow, without LEGACY_PERMISSION_BASELINE.",
+        "Keeps ordinary runtime_extensions commands available without a Workflow or autonomy prefix.",
+        "Rejects every unified Workflow missing autonomy, at least one Phase or non-empty per-Phase acceptance, and rejects mixing autonomy-enabled with legacy workflows.",
+        "Preserves unchanged legacy no-autonomy generation and validation with a HIGH RISK LEGACY_PERMISSION_BASELINE warning."
+      ]
+    },
+    {
+      "id": 29,
+      "name": "single-and-team-phase-topology",
+      "prompt": "验证现代 Workflow Phase 拓扑：单专家包含多个 primary/兼容 serial Phase 但尝试 parallel；专家团分别测试 primary、serial、parallel 的空 agents、团长混入、重复角色和角色依赖。",
+      "expected_output": "The shared normalizer enforces single-expert and team Phase semantics without treating dispatch, return or rework messages as new phases.",
+      "files": [],
+      "expectations": [
+        "Allows multiple single-expert phases and compatible single-role serial phases while rejecting single-expert parallel or primary self-cloning.",
+        "Requires team primary phases to have empty agents and assigns them only to the leader.",
+        "Requires team serial and parallel phases to list at least one subagent and forbids the leader.",
+        "Rejects duplicate role ids and explains that runtime instances are created through fresh task calls.",
+        "Requires role dependencies to use separate ordered phases instead of one parallel phase."
+      ]
+    },
+    {
+      "id": 30,
+      "name": "multi-role-multi-instance-parallel",
+      "prompt": "创建一个 parallel Phase，agents 只声明 researcher 和 reviewer 两个必参与角色。运行时输入包含两个研究分片和三个评审分片；检查生成的团长、团员、README 和 command 合同，不要在 expert.json 固定实例数。",
+      "expected_output": "One parallel Phase supports multiple required roles and a dynamic 1..N instance count per role with isolated task ids, Todos, acceptance and two-level fan-in.",
+      "files": [],
+      "expectations": [
+        "Lists each required role exactly once in agents and requires at least one runtime instance per listed role.",
+        "Lets the leader independently choose the instance count and scope for each role from current input and host capacity.",
+        "Creates each instance through a fresh task call with its own task_id, Todo, output and acceptance state while keeping same-role autonomy and permissions identical.",
+        "Completes role-group fan-in before Phase fan-in and reworks only the failed instance through its existing task_id.",
+        "Falls back to one instance or a serial Phase when branches are dependent or share a mutable write target, without relying on experimental background subagents."
+      ]
+    },
+    {
+      "id": 31,
+      "name": "derived-maximum-autonomy-without-cross-role-escalation",
+      "prompt": "给一个多角色 Workflow 配置 workflow 默认 bounded、Phase guided，以及某角色 fixed override。计算并展示 Phase 与 Workflow 最高生效自主度，同时验证角色权限没有被全局最高值反向抬升。",
+      "expected_output": "Generated projections distinguish declared defaults, per-role effective autonomy and derived maximum risk summaries without adding manifest fields or widening another role's permissions.",
+      "files": [],
+      "expectations": [
+        "Computes each Phase maximum from participating roles after Agent overrides and each Workflow maximum from its Phase maxima.",
+        "Counts a role once for the maximum regardless of how many runtime instances it creates.",
+        "Shows declared default and maximum effective autonomy separately in README, Agent and workflow command projections.",
+        "Uses the maximum for the generated command risk prefix but does not write autonomy fields to expert.json or opencode.json.",
+        "Derives each role permission only from that role's own assignments and never propagates another role's higher autonomy."
+      ]
     }
   ]
 }

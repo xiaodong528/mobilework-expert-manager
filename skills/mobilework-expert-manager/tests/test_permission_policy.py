@@ -40,10 +40,17 @@ def role(**updates: object) -> dict:
 
 
 class PermissionPolicyTests(unittest.TestCase):
-    def build(self, item: dict, workflows: list[dict]) -> tuple[dict, dict]:
+    def build(
+        self,
+        item: dict,
+        workflows: list[dict],
+        *,
+        manifest_mode: str = "unified",
+    ) -> tuple[dict, dict]:
         return permission_policy.build_role_permission(
             item,
             workflows=workflows,
+            manifest_mode=manifest_mode,
             mcp_names=["records"],
             custom_tool_paths=["validate.ts"],
             subagent_ids=["worker"],
@@ -74,6 +81,72 @@ class PermissionPolicyTests(unittest.TestCase):
                 self.assertNotEqual(permission["bash"]["*"], "allow")
                 self.assertEqual(permission["external_directory"]["*"], "deny" if level == "scripted" else "ask")
                 self.assertEqual(audit["effective"], level)
+                self.assertEqual(permission["todowrite"], "allow")
+                self.assertGreater(
+                    list(permission).index("todowrite"),
+                    list(permission).index("*"),
+                )
+
+    def test_todo_is_system_managed_for_primary_members_and_legacy_roles(self) -> None:
+        self.assertNotIn("todowrite", permission_policy.BUILTIN_PERMISSION_KEYS)
+        self.assertEqual(
+            permission_policy.SYSTEM_MANAGED_PERMISSION_KEYS,
+            frozenset({"todowrite", "todoread"}),
+        )
+        for is_primary in (True, False):
+            for workflows in ([workflow("bounded")], []):
+                with self.subTest(is_primary=is_primary, legacy=not workflows):
+                    permission, _audit = permission_policy.build_role_permission(
+                        role(),
+                        workflows=workflows,
+                        manifest_mode=(
+                            "legacy"
+                            if not workflows
+                            else "unified"
+                        ),
+                        mcp_names=[],
+                        custom_tool_paths=[],
+                        subagent_ids=["worker"],
+                        is_primary=is_primary,
+                    )
+                    self.assertEqual(permission["todowrite"], "allow")
+                    self.assertNotIn("todoread", permission)
+
+    def test_todo_manifest_declarations_are_rejected_consistently(self) -> None:
+        for key in ("todowrite", "todoread"):
+            for action in ("allow", "ask", "deny"):
+                with self.subTest(section="permission", key=key, action=action):
+                    with self.assertRaisesRegex(
+                        permission_policy.PermissionPolicyError,
+                        "Todo 由系统托管，请删除该声明",
+                    ):
+                        self.build(
+                            role(permission={key: action}),
+                            [workflow("bounded")],
+                        )
+            for enabled in (True, False):
+                with self.subTest(section="tools", key=key, enabled=enabled):
+                    with self.assertRaisesRegex(
+                        permission_policy.PermissionPolicyError,
+                        "Todo 由系统托管，请删除该声明",
+                    ):
+                        permission_policy.tools_to_permission(
+                            {key: enabled},
+                            "agent.tools",
+                        )
+
+    def test_todo_custom_tool_names_are_reserved(self) -> None:
+        for path in ("todowrite.ts", "nested/todoread.js"):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(
+                    permission_policy.PermissionPolicyError,
+                    "Todo 由系统托管，请删除该声明",
+                ):
+                    permission_policy.validate_custom_tool_ownership(
+                        [path],
+                        [],
+                        "agent.custom_tools",
+                    )
 
     def test_common_inspection_and_secret_rules(self) -> None:
         permission, _audit = self.build(role(), [workflow("scripted")])
@@ -98,6 +171,17 @@ class PermissionPolicyTests(unittest.TestCase):
         self.assertEqual(permission["*"], "ask")
         self.assertEqual(permission["edit"], "allow")
         self.assertEqual(audit["warning"], "unused-role-bounded-fallback")
+
+    def test_unified_manifest_without_workflow_uses_bounded_default(self) -> None:
+        permission, audit = self.build(role(), [])
+        self.assertEqual(permission["*"], "ask")
+        self.assertEqual(permission["edit"], "allow")
+        self.assertEqual(permission["bash"]["*"], "ask")
+        self.assertEqual(permission["todowrite"], "allow")
+        self.assertEqual(audit["source"], "no-workflow-bounded-default")
+        self.assertEqual(audit["effective"], "bounded")
+        self.assertEqual(audit["levels"], ["bounded"])
+        self.assertEqual(audit["warning"], "")
 
     def test_exact_executor_allowlists(self) -> None:
         execution = {
@@ -187,9 +271,14 @@ class PermissionPolicyTests(unittest.TestCase):
                     )
 
     def test_legacy_behavior_is_preserved(self) -> None:
-        permission, audit = self.build(role(), [])
+        permission, audit = self.build(
+            role(),
+            [],
+            manifest_mode="legacy",
+        )
         self.assertEqual(permission["edit"], "allow")
         self.assertEqual(permission["bash"]["*"], "allow")
+        self.assertEqual(permission["todowrite"], "allow")
         self.assertEqual(audit["warning"], "legacy-permission-baseline")
 
 

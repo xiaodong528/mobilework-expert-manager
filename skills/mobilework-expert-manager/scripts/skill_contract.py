@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,291 @@ import package_contract
 SKILL_ORIGINS = frozenset({"uploaded", "managed", "legacy-migrated"})
 EDIT_POLICIES = frozenset({"preserved", "managed"})
 SKILL_ENTRY_KEYS = frozenset({"name", "origin", "edit_policy"})
+SKILL_FRONTMATTER_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "license",
+        "compatibility",
+        "metadata",
+        "allowed-tools",
+    }
+)
+MAX_SKILL_NAME_LENGTH = 64
+MAX_SKILL_DESCRIPTION_LENGTH = 1024
+MAX_SKILL_COMPATIBILITY_LENGTH = 500
+RECOMMENDED_SKILL_MARKDOWN_LINES = 500
+
+
+@dataclass(frozen=True)
+class SkillMarkdownIssue:
+    code: str
+    severity: str
+    field: str
+    message: str
+    root_cause: str
+    remediation: str
+    evidence: str
+
+
+def _markdown_issue(
+    code: str,
+    field: str,
+    message: str,
+    *,
+    root_cause: str = "invalid-skill-frontmatter",
+    remediation: str = "Correct SKILL.md frontmatter and retry.",
+    evidence: str = "",
+    severity: str = "error",
+) -> SkillMarkdownIssue:
+    return SkillMarkdownIssue(
+        code=code,
+        severity=severity,
+        field=field,
+        message=message,
+        root_cause=root_cause,
+        remediation=remediation,
+        evidence=evidence,
+    )
+
+
+def validate_skill_frontmatter(
+    frontmatter: Any,
+    *,
+    directory_name: str,
+    expected_compatibility: str | None = None,
+) -> list[SkillMarkdownIssue]:
+    """Validate the normative Agent Skills frontmatter contract without coercion."""
+
+    if not isinstance(frontmatter, dict):
+        return [
+            _markdown_issue(
+                "SKILL_FRONTMATTER_INVALID",
+                "frontmatter",
+                "frontmatter must be a mapping",
+                evidence=type(frontmatter).__name__,
+            )
+        ]
+
+    issues: list[SkillMarkdownIssue] = []
+    unexpected = sorted(
+        (key for key in frontmatter if key not in SKILL_FRONTMATTER_FIELDS),
+        key=lambda key: str(key),
+    )
+    if unexpected:
+        rendered = ", ".join(str(key) for key in unexpected)
+        issues.append(
+            _markdown_issue(
+                "SKILL_FRONTMATTER_FIELD_UNSUPPORTED",
+                "frontmatter",
+                f"frontmatter contains unsupported fields: {rendered}",
+                root_cause="unsupported-skill-frontmatter",
+                remediation=(
+                    "Remove unsupported top-level fields or move custom string values "
+                    "under metadata."
+                ),
+                evidence=rendered,
+            )
+        )
+
+    name = frontmatter.get("name")
+    if (
+        not isinstance(name, str)
+        or not name
+        or len(name) > MAX_SKILL_NAME_LENGTH
+        or not package_contract.NAME_RE.fullmatch(name)
+    ):
+        issues.append(
+            _markdown_issue(
+                "SKILL_NAME_INVALID",
+                "frontmatter.name",
+                (
+                    "frontmatter name must contain 1-64 lowercase ASCII letters, "
+                    "numbers, or single hyphens"
+                ),
+                root_cause="invalid-skill-name",
+                remediation=(
+                    "Use a 1-64 character lowercase kebab-case name without leading, "
+                    "trailing, or consecutive hyphens."
+                ),
+                evidence=type(name).__name__ if not isinstance(name, str) else str(len(name)),
+            )
+        )
+    if isinstance(name, str) and name != directory_name:
+        issues.append(
+            _markdown_issue(
+                "SKILL_NAME_MISMATCH",
+                "frontmatter.name",
+                f"frontmatter name must equal skill directory {directory_name}",
+                root_cause="skill-name-mismatch",
+                remediation="Rename the skill directory or correct frontmatter name.",
+                evidence=directory_name,
+            )
+        )
+
+    description = frontmatter.get("description")
+    if not isinstance(description, str) or not description.strip():
+        issues.append(
+            _markdown_issue(
+                "SKILL_DESCRIPTION_INVALID",
+                "frontmatter.description",
+                "frontmatter description must be non-empty",
+                root_cause="invalid-skill-description",
+                remediation=(
+                    "Describe what the skill does and when an agent should use it."
+                ),
+                evidence=type(description).__name__,
+            )
+        )
+    elif len(description) > MAX_SKILL_DESCRIPTION_LENGTH:
+        issues.append(
+            _markdown_issue(
+                "SKILL_DESCRIPTION_INVALID",
+                "frontmatter.description",
+                "frontmatter description must be 1024 characters or fewer",
+                root_cause="invalid-skill-description",
+                remediation="Shorten the description to 1024 characters or fewer.",
+                evidence=str(len(description)),
+            )
+        )
+
+    license_value = frontmatter.get("license")
+    if "license" in frontmatter and (
+        not isinstance(license_value, str) or not license_value.strip()
+    ):
+        issues.append(
+            _markdown_issue(
+                "SKILL_LICENSE_INVALID",
+                "frontmatter.license",
+                "optional frontmatter license must be a non-empty string",
+                remediation="Use a short license name or bundled license-file reference.",
+                evidence=type(license_value).__name__,
+            )
+        )
+
+    compatibility = frontmatter.get("compatibility")
+    if "compatibility" in frontmatter:
+        if (
+            not isinstance(compatibility, str)
+            or not compatibility.strip()
+            or len(compatibility) > MAX_SKILL_COMPATIBILITY_LENGTH
+        ):
+            issues.append(
+                _markdown_issue(
+                    "SKILL_COMPATIBILITY_INVALID",
+                    "frontmatter.compatibility",
+                    (
+                        "optional frontmatter compatibility must be a non-empty "
+                        "string of 500 characters or fewer"
+                    ),
+                    remediation=(
+                        "Remove compatibility when unnecessary or describe environment "
+                        "requirements in 1-500 characters."
+                    ),
+                    evidence=(
+                        type(compatibility).__name__
+                        if not isinstance(compatibility, str)
+                        else str(len(compatibility))
+                    ),
+                )
+            )
+        elif (
+            expected_compatibility is not None
+            and compatibility != expected_compatibility
+        ):
+            issues.append(
+                _markdown_issue(
+                    "SKILL_COMPATIBILITY_INVALID",
+                    "frontmatter.compatibility",
+                    (
+                        "optional frontmatter compatibility must equal "
+                        f"{expected_compatibility}"
+                    ),
+                    remediation=(
+                        f"Set compatibility to {expected_compatibility} for this "
+                        "MobileWork-managed legacy skill."
+                    ),
+                    evidence="compatibility-mismatch",
+                )
+            )
+
+    metadata = frontmatter.get("metadata")
+    if "metadata" in frontmatter:
+        if not isinstance(metadata, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in metadata.items()
+        ):
+            issues.append(
+                _markdown_issue(
+                    "SKILL_METADATA_INVALID",
+                    "frontmatter.metadata",
+                    "optional frontmatter metadata must map strings to strings",
+                    remediation="Quote every metadata key and value as a YAML string.",
+                    evidence=type(metadata).__name__,
+                )
+            )
+
+    allowed_tools = frontmatter.get("allowed-tools")
+    if "allowed-tools" in frontmatter and (
+        not isinstance(allowed_tools, str) or not allowed_tools.strip()
+    ):
+        issues.append(
+            _markdown_issue(
+                "SKILL_ALLOWED_TOOLS_INVALID",
+                "frontmatter.allowed-tools",
+                "optional frontmatter allowed-tools must be a non-empty string",
+                remediation=(
+                    "Use the experimental space-separated string form, or remove "
+                    "allowed-tools."
+                ),
+                evidence=type(allowed_tools).__name__,
+            )
+        )
+    return issues
+
+
+def skill_markdown_recommendations(line_count: int) -> list[SkillMarkdownIssue]:
+    if line_count <= RECOMMENDED_SKILL_MARKDOWN_LINES:
+        return []
+    return [
+        _markdown_issue(
+            "SKILL_MARKDOWN_LENGTH_RECOMMENDED",
+            "SKILL.md",
+            (
+                f"SKILL.md has {line_count} lines; Agent Skills recommends "
+                f"{RECOMMENDED_SKILL_MARKDOWN_LINES} lines or fewer"
+            ),
+            root_cause="skill-progressive-disclosure",
+            remediation=(
+                "Move detailed material into focused references and keep SKILL.md "
+                "as the routing and workflow entrypoint."
+            ),
+            evidence=str(line_count),
+            severity="warning",
+        )
+    ]
+
+
+def add_skill_markdown_issues(
+    result: Any,
+    issues: list[SkillMarkdownIssue],
+    *,
+    path: str,
+) -> None:
+    """Project shared issues into the manager's structured finding result."""
+
+    for issue in issues:
+        result.add(
+            f"{path}: {issue.message}",
+            severity=issue.severity,
+            code=issue.code,
+            phase="skill",
+            path=path,
+            location=issue.field,
+            root_cause=issue.root_cause,
+            remediation=issue.remediation,
+            evidence=issue.evidence,
+        )
 
 
 def schema_mode(manifest: dict[str, Any]) -> str:

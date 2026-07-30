@@ -37,6 +37,23 @@ class WorkflowAutonomyTests(unittest.TestCase):
     def team_manifest(self) -> dict[str, object]:
         return json.loads(TEAM_EXAMPLE.read_text(encoding="utf-8"))
 
+    def make_unified(self, data: dict[str, object]) -> None:
+        data.pop("common_skills", None)
+        data["skills"] = []
+        roles: list[object]
+        if data["type"] == "expert":
+            roles = [data["agent"]]
+        else:
+            subagents = data["subagents"]
+            assert isinstance(subagents, list)
+            roles = [data["primary_agent"], *subagents]
+        for role in roles:
+            assert isinstance(role, dict)
+            role["skills"] = []
+            permission = role.get("permission")
+            if isinstance(permission, dict):
+                permission.pop("skill", None)
+
     def add_single_contract(self, data: dict[str, object]) -> None:
         agent = data["agent"]
         assert isinstance(agent, dict)
@@ -258,6 +275,17 @@ class WorkflowAutonomyTests(unittest.TestCase):
         actual = [phase["effective_autonomy"] for phase in normalized[0]["phases"]]
         self.assertEqual(actual, list(workflow_autonomy.AUTONOMY_LEVELS))
         self.assertEqual(
+            [
+                phase["max_effective_autonomy"]
+                for phase in normalized[0]["phases"]
+            ],
+            ["scripted", "fixed", "guided", "guided", "adaptive"],
+        )
+        self.assertEqual(
+            normalized[0]["max_effective_autonomy"],
+            "adaptive",
+        )
+        self.assertEqual(
             [workflow_autonomy.autonomy_prefix(level) for level in workflow_autonomy.AUTONOMY_LEVELS],
             [
                 "【自主度：极低】",
@@ -281,18 +309,22 @@ class WorkflowAutonomyTests(unittest.TestCase):
         command = (package / ".opencode/commands/review-contract.md").read_text(encoding="utf-8")
         for expected in (
             "agent: contract-reviewer",
-            "【自主度：中】 按照合同审查 workflow 完成校验和风险判断",
+            "【最高生效自主度：高】 按照合同审查 workflow 完成校验和风险判断",
             "用户要求：$ARGUMENTS",
-            "Workflow 默认自主度：中：可在明确边界内选择方法 (`bounded`)",
-            "**【自主度：极低】 确定性校验**",
-            "Phase 生效自主度：极低：全程照脚本执行，不能自行换方法 (`scripted`)",
+            "Workflow 声明默认自主度：中：可在明确边界内选择方法 (`bounded`)",
+            "Workflow 最高生效自主度：高：可根据目标灵活安排，但关键决定需确认 (`guided`)",
+            "**【最高生效自主度：低】 确定性校验**",
+            "Phase 默认生效自主度：极低：全程照脚本执行，不能自行换方法 (`scripted`)",
+            "Phase 最高生效自主度：低：按固定步骤执行，只能处理预设分支 (`fixed`)",
             "Agent `contract-reviewer`：【自主度：低】",
             "生效自主度：低：按固定步骤执行，只能处理预设分支 (`fixed`)",
+            "仅在用户明确批准后才可执行 break-glass 例外",
+            "记录偏离原因",
             "自主度来源：Agent override",
             "execution 来源：Phase",
             "custom-tool",
             "validate.ts",
-            "**【自主度：高】 风险判断**",
+            "**【最高生效自主度：高】 风险判断**",
             "Agent `contract-reviewer`：【自主度：高】",
             "自主度来源：Phase",
             "高：可根据目标灵活安排，但关键决定需确认 (`guided`)",
@@ -337,10 +369,26 @@ class WorkflowAutonomyTests(unittest.TestCase):
         command = (package / ".opencode/commands/review-solution.md").read_text(encoding="utf-8")
         self.assertIn("Agent override `architect`", primary)
         self.assertIn("prompt 必须包含该 Agent 的生效自主度", primary)
+        self.assertIn("每位团员在自己的子任务会话中维护 Todo", primary)
+        for expected in (
+            "每个角色至少创建一个实例",
+            "多个角色可以各自拥有不同实例数",
+            "先验收同一角色的全部实例",
+            "不得在 manifest 中写死数量或分片",
+            "每个角色创建了多少实例及对应 `task_id`",
+        ):
+            self.assertIn(expected, primary)
+        self.assertIn("创建自己的会话 Todo", product)
+        self.assertIn("同一角色可能在一个 parallel Phase 中有多个独立实例", product)
+        self.assertIn("所有实例共享本角色的自主度、权限和", product)
         self.assertIn("高：可根据目标灵活安排，但关键决定需确认 (`guided`)", product)
         self.assertIn("低：按固定步骤执行，只能处理预设分支 (`fixed`)", architect)
         self.assertIn("高：可根据目标灵活安排，但关键决定需确认 (`guided`)", qa)
-        self.assertIn("**【自主度：高】 并行评审**", command)
+        self.assertIn("**【最高生效自主度：高】 并行评审**", command)
+        self.assertIn("Workflow 最高生效自主度", command)
+        self.assertIn("每个角色至少创建一个实例", command)
+        self.assertIn("分别决定每个角色的实例数与任务范围", command)
+        self.assertIn("两级 fan-in", command)
         for agent_id, prefix in (
             ("product-strategist", "【自主度：高】"),
             ("architect", "【自主度：低】"),
@@ -362,6 +410,165 @@ class WorkflowAutonomyTests(unittest.TestCase):
         self.assertIn("自主度来源：Phase", qa_section)
         self.assertIn("execution 来源：Agent override", qa_section)
         self.assertNotIn("Agent override `architect`", command)
+        config = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
+        for role_id in (
+            "delivery-director",
+            "product-strategist",
+            "architect",
+            "qa-reviewer",
+        ):
+            with self.subTest(role_id=role_id):
+                self.assertEqual(
+                    config["agent"][role_id]["permission"]["todowrite"],
+                    "allow",
+                )
+
+    def test_unified_workflow_is_optional_but_complete_when_declared(self) -> None:
+        data = self.single_manifest()
+        self.make_unified(data)
+        data.pop("workflows", None)
+        self.assertEqual(self.normalize(data), [])
+        data["workflows"] = [
+            {
+                "name": "不完整现代流程",
+                "phases": [
+                    {
+                        "name": "未声明自主度",
+                        "mode": "primary",
+                        "agents": [],
+                        "acceptance": ["输出可验收"],
+                    }
+                ],
+            }
+        ]
+        with self.assertRaisesRegex(
+            workflow_autonomy.WorkflowContractError,
+            r"workflows\[0\]\.autonomy: is required when a unified workflow is declared",
+        ):
+            self.normalize(data)
+
+    def test_autonomy_and_legacy_workflows_cannot_be_mixed(self) -> None:
+        data = self.single_manifest()
+        self.add_single_contract(data)
+        workflows = data["workflows"]
+        assert isinstance(workflows, list)
+        workflows.append(
+            {
+                "name": "旧流程",
+                "phases": [],
+            }
+        )
+        with self.assertRaisesRegex(
+            workflow_autonomy.WorkflowContractError,
+            "autonomy-enabled and legacy workflows cannot be mixed",
+        ):
+            self.normalize(data)
+
+    def test_single_expert_allows_multiple_phases_but_not_parallel_clones(
+        self,
+    ) -> None:
+        data = self.single_manifest()
+        self.add_single_contract(data)
+        normalized = self.normalize(data)
+        self.assertEqual(len(normalized[0]["phases"]), 2)
+        self.assertEqual(
+            normalized[0]["phases"][0]["participants"],
+            ["contract-reviewer"],
+        )
+        phase = data["workflows"][0]["phases"][0]
+        phase["mode"] = "parallel"
+        with self.assertRaisesRegex(
+            workflow_autonomy.WorkflowContractError,
+            "single experts cannot use parallel",
+        ):
+            self.normalize(data)
+
+    def test_team_phase_topology_and_unique_required_roles(self) -> None:
+        data = self.team_manifest()
+        self.add_team_contract(data)
+        normalized = self.normalize(data)
+        phase = normalized[0]["phases"][0]
+        self.assertEqual(
+            phase["participants"],
+            ["product-strategist", "architect", "qa-reviewer"],
+        )
+        self.assertEqual(phase["max_effective_autonomy"], "guided")
+        self.assertEqual(normalized[0]["max_effective_autonomy"], "guided")
+
+        cases = (
+            (
+                "parallel empty",
+                lambda raw: raw.__setitem__("agents", []),
+                "requires at least one subagent role",
+            ),
+            (
+                "parallel includes primary",
+                lambda raw: raw["agents"].append("delivery-director"),
+                "must not include primary Agent",
+            ),
+            (
+                "parallel duplicate role",
+                lambda raw: raw["agents"].append("architect"),
+                "duplicates architect",
+            ),
+            (
+                "primary with member",
+                lambda raw: (
+                    raw.__setitem__("mode", "primary"),
+                    raw.__setitem__("agents", ["architect"]),
+                ),
+                "team primary phase must be empty",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                candidate = self.team_manifest()
+                self.add_team_contract(candidate)
+                raw_phase = candidate["workflows"][0]["phases"][0]
+                mutate(raw_phase)
+                with self.assertRaisesRegex(
+                    workflow_autonomy.WorkflowContractError,
+                    expected,
+                ):
+                    self.normalize(candidate)
+
+    def test_team_primary_phase_and_multi_role_parallel_projection(self) -> None:
+        data = self.team_manifest()
+        self.add_team_contract(data)
+        workflows = data["workflows"]
+        assert isinstance(workflows, list)
+        workflow = workflows[0]
+        assert isinstance(workflow, dict)
+        phases = workflow["phases"]
+        assert isinstance(phases, list)
+        phases.append(
+            {
+                "name": "团长最终集成",
+                "mode": "primary",
+                "agents": [],
+                "autonomy": "fixed",
+                "execution": {
+                    "executors": [
+                        {"kind": "agent", "ref": "delivery-director"}
+                    ],
+                    "standards": ["只集成已验收的角色组结果"],
+                },
+                "acceptance": ["所有必参与角色的全部实例均已通过验收"],
+            }
+        )
+        normalized = self.normalize(data)
+        self.assertEqual(
+            normalized[0]["phases"][1]["participants"],
+            ["delivery-director"],
+        )
+        rendered = workflow_autonomy.render_workflow(normalized[0])
+        for expected in (
+            "均为必参与角色；每个角色至少创建一个实例",
+            "分别决定每个角色的实例数与任务范围",
+            "每个实例使用新的 `task` 调用和独立 `task_id`",
+            "先验收每个角色组的全部实例",
+        ):
+            self.assertIn(expected, rendered)
 
     def test_invalid_contracts_are_rejected(self) -> None:
         cases: list[tuple[str, callable, str]] = []
@@ -507,6 +714,60 @@ class WorkflowAutonomyTests(unittest.TestCase):
                 ):
                     self.normalize(data)
 
+    def test_server_command_registry_is_shared_by_both_command_sources(self) -> None:
+        self.assertEqual(
+            workflow_autonomy.OPENCODE_SERVER_COMMAND_REGISTRY_VERSION,
+            "v1.16.2",
+        )
+        self.assertEqual(
+            workflow_autonomy.OPENCODE_SERVER_BUILTIN_COMMANDS,
+            frozenset({"init", "review"}),
+        )
+        workflow_autonomy.validate_command_name(
+            "help",
+            "workflows[0].command.name",
+        )
+        workflow_help = self.single_manifest()
+        self.add_single_contract(workflow_help)
+        workflow_help["workflows"][0]["command"]["name"] = "help"
+        self.assertEqual(
+            self.normalize(workflow_help)[0]["command"]["name"],
+            "help",
+        )
+        runtime_help = self.single_manifest()
+        runtime = runtime_help["runtime_extensions"]
+        assert isinstance(runtime, dict)
+        runtime["commands"] = [{"name": "help", "template": "普通帮助命令"}]
+        _package, result = self.generate("builtin-help", runtime_help)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ("init", "review"):
+            with self.subTest(source="workflow", name=name):
+                data = self.single_manifest()
+                self.add_single_contract(data)
+                data["workflows"][0]["command"]["name"] = name
+                with self.assertRaisesRegex(
+                    workflow_autonomy.WorkflowContractError,
+                    rf"workflows\[0\]\.command\.name: conflicts with OpenCode built-in command {name}",
+                ):
+                    self.normalize(data)
+
+            with self.subTest(source="runtime", name=name):
+                data = self.single_manifest()
+                runtime = data["runtime_extensions"]
+                assert isinstance(runtime, dict)
+                runtime["commands"] = [
+                    {
+                        "name": name,
+                        "template": "普通命令",
+                    }
+                ]
+                _package, result = self.generate(f"builtin-{name}", data)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"runtime_extensions.commands[0].name: conflicts with OpenCode built-in command {name}",
+                    result.stderr,
+                )
+
     def test_mcp_executor_requires_agent_ownership(self) -> None:
         data = self.single_manifest()
         self.add_single_contract(data)
@@ -601,11 +862,11 @@ class WorkflowAutonomyTests(unittest.TestCase):
         targets = {
             "command description": (
                 ".opencode/commands/review-contract.md",
-                "【自主度：中】 按照合同审查 workflow 完成校验和风险判断",
+                "【最高生效自主度：高】 按照合同审查 workflow 完成校验和风险判断",
             ),
             "command phase": (
                 ".opencode/commands/review-contract.md",
-                "【自主度：极低】 确定性校验",
+                "【最高生效自主度：低】 确定性校验",
             ),
             "command Agent": (
                 ".opencode/commands/review-contract.md",

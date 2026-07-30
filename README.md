@@ -11,7 +11,7 @@
 | 项目 | 值 |
 |---|---|
 | 插件名 | `mobilework-expert-manager` |
-| 当前版本 | `0.2.0` |
+| 当前版本 | `0.3.0` |
 | Skill | `mobilework-expert-manager` |
 | Skill 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
 
@@ -203,7 +203,7 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 ## 本地验证
 
 ```bash
-python3 /path/to/skill-creator/scripts/quick_validate.py \
+python3 /path/to/skill-manager/scripts/quick_validate.py \
   skills/mobilework-expert-manager
 claude plugin validate . --strict
 python3 -m unittest discover \
@@ -211,8 +211,8 @@ python3 -m unittest discover \
   -p 'test_*.py'
 ```
 
-CI 使用 Node.js 22、`@anthropic-ai/claude-code@2.1.218`、Python 3.11 和
-`PyYAML==6.0.3` 执行相同校验。发布新能力或修复时必须同步升级
+CI 使用 Node.js 22、`@anthropic-ai/claude-code@2.1.218`、Python 3.11、
+`PyYAML==6.0.3` 和固定提交的官方 `skills-ref` 执行相同校验。发布新能力或修复时必须同步升级
 `.claude-plugin/plugin.json` 的 SemVer。
 
 ## 详细规范

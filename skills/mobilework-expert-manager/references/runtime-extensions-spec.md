@@ -182,7 +182,10 @@ command 是面向用户的 workflow 快捷入口，不是 workflow 本体的第�
 - 图片、PDF、音频或其他多模态输入由用户在同一次调用中附加，属于宿主消息层，不属于
   `$ARGUMENTS`。模板只要求处理当前可访问附件；附件不可访问时明确要求重新附加，不新增附件
   占位符、二进制编码或推测出的本机路径。
-- `description` 写明对应 workflow 和使用时机；名称避免覆盖 `/init`、`/help` 等 OpenCode 内置命令。
+- `description` 写明对应 workflow 和使用时机。按项目锁定的 OpenCode command registry，
+  `/init` 与 `/review` 是 OpenCode 内置命令，两类 command 都必须拒绝同名；`/help` 不属于该
+  核心冲突集合。诊断格式统一为
+  `<field>.name: conflicts with OpenCode built-in command <name>`，不提供 override 字段。
 - 命令正文不得包含真实 secret 或开发机路径。
 
 调用示例：
@@ -200,6 +203,8 @@ command 是面向用户的 workflow 快捷入口，不是 workflow 本体的第�
 
 - `path` 只接受 `.js` 或 `.ts` 包内相对路径。
 - `content` 必须内嵌非空文本；生成器按声明重建真实文件。
+- Todo 由系统托管，禁止声明 `todowrite.ts`、`todoread.ts` 或任何 stem 为 `todowrite` /
+  `todoread` 的 custom tool。
 - 工具产生业务文件时，接收 workspace root 或等价参数，不把业务产物写进 `.opencode/`。
 - 权限通过角色 `permission` 声明，不把 custom tool 塞入 legacy `tools` 布尔映射。
 - `.opencode/tools/` 由 OpenCode 自动发现，`opencode.json` 不生成根级 `tools`。

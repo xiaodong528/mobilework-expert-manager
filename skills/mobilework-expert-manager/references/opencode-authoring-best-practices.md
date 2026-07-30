@@ -46,7 +46,10 @@
 - 输出格式、证据要求和质量门控；
 - 输入不足、工具不可用、越权、验证失败时的处理方式。
 
-团长只做编排、验收、返工和最终集成；团员只完成被委派的专业任务。继续使用 OpenCode `task`、`subagent_type` 和返回的 `task_id`，不生成其他宿主的团队 API。
+团长只做编排、验收、返工和最终集成；团员只完成被委派的专业任务。继续使用 OpenCode `task`、
+`subagent_type` 和返回的 `task_id`，不生成其他宿主的团队 API。parallel Phase 的 `agents[]`
+只列唯一、必参与角色；团长可为多个角色分别发起多个 fresh task 实例，每个实例保存独立
+`task_id`、Todo 和验收状态，实例数与分片按本次输入动态决定。
 
 ### Runtime options
 
@@ -61,7 +64,8 @@ generator 不推断参数。`reasoningEffort`、`textVerbosity` 等 provider-spe
 ### Permissions
 
 优先在 `permission` 中表达无法由 execution 与 ownership 推导的能力，`tools` 只保留为旧 manifest
-的布尔兼容输入。启用 workflow autonomy 后，默认 permission 按
+的布尔兼容输入。统一技能池 manifest 未声明 Workflow 时使用 `no-workflow-bounded-default`；
+启用 workflow autonomy 后，默认 permission 按
 `references/permission-policy-spec.md` 的双轴最小权限策略生成；显式提权必须有
 `permission_reason`。Agent Markdown 与 `opencode.json.agent.<id>` 必须完全一致。
 
@@ -69,20 +73,29 @@ generator 不推断参数。`reasoningEffort`、`textVerbosity` 等 provider-spe
 
 ### Frontmatter
 
-每个 `.opencode/skills/<name>/SKILL.md` 使用 OpenCode 可识别字段：
+每个 `.opencode/skills/<name>/SKILL.md` 先满足 Agent Skills 官方规范，再应用 MobileWork
+安全与便携规则。允许的顶层字段只有 `name`、`description`、`license`、`compatibility`、
+`metadata`、`allowed-tools`：
 
 ```yaml
 ---
 name: contract-clause-review
 description: 当合同审查专家需要定位高风险条款、引用证据并形成修改建议时使用。
 compatibility: opencode
+metadata:
+  author: mobilework
 ---
 ```
 
-- `name` 必须与 skill 目录名一致并使用 kebab-case。
+- `name` 必须与 skill 目录名一致，使用 1–64 字符的 ASCII kebab-case，不能包含连续连字符。
 - `description` 长度为 1–1024 个字符，写明能力和触发条件。
-- `compatibility` 可以按原技能声明保留；管理器不为上传技能补写字段。
+- `compatibility` 可以按原技能声明保留，但存在时必须是 1–500 字符的字符串；旧兼容生成器仍
+  固定输出 `opencode`。
+- `license` 存在时为非空字符串；`metadata` 只能映射字符串到字符串；实验性
+  `allowed-tools` 只能是空格分隔的非空字符串。
+- 未知 frontmatter 字段失败；自定义字符串属性放到 `metadata`。
 - 上传技能的 frontmatter 和正文默认逐字节保留，不增加 package、role 或类型 metadata。
+- 诊断和导入不做类型强制转换或 YAML 规范化；不合规内容在写入专家包前阻断。
 
 ### Progressive disclosure
 
@@ -102,13 +115,20 @@ compatibility: opencode
 
 ## Command 编写
 
-把 command 作为用户进入已确认 workflow 的稳定快捷入口。每个可由用户直接触发、会重复使用的
-workflow 默认推荐一个 command；多个 workflow 使用多个 Markdown 文件。单专家 command 默认
+把 command 作为用户进入已确认 workflow 的稳定快捷入口。顶层 Workflow 本身可选；没有稳定
+执行与验收合同的专家不创建 Workflow command，仍可使用独立 `runtime_extensions.commands[]`。
+每个可由用户直接触发、会重复使用的 workflow 默认推荐一个 command；多个 workflow 使用多个 Markdown 文件。单专家 command 默认
 路由到该专家，专家团默认路由到团长，避免绕过团队编排与最终验收。
 
 模板用 `$ARGUMENTS` 接收用户文字，并提醒 agent 同时处理本次调用中可访问的图片、PDF 或其他
 附件。附件是宿主消息层输入，不为它发明 command 占位符或本机路径。完整字段、`@path`、位置
 参数和文件投影规则见 `runtime-extensions-spec.md`。
+
+命名冲突按 MobileWork 固定的 OpenCode `v1.16.2` 服务端 command 注册表判断：`init` 和
+`review` 是默认 command，而用户配置会覆盖同名项，因此 workflow 与
+`runtime_extensions.commands` 均禁止声明这两个名称。`help` 是 TUI palette command，
+不属于服务端注册表，允许生成。OpenCode 版本升级时必须先读回新版本的服务端默认注册表并更新
+共享校验器与回归测试，不能凭文档示例扩大或缩小禁用清单。
 
 ## 运行资源选择
 
@@ -156,7 +176,10 @@ workflow 默认推荐一个 command；多个 workflow 使用多个 Markdown 文�
 - 每个 skill 的描述足以让 agent 决定是否加载，正文只包含重复可用的流程和知识。
 - package resources 被正确归属并在对应 skill 中导航。
 - 每个用户可直接触发的稳定 workflow 已评估 command；已声明 command 能接收动态文字和同次调用附件，并路由到正确入口 agent。
-- 每个 workflow 已评估五档自主度；phase 和 Agent override 只在边界确实不同时覆盖，继承结果已投影到相关 Agent、skill、README 和 command。
+- 已明确是否需要顶层 Workflow；不需要时保持省略并使用普通 Todo。需要时每个 Workflow 都有
+  autonomy、Phase 和 acceptance，Phase 与 Agent override 只在边界确实不同时覆盖。
+- parallel Phase 的角色均为必参与角色；每个角色可有多个动态实例，实例之间无共享写入冲突，
+  两级 fan-in 与返工 `task_id` 已写入团长合同。
 - 能使用 skill script、custom tool、MCP tool 或受控 programming tool 的稳定阶段已固定执行器，不允许 Agent 临时现写替代实现。
 - 随包资料、plugins/hooks、custom tools 与 workspace instructions 已按真实需求评估，并写入设计确认稿；不依赖 generator 或 validator 自动补建。
 - 对计划同时安装的包完成 Agent/MCP/LSP/command/plugin/tool 跨包冲突审计；plugin/tool 文件使用 slug 命名空间，并在同一临时 workspace 顺序安装读回 receipts 与配置。

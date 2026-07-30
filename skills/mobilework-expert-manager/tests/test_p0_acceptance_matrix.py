@@ -144,7 +144,7 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
                     {
                         "name": "fixed verification",
                         "mode": "serial",
-                        "agents": ["acceptance-lead", "acceptance-worker"],
+                        "agents": ["acceptance-worker"],
                         "autonomy": "fixed",
                         "input": "plan",
                         "expected_output": "verified plan",
@@ -159,6 +159,125 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
                 ],
             }
         ]
+        return data
+
+    def unified_without_workflow(self) -> dict:
+        data = json.loads(load_spec_text("expert-json"))
+        data["slug"] = "no-workflow-bounded-expert"
+        data["name"] = "no workflow bounded expert"
+        data["runtime_extensions"] = {}
+        data["package_resources"] = []
+        data["agent"]["id"] = "bounded-planner"
+        data["agent"]["name"] = data["name"]
+        data["agent"]["skills"] = []
+        data["agent"]["permission"] = {}
+        data["agent"].pop("permission_reason", None)
+        data.pop("workflows", None)
+        return data
+
+    def unified_single_multi_phase(self) -> dict:
+        data = self.unified_without_workflow()
+        data["slug"] = "single-multi-phase-expert"
+        data["name"] = "single multi phase expert"
+        data["agent"]["id"] = "multi-phase-primary"
+        data["agent"]["name"] = data["name"]
+        data["workflows"] = [
+            {
+                "name": "single expert delivery",
+                "autonomy": "adaptive",
+                "phases": [
+                    {
+                        "name": "analysis",
+                        "mode": "primary",
+                        "agents": [],
+                        "input": "user request",
+                        "expected_output": "bounded analysis",
+                        "acceptance": ["analysis covers the requested scope"],
+                    },
+                    {
+                        "name": "delivery",
+                        "mode": "primary",
+                        "agents": [],
+                        "input": "accepted analysis",
+                        "expected_output": "verified delivery",
+                        "acceptance": ["delivery evidence is read back"],
+                    },
+                ],
+            }
+        ]
+        return data
+
+    def unified_multi_role_parallel_team(self) -> dict:
+        data = self.unified_without_workflow()
+        source = data.pop("agent")
+        data.update(
+            {
+                "slug": "dynamic-multi-role-team",
+                "type": "team",
+                "name": "dynamic multi role team",
+            }
+        )
+        primary = copy.deepcopy(source)
+        primary.update(
+            {
+                "id": "dynamic-lead",
+                "name": "dynamic lead",
+                "mode": "primary",
+                "permission": {},
+            }
+        )
+        researcher = copy.deepcopy(source)
+        researcher.update(
+            {
+                "id": "researcher",
+                "name": "researcher",
+                "mode": "subagent",
+                "permission": {},
+            }
+        )
+        reviewer = copy.deepcopy(source)
+        reviewer.update(
+            {
+                "id": "reviewer",
+                "name": "reviewer",
+                "mode": "subagent",
+                "permission": {},
+            }
+        )
+        data["primary_agent"] = primary
+        data["subagents"] = [researcher, reviewer]
+        data["workflows"] = [
+            {
+                "name": "dynamic parallel review",
+                "autonomy": "adaptive",
+                "phases": [
+                    {
+                        "name": "multi role fan out",
+                        "mode": "parallel",
+                        "agents": ["researcher", "reviewer"],
+                        "input": "independent research and review units",
+                        "expected_output": "accepted results from every role instance",
+                        "acceptance": [
+                            "every declared role creates at least one isolated task instance",
+                            "each instance is accepted independently",
+                            "role-group fan-in and Phase fan-in both pass",
+                        ],
+                    }
+                ],
+            }
+        ]
+        return data
+
+    def legacy_without_workflow(self) -> dict:
+        data = copy.deepcopy(self.base)
+        data["slug"] = "legacy-maintenance-expert"
+        data["name"] = "legacy maintenance expert"
+        data["runtime_extensions"] = {}
+        data["package_resources"] = []
+        data["agent"]["id"] = "legacy-maintainer"
+        data["agent"]["name"] = data["name"]
+        data["agent"]["permission"].pop("skill", None)
+        data.pop("workflows", None)
         return data
 
     def run_cli(self, command: list[str], *, env: dict[str, str] | None = None) -> dict:
@@ -215,20 +334,45 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
         self.assertTrue((runtime / "skills").is_dir())
         self.assertTrue((runtime / f".expert-installs/{slug}.json").is_file())
 
-        if data["type"] == "expert":
-            level = data["workflows"][0]["autonomy"]
+        workflows = data.get("workflows") or []
+        if data["type"] == "expert" and workflows:
+            level = workflows[0]["autonomy"]
             permission = config["agent"][data["agent"]["id"]]["permission"]
             self.assertEqual(permission["*"], "deny" if level == "scripted" else "ask")
             self.assertEqual(permission["doom_loop"], "allow" if level == "adaptive" else "deny" if level == "scripted" else "ask")
             self.assertNotEqual(permission["bash"]["*"], "allow")
-            owned_tool = Path(data["agent"]["custom_tools"][0]).stem
-            self.assertEqual(permission[owned_tool], "allow")
+            custom_tools = data["agent"].get("custom_tools") or []
+            if custom_tools:
+                owned_tool = Path(custom_tools[0]).stem
+                self.assertEqual(permission[owned_tool], "allow")
+        elif data["type"] == "expert":
+            permission = config["agent"][data["agent"]["id"]]["permission"]
+            self.assertEqual(permission["todowrite"], "allow")
+            readme = (package / "README.md").read_text(encoding="utf-8")
+            if "skills" in data:
+                self.assertEqual(permission["*"], "ask")
+                self.assertEqual(permission["bash"]["*"], "ask")
+                self.assertIn("no-workflow-bounded-default", readme)
+            else:
+                self.assertIn("| legacy | legacy |", readme)
         else:
+            primary_id = data["primary_agent"]["id"]
+            member_ids = [role["id"] for role in data["subagents"]]
+            lead = config["agent"][primary_id]["permission"]
+            self.assertEqual(
+                lead["task"],
+                {"*": "deny", **{member_id: "allow" for member_id in member_ids}},
+            )
+            for member_id in member_ids:
+                self.assertEqual(
+                    config["agent"][member_id]["permission"]["task"],
+                    {"*": "deny"},
+                )
+        if data["slug"] == "mixed-autonomy-acceptance-team":
             lead = config["agent"]["acceptance-lead"]["permission"]
             worker = config["agent"]["acceptance-worker"]["permission"]
-            self.assertEqual(lead["doom_loop"], "ask")
-            self.assertEqual(lead["task"], {"*": "deny", "acceptance-worker": "allow"})
-            self.assertEqual(worker["task"], {"*": "deny"})
+            self.assertEqual(lead["doom_loop"], "allow")
+            self.assertEqual(worker["doom_loop"], "ask")
         return archive
 
     def test_six_trusted_packages_complete_clean_acceptance(self) -> None:
@@ -247,6 +391,59 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
         self.assertEqual(len(manifest["packages"]), 6)
         validated_bundle = bundle_contract.validate_bundle(bundle)
         self.assertTrue(validated_bundle["ok"], validated_bundle)
+
+    def test_four_workflow_contract_shapes_complete_clean_acceptance(self) -> None:
+        cases = (
+            ("unified-no-workflow", self.unified_without_workflow()),
+            ("single-multi-phase", self.unified_single_multi_phase()),
+            ("multi-role-multi-instance", self.unified_multi_role_parallel_team()),
+            ("legacy-maintenance", self.legacy_without_workflow()),
+        )
+        archives: list[Path] = []
+        for name, data in cases:
+            with self.subTest(case=name):
+                archive = self.accept(data)
+                archives.append(archive)
+                package = self.root / data["slug"] / "packages" / data["slug"]
+                generated_manifest = (package / "expert.json").read_text(
+                    encoding="utf-8"
+                )
+                runtime_config = (package / "opencode.json").read_text(
+                    encoding="utf-8"
+                )
+                self.assertNotIn("max_effective_autonomy", generated_manifest)
+                self.assertNotIn("max_effective_autonomy", runtime_config)
+                self.assertNotIn("instance_count", generated_manifest)
+                if name == "unified-no-workflow":
+                    with zipfile.ZipFile(archive) as packaged:
+                        self.assertIn(
+                            f"{data['slug']}/.opencode/skills/",
+                            packaged.namelist(),
+                        )
+        dynamic_package = (
+            self.root
+            / "dynamic-multi-role-team"
+            / "packages"
+            / "dynamic-multi-role-team"
+        )
+        primary_prompt = (
+            dynamic_package / ".opencode/agents/dynamic-lead.md"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            "每个角色至少创建一个实例",
+            "多个角色可以各自拥有不同实例数",
+            "先验收同一角色的全部实例",
+            "不得在 manifest 中写死数量或分片",
+        ):
+            self.assertIn(marker, primary_prompt)
+        bundle = self.root / "contract-shape-bundle"
+        manifest = bundle_contract.create_manifest(
+            bundle,
+            archives,
+            tests={"collected": 4, "passed": 4, "failed": 0, "skipped": 0},
+        )
+        self.assertEqual(len(manifest["packages"]), 4)
+        self.assertTrue(bundle_contract.validate_bundle(bundle)["ok"])
 
     def test_two_package_sequence_keeps_custom_tool_ownership_isolated(self) -> None:
         first = self.single("bounded")

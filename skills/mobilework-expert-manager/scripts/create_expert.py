@@ -507,7 +507,14 @@ def normalize_commands(raw: Any, *, agent_ids: set[str]) -> list[dict[str, Any]]
         unknown = sorted(set(item) - {"name", "template", "description", "agent", "subtask", "model"})
         if unknown:
             fail(f"runtime_extensions.commands[{index}] contains unsupported fields: {', '.join(unknown)}")
-        name = validate_slug(item.get("name"), f"runtime_extensions.commands[{index}].name")
+        command_name_field = f"runtime_extensions.commands[{index}].name"
+        try:
+            name = workflow_autonomy.validate_command_name(
+                item.get("name"),
+                command_name_field,
+            )
+        except workflow_autonomy.WorkflowContractError as exc:
+            fail(str(exc))
         if name in seen:
             fail(f"runtime_extensions.commands[{index}].name duplicates {name}")
         seen.add(name)
@@ -1062,6 +1069,7 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         role["permission"], role["permission_audit"] = build_role_permission(
             role,
             workflows=workflows,
+            manifest_mode=skill_mode,
             mcp_names=list(mcp.keys()),
             custom_tool_paths=[item["path"] for item in runtime_extensions["custom_tools"]],
             subagent_ids=[item["id"] for item in subagents],
@@ -1107,6 +1115,7 @@ def build_role_permission(
     role: dict[str, Any],
     *,
     workflows: list[dict[str, Any]],
+    manifest_mode: str,
     mcp_names: list[str],
     custom_tool_paths: list[str],
     subagent_ids: list[str],
@@ -1116,6 +1125,7 @@ def build_role_permission(
         return permission_policy.build_role_permission(
             role,
             workflows=workflows,
+            manifest_mode=manifest_mode,
             mcp_names=mcp_names,
             custom_tool_paths=custom_tool_paths,
             subagent_ids=subagent_ids,
@@ -1458,6 +1468,14 @@ def render_skill(
         "compatibility": "opencode",
         "metadata": metadata,
     }
+    issues = skill_contract.validate_skill_frontmatter(
+        frontmatter,
+        directory_name=skill_name,
+        expected_compatibility="opencode",
+    )
+    errors = [issue.message for issue in issues if issue.severity == "error"]
+    if errors:
+        fail(f"skill {skill_name} frontmatter is invalid: {'; '.join(errors)}")
     return renderers.render_frontmatter(frontmatter, content)
 
 

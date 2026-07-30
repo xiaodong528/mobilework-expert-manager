@@ -128,7 +128,9 @@ python scripts/scan_portable_artifacts.py \
 - 根目录和 `.opencode/` 只包含 allowlist 文件；
 - symlink、路径逃逸、未声明文件和内容漂移全部失败；
 - `package_resources[]` hash 与真实字节一致；
-- agent/skill frontmatter、permission、steps、description 与运行配置一致；
+- agent frontmatter、permission、steps、description 与运行配置一致；
+- 每个 skill frontmatter 通过 Agent Skills 官方字段、长度、类型和目录名规则，legacy 生成技能
+  额外要求 `compatibility: opencode`；
 - avatar、MCP、env、references、instructions、plugins 和 LSP 的声明与文件一致；
 - 所有文本和支持的二进制产物不含非便携路径或 secret-like 内容。
 

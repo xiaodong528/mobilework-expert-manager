@@ -65,6 +65,12 @@ def write_zip(package_dir: Path, zip_path: Path, slug: str) -> None:
         fail(str(exc))
 
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        skills_dir = package_dir / contract.PACKAGE_RUNTIME_DIR / contract.SKILLS_SUBDIR
+        if skills_dir.is_dir() and not any(skills_dir.iterdir()):
+            archive.write(
+                skills_dir,
+                Path(slug) / contract.PACKAGE_RUNTIME_DIR / contract.SKILLS_SUBDIR,
+            )
         for path in sorted(package_dir.rglob("*")):
             if not path.is_file() or should_skip(path, package_dir):
                 continue

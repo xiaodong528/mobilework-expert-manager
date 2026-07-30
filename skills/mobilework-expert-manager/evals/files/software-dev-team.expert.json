@@ -50,7 +50,7 @@
       "read": "allow",
       "edit": "allow",
       "bash": {
-        "*": "allow",
+        "*": "ask",
         "git status*": "allow",
         "git diff*": "allow"
       },
@@ -69,6 +69,7 @@
         "qa-reviewer": "allow"
       }
     },
+    "permission_reason": "允许只读 Git 状态检查，用于协调和核验各团员交付证据。",
     "display_name": "Delivery Director",
     "profession": "Delivery Director",
     "route_triggers": [
@@ -103,7 +104,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "allow",
+          "*": "ask",
           "git status*": "allow",
           "git diff*": "allow"
         },
@@ -115,6 +116,7 @@
           "software-dev-team-product-strategist-product-brief": "allow"
         }
       },
+      "permission_reason": "允许只读 Git 状态检查，用于引用当前项目边界和变更事实。",
       "display_name": "Product Strategist",
       "profession": "Product Strategist",
       "route_triggers": [
@@ -148,7 +150,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "allow",
+          "*": "ask",
           "git status*": "allow",
           "git diff*": "allow"
         },
@@ -160,6 +162,7 @@
           "software-dev-team-architect-architecture-review": "allow"
         }
       },
+      "permission_reason": "允许只读 Git 状态检查，用于核对架构建议对应的现有实现。",
       "display_name": "Architect",
       "profession": "Architect",
       "route_triggers": [
@@ -195,7 +198,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "allow",
+          "*": "ask",
           "git status*": "allow",
           "git diff*": "allow",
           "pnpm test*": "allow",
@@ -210,6 +213,7 @@
           "software-dev-team-engineer-test-runner": "allow"
         }
       },
+      "permission_reason": "允许只读 Git 检查和声明的测试命令，用于实现与验证已验收范围。",
       "display_name": "Engineer",
       "profession": "Engineer",
       "route_triggers": [
@@ -244,7 +248,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "allow",
+          "*": "ask",
           "git status*": "allow",
           "git diff*": "allow",
           "pnpm test*": "allow",
@@ -258,6 +262,7 @@
           "software-dev-team-qa-reviewer-test-plan": "allow"
         }
       },
+      "permission_reason": "允许只读 Git 检查和声明的测试命令，用于独立验收交付证据。",
       "display_name": "QA Reviewer",
       "profession": "QA Reviewer",
       "route_triggers": [
@@ -276,6 +281,7 @@
     {
       "name": "标准软件交付",
       "trigger": "用户需要把产品想法、需求或缺陷转成可验收的软件交付。",
+      "autonomy": "adaptive",
       "phases": [
         {
           "name": "范围和方案发现",

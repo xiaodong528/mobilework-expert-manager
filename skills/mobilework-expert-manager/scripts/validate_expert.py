@@ -107,6 +107,48 @@ NON_PORTABLE_TEXT_PATTERNS = [
 Result = ValidationResult
 
 
+def load_unique_yaml_mapping(raw_frontmatter: str) -> Any:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required")
+
+    class UniqueKeySafeLoader(yaml.SafeLoader):
+        pass
+
+    def construct_unique_mapping(
+        loader: Any,
+        node: Any,
+        deep: bool = False,
+    ) -> dict[Any, Any]:
+        loader.flatten_mapping(node)
+        mapping: dict[Any, Any] = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in mapping
+            except TypeError as exc:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found an unhashable mapping key",
+                    key_node.start_mark,
+                ) from exc
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    f"found duplicate key {key!r}",
+                    key_node.start_mark,
+                )
+            mapping[key] = loader.construct_object(value_node, deep=deep)
+        return mapping
+
+    UniqueKeySafeLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+        construct_unique_mapping,
+    )
+    return yaml.load(raw_frontmatter, Loader=UniqueKeySafeLoader)
+
+
 def iter_package_paths(package_dir: Path):
     """Yield package paths while treating only the root `.git` as source metadata."""
 
@@ -585,7 +627,12 @@ def check_package_resources_manifest(
     return declared
 
 
-def parse_frontmatter(path: Path, result: Result) -> dict[str, Any] | None:
+def parse_frontmatter(
+    path: Path,
+    result: Result,
+    *,
+    require_block_yaml: bool = False,
+) -> dict[str, Any] | None:
     try:
         content = path.read_text(encoding="utf-8")
     except Exception as exc:
@@ -595,8 +642,21 @@ def parse_frontmatter(path: Path, result: Result) -> dict[str, Any] | None:
     if not match:
         result.error(f"{path}: missing YAML frontmatter")
         return None
+    raw_frontmatter = match.group(1)
+    if require_block_yaml and raw_frontmatter.lstrip().startswith("{"):
+        result.error(
+            f"{path}: frontmatter must use block-style YAML, not a JSON flow mapping"
+        )
+        return None
+    if yaml is None and require_block_yaml:
+        result.error(f"{path}: cannot parse frontmatter: PyYAML is required")
+        return None
     try:
-        data = yaml.safe_load(match.group(1)) if yaml is not None else json.loads(match.group(1))
+        data = (
+            load_unique_yaml_mapping(raw_frontmatter)
+            if yaml is not None
+            else json.loads(raw_frontmatter)
+        )
     except Exception as exc:
         result.error(f"{path}: cannot parse frontmatter: {exc}")
         return None
@@ -1025,54 +1085,38 @@ def check_skill_markdown_shape(package_dir: Path, manifest: dict[str, Any], resu
         path = skills_dir / skill_name / "SKILL.md"
         if not path.exists():
             continue
-        frontmatter = parse_frontmatter(path, result)
+        frontmatter = parse_frontmatter(
+            path,
+            result,
+            require_block_yaml=True,
+        )
         body = read_markdown_body(path, result)
-        if not frontmatter:
+        if frontmatter is None:
             continue
-        if frontmatter.get("name") != skill_name:
-            result.error(f"{path}: frontmatter name must equal skill directory {skill_name}")
-        description = frontmatter.get("description")
-        if not isinstance(description, str) or not description.strip():
-            result.error(f"{path}: frontmatter description must be non-empty")
-        elif len(description) > 1024:
-            result.error(f"{path}: frontmatter description must be 1024 characters or fewer")
-        compatibility = frontmatter.get("compatibility")
-        if compatibility is not None:
-            if skill_contract.schema_mode(manifest) == "legacy":
-                if compatibility != "opencode":
-                    result.error(
-                        f"{path}: optional frontmatter compatibility must equal opencode"
-                    )
-            elif not isinstance(compatibility, str) or not compatibility.strip():
-                result.error(
-                    f"{path}: optional frontmatter compatibility must be a non-empty string"
-                )
-        metadata = frontmatter.get("metadata")
-        if metadata is not None:
-            if not isinstance(metadata, dict):
-                if skill_contract.schema_mode(manifest) == "legacy":
-                    result.error(
-                        f"{path}: optional frontmatter metadata must map strings to strings"
-                    )
-                else:
-                    result.error(
-                        f"{path}: optional frontmatter metadata must be a mapping"
-                    )
-            elif skill_contract.schema_mode(manifest) == "legacy" and not all(
-                isinstance(key, str) and isinstance(value, str)
-                for key, value in metadata.items()
-            ):
-                result.error(
-                    f"{path}: optional frontmatter metadata must map strings to strings"
-                )
+        mode = skill_contract.schema_mode(manifest)
+        relative_path = path.relative_to(package_dir).as_posix()
+        skill_contract.add_skill_markdown_issues(
+            result,
+            [
+                *skill_contract.validate_skill_frontmatter(
+                    frontmatter,
+                    directory_name=skill_name,
+                    expected_compatibility="opencode" if mode == "legacy" else None,
+                ),
+                *skill_contract.skill_markdown_recommendations(
+                    len(body.splitlines())
+                ),
+            ],
+            path=relative_path,
+        )
         resources = sorted(resources_by_skill.get(skill_name, []))
         if (
             resources
-            and skill_contract.schema_mode(manifest) == "legacy"
+            and mode == "legacy"
             and "资源导航" not in body
         ):
             result.error(f"{path}: generated skill with package_resources must include 资源导航")
-        for resource in resources if skill_contract.schema_mode(manifest) == "legacy" else []:
+        for resource in resources if mode == "legacy" else []:
             if resource not in body:
                 result.error(f"{path}: resource navigation missing declared path {resource}")
 
@@ -1447,6 +1491,7 @@ def check_permission_policy(
             expected, audit = permission_policy.build_role_permission(
                 normalized_role,
                 workflows=workflows,
+                manifest_mode=skill_contract.schema_mode(manifest),
                 mcp_names=mcp_names,
                 custom_tool_paths=custom_tool_paths,
                 subagent_ids=subagent_ids,
@@ -1466,7 +1511,7 @@ def check_permission_policy(
         legacy_permission_baseline = audit["warning"] == "legacy-permission-baseline"
         if legacy_permission_baseline:
             result.warn(
-                f"{role_id}: HIGH RISK legacy-permission-baseline preserves historical permissions, including possible unconditional Bash wildcard allow; add workflow autonomy during the next structural modification"
+                f"{role_id}: HIGH RISK legacy-permission-baseline preserves historical permissions, including possible unconditional Bash wildcard allow; migrate to the unified skill schema during the next structural modification, and add workflow autonomy only when a formal Workflow is declared"
             )
         elif audit["warning"] == "unused-role-bounded-fallback":
             result.warn(
@@ -1491,8 +1536,9 @@ def check_permission_policy(
                         location="documentation",
                         root_cause="legacy-permission-contract",
                         remediation=(
-                            "Preserve compatibility now; add workflow autonomy and "
-                            "regenerate README.md during the next structural modification."
+                            "Preserve compatibility now; migrate to the unified skill "
+                            "schema and regenerate README.md during the next structural "
+                            "modification."
                         ),
                     )
                 else:

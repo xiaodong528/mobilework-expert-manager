@@ -25,9 +25,11 @@ python scripts/diagnose_expert.py <package-dir-or-zip> --format json
 `--runtime` 只表达请求并以退出码 4 阻止宿主执行，不是放行开关。
 
 技能诊断额外要求：输入是一个完整技能目录或单根 ZIP；目录名与 `SKILL.md` frontmatter `name`
-必须是相同 kebab-case；扫描全部文件的 symlink、缓存、secret-like 内容、不可移植路径和静态
-Python 语法；计算逐文件 SHA-256 与确定性 tree hash。诊断通过不修改原技能，也不代表它已在
-OpenCode Runtime 加载。
+必须是相同 kebab-case；frontmatter 必须通过 Agent Skills 官方字段、长度和类型规则，未知字段、
+超过 500 字符的 `compatibility`、非 string → string 的 `metadata`、非字符串
+`allowed-tools` 都失败。扫描全部文件的 symlink、缓存、secret-like 内容、不可移植路径和静态
+Python 语法；计算逐文件 SHA-256 与确定性 tree hash。诊断不强制转换 YAML 类型、不改写原技能；
+通过也不代表它已在 OpenCode Runtime 加载。
 
 ## 信任等级
 

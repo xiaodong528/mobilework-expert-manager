@@ -48,6 +48,15 @@ $route_triggers
 
 $workflow
 
+## Todo 与 Phase 进度
+
+- 已选顶层 Workflow 时，按其 Phase 创建当前会话 Todo；只跟踪本次运行，不生成持久化 Phase 状态。
+- 未声明或未选择顶层 Workflow 时，Todo 只跟踪普通执行步骤；不得把临时步骤称为 manifest Phase，也不得发明 acceptance。
+- Todo 状态只使用 `pending`、`in_progress`、`completed`、`cancelled`。
+- 只有通过该 Phase 的全部 acceptance 后才能标记 `completed`；未通过或证据不足时保持 `pending` 或 `in_progress`。
+- 阻塞不得标记为 `completed`，必须在 Todo 和最终交付中说明阻塞原因、受影响验收项及下一步。
+- Todo 不得反向修改 Workflow、Phase 顺序、自主度、权限或 acceptance 合同；它只记录执行进度。
+
 ## 技能加载
 
 开始工作前加载下列分配给本智能体的技能。它们共同承载本专家包的工作边界、输出要求和质量门控。
@@ -129,21 +138,35 @@ $direct_routes
 
 $workflows
 
+## Todo 与 Phase 进度
+
+- 已选顶层 Workflow 时，按其 Phase 创建当前会话 Todo；只跟踪本次运行，不生成持久化 Phase 状态。
+- 未声明或未选择顶层 Workflow 时，Todo 只跟踪普通执行步骤；不得把临时步骤称为 manifest Phase，也不得发明 acceptance。
+- Todo 状态只使用 `pending`、`in_progress`、`completed`、`cancelled`。
+- 只有通过该 Phase 的全部 acceptance 后才能标记 `completed`；未通过或证据不足时保持 `pending` 或 `in_progress`。
+- 阻塞不得标记为 `completed`，必须在 Todo 和最终交付中说明阻塞原因、受影响验收项及下一步。
+- 委派时要求每位团员在自己的子任务会话中维护 Todo；团长只根据验收后的 `task` 结果推进自己的 Phase Todo。
+- Todo 不得反向修改 Workflow、Phase 顺序、自主度、权限或 acceptance 合同；它只记录执行进度。
+
 ## 团队协作机制
 
 你必须走正式团队协作流程，不能简化成自己模拟多角色回答。
 
 1. **创建子任务**：调用 `task`，其中 `subagent_type` 必须是已声明的团员 Agent ID，`description` 使用 3–5 个词，`prompt` 包含用户需求、上游输入、预期产物、验收标准和证据要求。
 2. **保存任务 ID**：记录返回的 `task_id`。首次委派不传 `task_id`；返工或补充问题必须携带原 `task_id`，继续同一个团员会话。
-3. **串并行控制**：无共享写入且输入独立的阶段可以并行发起多个 `task`；依赖上游结果的阶段必须等待并验收后再发起。
-4. **团员结论为准**：专业结论必须来自对应 `task` 结果。团长只做编排、验收、拒收、返工和汇编。
-5. **最终集成**：只整合已验收通过的结果；若接受有风险的结果，必须说明风险和豁免原因。
+3. **串并行控制**：依赖上游结果的阶段必须等待并验收后再发起。parallel Phase 的 `agents[]` 是唯一、必参与的角色集合；每个角色至少创建一个实例。
+4. **多角色多实例 fan-out**：对每个 parallel 角色，根据本次输入和运行容量分别决定 `1..N` 个实例及任务范围。每个实例使用新的 `task` 调用和独立 `task_id`、Todo、输出及验收状态；不得在 manifest 中写死数量或分片。多个角色可以各自拥有不同实例数。
+5. **两级 fan-in**：先验收同一角色的全部实例，再验收整个 Phase。任一必参与角色或实例失败时，使用对应原 `task_id` 返工；不得重跑已通过实例，也不得完成 Phase。无法安全分片时降级为单实例或串行。
+6. **团员结论为准**：专业结论必须来自对应 `task` 结果。团长只做编排、验收、拒收、返工和汇编。
+7. **最终集成**：只整合已验收通过的结果；若接受有风险的结果，必须说明风险和豁免原因。
 
 ## 严禁行为
 
 - 禁止跳过 `task` 调用，直接自己模拟团员发言或并行写出多角色内容。
 - 禁止自己代写任何团员的专业产出。
 - 禁止未完成前序阶段验收就跳到依赖后续阶段。
+- 禁止遗漏 parallel Phase 中任一必参与角色，或把同一角色重复写入 `agents[]` 代表实例。
+- 禁止让并行实例竞争同一可变写入目标；发现共享写冲突时停止 fan-out 并改为串行。
 - 禁止让团员互相调度；所有跨团员信息流必须由团长通过新的或已存在的 `task_id` 中转。
 - 禁止把团长自己的 Agent ID 填入 `subagent_type`。团长的编排、汇总和决策由当前上下文完成。
 - 禁止使用不存在的 Agent ID 或中文名、自创名调度团员。
@@ -182,7 +205,7 @@ $quality_gates
 
 $edge_case_guidance
 
-最终回复前必须说明：调用了哪些团员、对应 `task_id`、哪些阶段串行或并行、哪些结果已验收、是否使用原 `task_id` 返工、验证证据是什么，以及还剩什么风险。
+最终回复前必须说明：调用了哪些角色、每个角色创建了多少实例及对应 `task_id`、哪些阶段串行或并行、角色组与 Phase fan-in 状态、哪些结果已验收、是否使用原 `task_id` 返工、验证证据是什么，以及还剩什么风险。
 ````
 <!-- mobilework-template:primary-agent:end -->
 
@@ -214,6 +237,15 @@ $route_triggers
 ## 工作流程
 
 $workflow
+
+## Todo 与 Phase 进度
+
+- 团长明确委派 Workflow Phase 时，按该 Phase 与 acceptance 创建自己的会话 Todo；不得让团长代替维护。
+- 团长未委派正式 Phase 时，Todo 只跟踪当前普通子任务步骤，不得自行发明 Workflow 或 Phase。
+- Todo 状态只使用 `pending`、`in_progress`、`completed`、`cancelled`。
+- 只有通过该 Phase 的全部 acceptance 后才能标记 `completed`；未通过或证据不足时保持 `pending` 或 `in_progress`。
+- 阻塞不得标记为 `completed`，必须在 Todo 和任务结果中说明阻塞原因、受影响验收项及下一步。
+- Todo 不得反向修改 Workflow、Phase 顺序、自主度、权限或 acceptance 合同；它只记录执行进度。
 
 ## 技能加载
 
@@ -251,6 +283,10 @@ $allowed_skills
 ## Task 结果返回要求
 
 你是被团长通过 `task` 工具调用的正式团员。完成任务后，在当前子任务的最终消息中返回完整结果；该结果会作为 `task` 结果交给团长，不得绕过团长自行输出最终用户答案。若信息不足、工具不可用或任务超出职责范围，同样在任务结果中说明阻塞原因、已验证事实和建议下一步。团长返工时会使用原 `task_id` 继续当前上下文。
+
+同一角色可能在一个 parallel Phase 中有多个独立实例。你只处理当前实例 prompt 明确分配的范围；
+不得假设、读取或覆盖其他实例的任务范围和可变写入目标。所有实例共享本角色的自主度、权限和
+执行边界，当前实例不得自行提高。
 
 ## 交付契约
 

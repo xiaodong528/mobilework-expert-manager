@@ -13,10 +13,14 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
 CREATE = SCRIPTS / "create_expert.py"
+INSTALL = SCRIPTS / "install_expert.py"
+PACKAGE = SCRIPTS / "package_expert.py"
 TEAM_EXAMPLE = SKILL_ROOT / "evals" / "files" / "software-dev-team.expert.json"
 
 sys.path.insert(0, str(SCRIPTS))
@@ -611,6 +615,142 @@ class UnifiedSkillImportTests(unittest.TestCase):
             "SKILL_DIRECTORY_INVALID",
             {item.code for item in direct.findings},
         )
+
+    def test_import_rejects_official_frontmatter_violations_without_writes(
+        self,
+    ) -> None:
+        package = self.create_package()
+        cases = [
+            (
+                "too-long-compatibility",
+                {"compatibility": "x" * 501},
+                "SKILL_COMPATIBILITY_INVALID",
+            ),
+            (
+                "numeric-metadata",
+                {"metadata": {"version": 1}},
+                "SKILL_METADATA_INVALID",
+            ),
+            (
+                "list-allowed-tools",
+                {"allowed-tools": ["Read"]},
+                "SKILL_ALLOWED_TOOLS_INVALID",
+            ),
+            (
+                "numeric-license",
+                {"license": 1},
+                "SKILL_LICENSE_INVALID",
+            ),
+            (
+                "unknown-frontmatter",
+                {"mobilework-extra": True},
+                "SKILL_FRONTMATTER_FIELD_UNSUPPORTED",
+            ),
+        ]
+        for skill_name, additions, expected_code in cases:
+            with self.subTest(skill_name=skill_name):
+                source = self.create_skill(skill_name, parent=skill_name)
+                frontmatter: dict[str, object] = {
+                    "name": skill_name,
+                    "description": (
+                        "Use when the official frontmatter import contract is tested."
+                    ),
+                    **additions,
+                }
+                (source / "SKILL.md").write_text(
+                    "---\n"
+                    + yaml.safe_dump(
+                        frontmatter,
+                        sort_keys=False,
+                        allow_unicode=True,
+                    )
+                    + "---\n\n# Import fixture\n",
+                    encoding="utf-8",
+                )
+                diagnosis = diagnose_skill.diagnose(source)
+                self.assertIn(
+                    expected_code,
+                    {finding.code for finding in diagnosis.findings},
+                )
+                before = package_digest(package)
+                with self.assertRaisesRegex(
+                    import_skill.ImportSkillError,
+                    "failed static diagnosis",
+                ):
+                    self.import_into(package, source)
+                self.assertEqual(package_digest(package), before)
+
+    def test_existing_noncompliant_skill_blocks_validate_package_and_install(
+        self,
+    ) -> None:
+        package = self.create_package()
+        source = self.create_skill()
+        self.import_into(package, source)
+        skill_md = package / ".opencode/skills/uploaded-review/SKILL.md"
+        skill_md.write_text(
+            "---\n"
+            + yaml.safe_dump(
+                {
+                    "name": "uploaded-review",
+                    "description": "Use when an uploaded review workflow is requested.",
+                    "mobilework-extra": True,
+                },
+                sort_keys=False,
+                allow_unicode=True,
+            )
+            + "---\n\n# Uploaded review\n",
+            encoding="utf-8",
+        )
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        relative = skill_md.relative_to(package).as_posix()
+        for resource in manifest["package_resources"]:
+            if resource["path"] == relative:
+                resource["sha256"] = package_contract.sha256_bytes(
+                    skill_md.read_bytes()
+                )
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        invalid_bytes = skill_md.read_bytes()
+
+        validation = validate_expert.validate_package(package)
+        self.assertFalse(validation.ok)
+        self.assertIn(
+            "SKILL_FRONTMATTER_FIELD_UNSUPPORTED",
+            {finding.code for finding in validation.findings},
+        )
+
+        packaged = subprocess.run(
+            [
+                sys.executable,
+                str(PACKAGE),
+                "--package-dir",
+                str(package),
+                "--output-dir",
+                str(self.root / "dist"),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(packaged.returncode, 0)
+        installed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--package-dir",
+                str(package),
+                "--workspace-dir",
+                str(self.root / "workspace"),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(installed.returncode, 0)
+        self.assertEqual(skill_md.read_bytes(), invalid_bytes)
 
     def test_diagnose_skill_cli_blocks_runtime_and_import_cli_reports_errors(
         self,

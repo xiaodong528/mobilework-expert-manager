@@ -28,7 +28,12 @@ class MinimalManifestTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def generate_and_validate(self, manifest: dict[str, object]) -> Path:
+    def generate_and_validate(
+        self,
+        manifest: dict[str, object],
+        *,
+        expect_legacy: bool = True,
+    ) -> Path:
         source = self.root / str(manifest["slug"]) / "expert.json"
         source.parent.mkdir()
         source.write_text(
@@ -57,8 +62,11 @@ class MinimalManifestTests(unittest.TestCase):
             item for item in payload["findings"]
             if item["code"] == "LEGACY_PERMISSION_BASELINE"
         ]
-        self.assertTrue(legacy)
-        self.assertTrue(all("HIGH RISK" in item["message"] for item in legacy))
+        if expect_legacy:
+            self.assertTrue(legacy)
+            self.assertTrue(all("HIGH RISK" in item["message"] for item in legacy))
+        else:
+            self.assertFalse(legacy)
         return package
 
     def assert_minimal_projection(self, package: Path, expected_agents: set[str]) -> None:
@@ -93,6 +101,8 @@ class MinimalManifestTests(unittest.TestCase):
             path for path in package.rglob("*")
             if path.is_dir() and ".git" not in path.relative_to(package).parts
         ):
+            if directory.relative_to(package).as_posix() == ".opencode/skills":
+                continue
             self.assertTrue(any(directory.iterdir()), f"orphan empty directory: {directory}")
 
     def test_minimal_expert_manifest_omits_every_optional_projection(self) -> None:
@@ -154,6 +164,84 @@ class MinimalManifestTests(unittest.TestCase):
             }
         )
         self.assert_minimal_projection(package, {"team-lead", "team-member"})
+
+    def test_unified_expert_without_workflow_uses_bounded_default(self) -> None:
+        package = self.generate_and_validate(
+            {
+                "slug": "minimal-unified-expert",
+                "type": "expert",
+                "name": "最小统一专家",
+                "description": "验证统一专家可以不声明顶层 Workflow。",
+                "skills": [],
+                "agent": {
+                    "id": "minimal-unified-agent",
+                    "description": "直接完成开放式专家任务。",
+                    "skills": [],
+                },
+            },
+            expect_legacy=False,
+        )
+        self.assert_minimal_projection(package, {"minimal-unified-agent"})
+        runtime = json.loads(
+            (package / "opencode.json").read_text(encoding="utf-8")
+        )
+        permission = runtime["agent"]["minimal-unified-agent"]["permission"]
+        self.assertEqual(permission["*"], "ask")
+        self.assertEqual(permission["edit"], "allow")
+        self.assertEqual(permission["bash"]["*"], "ask")
+        self.assertEqual(permission["todowrite"], "allow")
+        readme = (package / "README.md").read_text(encoding="utf-8")
+        self.assertIn("no-workflow-bounded-default", readme)
+        agent = (
+            package / ".opencode/agents/minimal-unified-agent.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Todo 只跟踪普通执行步骤；不得把临时步骤称为 manifest Phase",
+            agent,
+        )
+
+    def test_unified_team_without_workflow_uses_bounded_default_and_task_topology(
+        self,
+    ) -> None:
+        package = self.generate_and_validate(
+            {
+                "slug": "minimal-unified-team",
+                "type": "team",
+                "name": "最小统一专家团",
+                "description": "验证统一专家团可以不声明顶层 Workflow。",
+                "skills": [],
+                "primary_agent": {
+                    "id": "unified-lead",
+                    "name": "统一团长",
+                    "description": "动态分派、验收并整合团员结果。",
+                    "skills": [],
+                },
+                "subagents": [
+                    {
+                        "id": "unified-member",
+                        "name": "统一团员",
+                        "description": "完成被分派的专业子任务。",
+                        "skills": [],
+                    }
+                ],
+            },
+            expect_legacy=False,
+        )
+        self.assert_minimal_projection(
+            package,
+            {"unified-lead", "unified-member"},
+        )
+        runtime = json.loads(
+            (package / "opencode.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            runtime["agent"]["unified-lead"]["permission"]["task"],
+            {"*": "deny", "unified-member": "allow"},
+        )
+        self.assertEqual(
+            runtime["agent"]["unified-member"]["permission"]["task"],
+            {"*": "deny"},
+        )
 
 
 if __name__ == "__main__":

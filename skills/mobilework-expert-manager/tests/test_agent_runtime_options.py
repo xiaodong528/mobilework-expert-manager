@@ -316,6 +316,124 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
         self.assertNotEqual(validated.returncode, 0)
         self.assertIn("unsupported frontmatter fields providerOption", validated.stdout)
 
+    def test_todo_permission_projects_to_runtime_and_agent_markdown(self) -> None:
+        data = copy.deepcopy(self.base)
+        created, package = self.generate(data, name="todo-projection")
+        self.assertEqual(created.returncode, 0, created.stderr)
+
+        role_id = data["agent"]["id"]
+        runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
+        markdown_path = package / f".opencode/agents/{role_id}.md"
+        markdown = markdown_path.read_text(encoding="utf-8")
+        frontmatter = read_frontmatter(markdown_path)
+        self.assertEqual(runtime["agent"][role_id]["permission"]["todowrite"], "allow")
+        self.assertEqual(frontmatter["permission"]["todowrite"], "allow")
+        self.assertNotIn("todoread", runtime["agent"][role_id]["permission"])
+        for marker in (
+            "## Todo 与 Phase 进度",
+            "`pending`、`in_progress`、`completed`、`cancelled`",
+            "通过该 Phase 的全部 acceptance",
+            "阻塞不得标记为 `completed`",
+            "Todo 不得反向修改 Workflow",
+        ):
+            self.assertIn(marker, markdown)
+
+    def test_validator_rejects_todo_projection_tampering(self) -> None:
+        data = copy.deepcopy(self.base)
+        role_id = data["agent"]["id"]
+        created, package = self.generate(data, name="todo-tamper")
+        self.assertEqual(created.returncode, 0, created.stderr)
+
+        markdown_path = package / f".opencode/agents/{role_id}.md"
+        markdown_mutations = (
+            lambda value: value["permission"].pop("todowrite"),
+            lambda value: value["permission"].update({"todowrite": "ask"}),
+            lambda value: value["permission"].update({"todoread": "allow"}),
+        )
+        for index, mutate in enumerate(markdown_mutations):
+            with self.subTest(target="agent-markdown", index=index):
+                if index:
+                    created, package = self.generate(
+                        data,
+                        name="todo-tamper",
+                        force=True,
+                    )
+                    self.assertEqual(created.returncode, 0, created.stderr)
+                    markdown_path = package / f".opencode/agents/{role_id}.md"
+                mutate_frontmatter(markdown_path, mutate)
+                validated = self.validate(package)
+                self.assertNotEqual(validated.returncode, 0)
+                self.assertIn("permission", validated.stdout)
+
+        runtime_mutations = (
+            lambda value: value["agent"][role_id]["permission"].pop("todowrite"),
+            lambda value: value["agent"][role_id]["permission"].update(
+                {"todowrite": "deny"}
+            ),
+            lambda value: value["agent"][role_id]["permission"].update(
+                {"todoread": "allow"}
+            ),
+        )
+        for index, mutate in enumerate(runtime_mutations):
+            with self.subTest(target="opencode-json", index=index):
+                created, package = self.generate(
+                    data,
+                    name="todo-tamper",
+                    force=True,
+                )
+                self.assertEqual(created.returncode, 0, created.stderr)
+                runtime_path = package / "opencode.json"
+                runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+                mutate(runtime)
+                runtime_path.write_text(
+                    json.dumps(runtime, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                validated = self.validate(package)
+                self.assertNotEqual(validated.returncode, 0)
+                self.assertIn("permission", validated.stdout)
+
+    def test_generator_rejects_todo_manifest_declarations(self) -> None:
+        cases: list[tuple[str, Callable[[dict[str, object]], None]]] = [
+            (
+                "permission",
+                lambda data: data["agent"]["permission"].update(
+                    {"todowrite": "deny"}
+                ),
+            ),
+            (
+                "tools",
+                lambda data: data["agent"].setdefault("tools", {}).update(
+                    {"todoread": False}
+                ),
+            ),
+            (
+                "custom-tool",
+                lambda data: data["runtime_extensions"].setdefault(
+                    "custom_tools",
+                    [],
+                ).append(
+                    {
+                        "path": "todowrite.ts",
+                        "content": "export default {}",
+                    }
+                ),
+            ),
+        ]
+        for index, (name, mutate) in enumerate(cases):
+            with self.subTest(name=name):
+                data = copy.deepcopy(self.base)
+                mutate(data)
+                created, _package = self.generate(
+                    data,
+                    name=f"todo-declaration-{index}",
+                )
+                self.assertNotEqual(created.returncode, 0)
+                self.assertIn(
+                    "Todo 由系统托管，请删除该声明",
+                    created.stderr,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
