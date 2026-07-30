@@ -1,0 +1,29 @@
+{
+  "name": "mobilework-tools",
+  "owner": {
+    "name": "xiaodong528"
+  },
+  "description": "Installable tools for designing, validating, packaging, and managing MobileWork experts and expert teams.",
+  "plugins": [
+    {
+      "name": "mobilework-expert-manager",
+      "source": {
+        "source": "github",
+        "repo": "xiaodong528/mobilework-expert-manager"
+      },
+      "description": "Design, analyze, create, modify, diagnose, and validate MobileWork experts and expert teams.",
+      "author": {
+        "name": "xiaodong528"
+      },
+      "homepage": "https://github.com/xiaodong528/mobilework-expert-manager",
+      "repository": "https://github.com/xiaodong528/mobilework-expert-manager",
+      "license": "Apache-2.0",
+      "keywords": [
+        "mobilework",
+        "opencode",
+        "experts",
+        "agent-teams"
+      ]
+    }
+  ]
+}
