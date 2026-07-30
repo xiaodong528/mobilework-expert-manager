@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 try:
@@ -16,8 +15,9 @@ from spec_templates import load_spec_template
 
 def dump_yaml(data: dict[str, Any]) -> str:
     if yaml is None:
-        # JSON is valid YAML and keeps bundled Python runtimes dependency-free.
-        return json.dumps(data, ensure_ascii=False, indent=2)
+        raise RuntimeError(
+            "PyYAML is required to render block-style YAML frontmatter"
+        )
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True).strip()
 
 

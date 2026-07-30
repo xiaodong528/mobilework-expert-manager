@@ -78,6 +78,7 @@ BUILTIN_PERMISSION_KEYS = frozenset(
         "question",
     }
 )
+SYSTEM_MANAGED_PERMISSION_KEYS = frozenset({"todowrite", "todoread"})
 UNSAFE_BASH_TOKENS = ("\n", "\r", ";", "|", "&&", "||", ">", "<", "`", "$(")
 
 
@@ -85,9 +86,18 @@ class PermissionPolicyError(ValueError):
     """Raised when explicit permission violates the derived policy."""
 
 
+def _reject_system_managed_declarations(raw: dict[str, Any], field: str) -> None:
+    for key in sorted(SYSTEM_MANAGED_PERMISSION_KEYS):
+        if key in raw:
+            raise PermissionPolicyError(
+                f"{field}.{key}: Todo 由系统托管，请删除该声明"
+            )
+
+
 def tools_to_permission(raw: dict[str, Any], field: str) -> dict[str, Any]:
     """Convert the legacy manifest tools booleans into permission actions."""
 
+    _reject_system_managed_declarations(raw, field)
     permission: dict[str, Any] = {}
     for key, value in raw.items():
         if not isinstance(key, str):
@@ -106,7 +116,12 @@ def _tool_name(path: str, field: str) -> str:
         raise PermissionPolicyError(f"{field} must be a safe relative custom tool path")
     if candidate.suffix not in {".js", ".ts"}:
         raise PermissionPolicyError(f"{field} must end with .js or .ts")
-    return candidate.stem
+    name = candidate.stem
+    if name in SYSTEM_MANAGED_PERMISSION_KEYS:
+        raise PermissionPolicyError(
+            f"{field}: Todo 由系统托管，请删除该声明"
+        )
+    return name
 
 
 def validate_custom_tool_ownership(
@@ -283,6 +298,7 @@ def _validate_explicit(
     owned_custom_tools: set[str],
     expected_task: dict[str, str],
 ) -> None:
+    _reject_system_managed_declarations(explicit, "permission")
     bash = explicit.get("bash")
     if bash == "allow" or isinstance(bash, dict) and bash.get("*") == "allow":
         raise PermissionPolicyError('permission.bash must not grant unconditional "*": "allow"')
@@ -332,6 +348,7 @@ def build_role_permission(
     role: dict[str, Any],
     *,
     workflows: list[dict[str, Any]],
+    manifest_mode: str,
     mcp_names: list[str],
     custom_tool_paths: list[str] | None = None,
     subagent_ids: list[str],
@@ -340,12 +357,19 @@ def build_role_permission(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return generated permission and audit metadata for one normalized role."""
 
+    if manifest_mode not in {"unified", "legacy"}:
+        raise PermissionPolicyError(
+            "manifest_mode must be unified or legacy"
+        )
     expected_task = {"*": "deny"}
     if is_primary:
         expected_task.update({agent_id: "allow" for agent_id in subagent_ids})
     explicit = role.get("permission", {})
     if not isinstance(explicit, dict):
         raise PermissionPolicyError("permission must be a mapping")
+    _reject_system_managed_declarations(explicit, "permission")
+    legacy_permission = legacy_tools_permission or {}
+    _reject_system_managed_declarations(legacy_permission, "tools")
     permission_reason = role.get("permission_reason", "")
     if not isinstance(permission_reason, str):
         raise PermissionPolicyError("permission_reason must be a string")
@@ -357,7 +381,7 @@ def build_role_permission(
     )
 
     contract_enabled = any(item.get("contract_enabled") for item in workflows)
-    if not contract_enabled:
+    if not contract_enabled and manifest_mode == "legacy":
         permission = _legacy_permission(
             role,
             mcp_names=mcp_names,
@@ -371,6 +395,7 @@ def build_role_permission(
                 f"permission.task must equal generated task topology {expected_task}"
             )
         permission["task"] = expected_task
+        permission["todowrite"] = "allow"
         return permission, {
             "source": "legacy",
             "levels": [],
@@ -380,8 +405,9 @@ def build_role_permission(
         }
 
     assignments = _assignments_for_role(workflows, role["id"])
-    fallback = not assignments
-    if fallback:
+    no_workflow_default = not contract_enabled
+    unused_role_fallback = contract_enabled and not assignments
+    if no_workflow_default or unused_role_fallback:
         assignments = [("bounded", None)]
     levels = [level for level, _execution in assignments]
     highest = max(levels, key=AUTONOMY_ORDER.__getitem__)
@@ -448,10 +474,20 @@ def build_role_permission(
         isinstance(permission.get("bash"), dict) and permission["bash"].get("*") == "allow"
     ):
         raise PermissionPolicyError('generated permission.bash must not contain "*": "allow"')
+    permission["todowrite"] = "allow"
+    source = "workflow-autonomy"
+    if no_workflow_default:
+        source = "no-workflow-bounded-default"
+    elif unused_role_fallback:
+        source = "bounded-fallback"
     return permission, {
-        "source": "bounded-fallback" if fallback else "workflow-autonomy",
+        "source": source,
         "levels": sorted(set(levels), key=AUTONOMY_ORDER.__getitem__),
         "effective": highest,
-        "warning": "unused-role-bounded-fallback" if fallback else "",
+        "warning": (
+            "unused-role-bounded-fallback"
+            if unused_role_fallback
+            else ""
+        ),
         "permission_reason": permission_reason,
     }

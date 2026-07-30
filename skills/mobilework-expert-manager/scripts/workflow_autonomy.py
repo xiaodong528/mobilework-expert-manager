@@ -29,9 +29,16 @@ AUTONOMY_PREFIXES = {
     "guided": "【自主度：高】",
     "adaptive": "【自主度：极高】",
 }
+MAX_AUTONOMY_PREFIXES = {
+    "scripted": "【最高生效自主度：极低】",
+    "fixed": "【最高生效自主度：低】",
+    "bounded": "【最高生效自主度：中】",
+    "guided": "【最高生效自主度：高】",
+    "adaptive": "【最高生效自主度：极高】",
+}
 AUTONOMY_BOUNDARIES = {
     "scripted": "只能按顺序调用声明的确定性执行器；禁止临时写替代代码、口算、目测或纯文字替代执行。",
-    "fixed": "只能执行已确认 SOP、分支和重试规则；禁止发明新方法或更换执行器。",
+    "fixed": "只能执行已确认 SOP、分支和重试规则；禁止发明新方法或更换执行器。仅在用户明确批准后才可执行 break-glass 例外，并记录偏离原因。",
     "bounded": "只能在声明的执行器、方法和标准范围内选择；禁止越出允许清单。",
     "guided": "可以探索，但关键方案、例外处理和高影响决定必须先确认。",
     "adaptive": "可以在职责、权限和验收标准内自主规划；不得绕过权威脚本、安全规则或质量门。",
@@ -53,6 +60,8 @@ PHASE_KEYS = frozenset(
 EXECUTION_KEYS = frozenset({"executors", "standards"})
 AGENT_OVERRIDE_KEYS = frozenset({"autonomy", "execution", "reason"})
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+OPENCODE_SERVER_COMMAND_REGISTRY_VERSION = "v1.16.2"
+OPENCODE_SERVER_BUILTIN_COMMANDS = frozenset({"init", "review"})
 
 
 class WorkflowContractError(ValueError):
@@ -67,13 +76,20 @@ def autonomy_prefix(level: str) -> str:
     return AUTONOMY_PREFIXES[level]
 
 
+def max_autonomy_prefix(level: str) -> str:
+    return MAX_AUTONOMY_PREFIXES[level]
+
+
 def workflow_command_description(workflow: dict[str, Any]) -> str:
     command = workflow["command"]
     if command is None:
         raise WorkflowContractError(
             f"workflow {workflow['name']}: does not declare a command"
         )
-    return f"{autonomy_prefix(workflow['autonomy'])} {command['description']}"
+    return (
+        f"{max_autonomy_prefix(workflow['max_effective_autonomy'])} "
+        f"{command['description']}"
+    )
 
 
 def _text(value: Any, field: str, *, required: bool = False, default: str = "") -> str:
@@ -148,6 +164,19 @@ def _require_execution(level: str, execution: dict[str, Any] | None, field: str)
         raise WorkflowContractError(f"{field}.executors: scripted must not use agent")
 
 
+def validate_command_name(value: Any, field: str) -> str:
+    name = _text(value, field, required=True)
+    if not NAME_RE.fullmatch(name) or len(name) > 64:
+        raise WorkflowContractError(
+            f"{field}: must be lowercase-hyphen and at most 64 characters"
+        )
+    if name in OPENCODE_SERVER_BUILTIN_COMMANDS:
+        raise WorkflowContractError(
+            f"{field}: conflicts with OpenCode built-in command {name}"
+        )
+    return name
+
+
 def _normalize_command(value: Any, field: str) -> dict[str, str] | None:
     if value is None:
         return None
@@ -156,15 +185,69 @@ def _normalize_command(value: Any, field: str) -> dict[str, str] | None:
     unknown = sorted(set(value) - {"name", "description"})
     if unknown:
         raise WorkflowContractError(f"{field}: unsupported fields: {', '.join(unknown)}")
-    name = _text(value.get("name"), f"{field}.name", required=True)
-    if not NAME_RE.fullmatch(name) or len(name) > 64:
-        raise WorkflowContractError(f"{field}.name: must be lowercase-hyphen and at most 64 characters")
+    name = validate_command_name(value.get("name"), f"{field}.name")
     description = _text(value.get("description"), f"{field}.description", required=True)
-    if description.lstrip().startswith("【自主度："):
+    if description.lstrip().startswith(
+        ("【自主度：", "【最高生效自主度：")
+    ):
         raise WorkflowContractError(
-            f"{field}.description: must not start with reserved generated prefix 【自主度："
+            f"{field}.description: must not start with a reserved generated prefix"
         )
     return {"name": name, "description": description}
+
+
+def _phase_participants(
+    manifest: dict[str, Any],
+    *,
+    mode: str,
+    agents: list[str],
+    primary_id: str,
+    field: str,
+    contract_enabled: bool,
+) -> list[str]:
+    if not contract_enabled:
+        return agents or [primary_id]
+
+    duplicate = package_contract.first_duplicate(agents)
+    if duplicate is not None:
+        raise WorkflowContractError(
+            f"{field}.agents: duplicates {duplicate}; list each role once and create "
+            "multiple runtime task instances for parallel fan-out"
+        )
+
+    expert_type = manifest.get("type")
+    if expert_type == "expert":
+        if mode == "parallel":
+            raise WorkflowContractError(
+                f"{field}.mode: single experts cannot use parallel or clone the primary Agent"
+            )
+        if mode == "primary" and agents:
+            raise WorkflowContractError(
+                f"{field}.agents: primary phase for a single expert must be empty"
+            )
+        if mode == "serial" and agents not in ([], [primary_id]):
+            raise WorkflowContractError(
+                f"{field}.agents: serial phase for a single expert may only reference {primary_id}"
+            )
+        return [primary_id]
+
+    if expert_type != "team":
+        raise WorkflowContractError("type: must be expert or team")
+    if mode == "primary":
+        if agents:
+            raise WorkflowContractError(
+                f"{field}.agents: team primary phase must be empty"
+            )
+        return [primary_id]
+    if not agents:
+        raise WorkflowContractError(
+            f"{field}.agents: team {mode} phase requires at least one subagent role"
+        )
+    if primary_id in agents:
+        raise WorkflowContractError(
+            f"{field}.agents: team {mode} phase must not include primary Agent {primary_id}"
+        )
+    return agents
 
 
 def normalize_workflows(
@@ -176,6 +259,30 @@ def normalize_workflows(
     raw_workflows = manifest.get("workflows", []) or []
     if not isinstance(raw_workflows, list):
         raise WorkflowContractError("workflows: must be a list")
+    for workflow_index, raw_workflow in enumerate(raw_workflows):
+        if not isinstance(raw_workflow, dict):
+            raise WorkflowContractError(
+                f"workflows[{workflow_index}]: must be a mapping"
+            )
+    contract_flags = ["autonomy" in workflow for workflow in raw_workflows]
+    if any(contract_flags) and not all(contract_flags):
+        raise WorkflowContractError(
+            "workflows: autonomy-enabled and legacy workflows cannot be mixed"
+        )
+    try:
+        manifest_mode = skill_contract.schema_mode(manifest)
+    except package_contract.ContractError as exc:
+        raise WorkflowContractError(str(exc)) from exc
+    if (
+        manifest_mode == "unified"
+        and raw_workflows
+        and not all(contract_flags)
+    ):
+        missing_index = contract_flags.index(False)
+        raise WorkflowContractError(
+            f"workflows[{missing_index}].autonomy: is required when a unified "
+            "workflow is declared; omit workflows when no formal Workflow is needed"
+        )
     normalized: list[dict[str, Any]] = []
     command_names: set[str] = set()
     runtime = manifest.get("runtime_extensions", {}) or {}
@@ -190,8 +297,6 @@ def normalize_workflows(
 
     for workflow_index, raw_workflow in enumerate(raw_workflows):
         workflow_field = f"workflows[{workflow_index}]"
-        if not isinstance(raw_workflow, dict):
-            raise WorkflowContractError(f"{workflow_field}: must be a mapping")
         unknown_workflow = sorted(set(raw_workflow) - WORKFLOW_KEYS)
         if unknown_workflow:
             raise WorkflowContractError(
@@ -247,6 +352,14 @@ def normalize_workflows(
                     raise WorkflowContractError(
                         f"{phase_field}.agents: references unknown agent {agent_id}"
                     )
+            participants = _phase_participants(
+                manifest,
+                mode=mode,
+                agents=agents,
+                primary_id=primary_id,
+                field=phase_field,
+                contract_enabled=enabled,
+            )
             new_phase_fields = {
                 "autonomy",
                 "autonomy_reason",
@@ -258,7 +371,6 @@ def normalize_workflows(
                     f"{phase_field}.autonomy: workflow.autonomy is required before phase autonomy fields"
                 )
             acceptance = _strings(raw_phase.get("acceptance"), f"{phase_field}.acceptance")
-            participants = agents or [primary_id]
             phase_level = workflow_level
             phase_reason = ""
             execution = None
@@ -335,6 +447,19 @@ def normalize_workflows(
                         "execution": override_execution,
                         "declares_execution": "execution" in raw_override,
                     }
+            participant_levels = [
+                (
+                    overrides[agent_id]["effective_autonomy"]
+                    if agent_id in overrides
+                    else phase_level
+                )
+                for agent_id in participants
+            ]
+            max_effective_autonomy = (
+                max(participant_levels, key=AUTONOMY_RANK.__getitem__)
+                if enabled
+                else None
+            )
             phases.append(
                 {
                     "name": _text(
@@ -353,17 +478,30 @@ def normalize_workflows(
                     "acceptance": acceptance,
                     "autonomy": raw_phase.get("autonomy") if enabled else None,
                     "effective_autonomy": phase_level,
+                    "max_effective_autonomy": max_effective_autonomy,
                     "autonomy_reason": phase_reason,
                     "execution": execution,
                     "agent_overrides": overrides,
                 }
             )
+        max_effective_autonomy = (
+            max(
+                (
+                    phase["max_effective_autonomy"]
+                    for phase in phases
+                ),
+                key=AUTONOMY_RANK.__getitem__,
+            )
+            if enabled
+            else None
+        )
         normalized.append(
             {
                 "name": name,
                 "trigger": trigger,
                 "contract_enabled": enabled,
                 "autonomy": workflow_level,
+                "max_effective_autonomy": max_effective_autonomy,
                 "command": command,
                 "phases": phases,
             }
@@ -563,6 +701,7 @@ def _command_agent_lines(phase: dict[str, Any], indent: str = "   ") -> list[str
         )
         lines.append(f"{indent}  - Agent `{agent_id}`：{autonomy_prefix(level)}")
         lines.append(f"{indent}    - 生效自主度：{autonomy_label(level)}")
+        lines.append(f"{indent}    - 通俗边界：{AUTONOMY_BOUNDARIES[level]}")
         lines.append(
             f"{indent}    - 自主度来源："
             + ("Agent override" if declares_autonomy else "Phase")
@@ -576,6 +715,24 @@ def _command_agent_lines(phase: dict[str, Any], indent: str = "   ") -> list[str
         if declares_execution and override is not None:
             lines.extend(_executor_lines(override["execution"], f"{indent}    "))
     return lines
+
+
+def _parallel_runtime_lines(
+    phase: dict[str, Any],
+    indent: str = "   ",
+) -> list[str]:
+    if phase["mode"] != "parallel":
+        return []
+    roles = "、".join(f"`{agent_id}`" for agent_id in phase["participants"])
+    return [
+        f"{indent}- 多实例角色：{roles} 均为必参与角色；每个角色至少创建一个实例。",
+        f"{indent}- 动态 fan-out：团长按当前输入和运行容量分别决定每个角色的实例数与任务范围；"
+        "不得从 manifest 写死实例数或分片。",
+        f"{indent}- 实例隔离：每个实例使用新的 `task` 调用和独立 `task_id`、Todo、输出及验收状态；"
+        "同角色实例共享角色自主度、权限和执行边界。",
+        f"{indent}- 两级 fan-in：先验收每个角色组的全部实例，再验收整个 Phase；"
+        "任何必参与角色或实例未通过时不得完成 Phase。",
+    ]
 
 
 def render_workflow(
@@ -605,8 +762,16 @@ def render_workflow(
                     lines.extend(f"     - {item}" for item in phase["acceptance"])
         return "\n".join(lines)
 
-    lines.append(f"- Workflow 默认自主度：{autonomy_label(workflow['autonomy'])}")
-    lines.append(f"- 通俗边界：{AUTONOMY_BOUNDARIES[workflow['autonomy']]}")
+    lines.append(f"- Workflow 声明默认自主度：{autonomy_label(workflow['autonomy'])}")
+    lines.append(
+        "- Workflow 最高生效自主度："
+        f"{autonomy_label(workflow['max_effective_autonomy'])}"
+    )
+    lines.append(f"- 默认通俗边界：{AUTONOMY_BOUNDARIES[workflow['autonomy']]}")
+    lines.append(
+        "- 最高风险边界："
+        f"{AUTONOMY_BOUNDARIES[workflow['max_effective_autonomy']]}"
+    )
     if include_command:
         command = workflow["command"]
         lines.append(
@@ -618,13 +783,26 @@ def render_workflow(
         declared = phase["autonomy"] or "继承 workflow"
         participants = ", ".join(f"`{item}`" for item in phase["participants"])
         phase_title = (
-            f"{autonomy_prefix(phase['effective_autonomy'])} {phase['name']}"
+            f"{max_autonomy_prefix(phase['max_effective_autonomy'])} {phase['name']}"
             if command_view
             else phase["name"]
         )
         lines.append(f"{index}. **{phase_title}**（{phase['mode']}）→ {participants}")
         lines.append(f"   - 声明自主度：`{declared}`")
-        lines.append(f"   - Phase 生效自主度：{autonomy_label(phase['effective_autonomy'])}")
+        lines.append(
+            f"   - Phase 默认生效自主度：{autonomy_label(phase['effective_autonomy'])}"
+        )
+        lines.append(
+            "   - Phase 最高生效自主度："
+            f"{autonomy_label(phase['max_effective_autonomy'])}"
+        )
+        lines.append(
+            f"   - Phase 默认通俗边界：{AUTONOMY_BOUNDARIES[phase['effective_autonomy']]}"
+        )
+        lines.append(
+            "   - Phase 最高风险边界："
+            f"{AUTONOMY_BOUNDARIES[phase['max_effective_autonomy']]}"
+        )
         if phase["autonomy_reason"]:
             lines.append(f"   - 提高原因：{phase['autonomy_reason']}")
         if command_view:
@@ -633,6 +811,7 @@ def render_workflow(
             lines.append(f"   - 输入：{phase['input']}")
         if phase["expected_output"]:
             lines.append(f"   - 预期产物：{phase['expected_output']}")
+        lines.extend(_parallel_runtime_lines(phase))
         lines.extend(_executor_lines(phase["execution"], "   "))
         lines.append("   - 验收标准：")
         lines.extend(f"     - {item}" for item in phase["acceptance"])
@@ -643,6 +822,9 @@ def render_workflow(
                 lines.append(f"     - 声明自主度：`{declared_override}`")
                 lines.append(
                     f"     - 生效自主度：{autonomy_label(override['effective_autonomy'])}"
+                )
+                lines.append(
+                    f"     - 通俗边界：{AUTONOMY_BOUNDARIES[override['effective_autonomy']]}"
                 )
                 if override["reason"]:
                     lines.append(f"     - 提高原因：{override['reason']}")
@@ -675,6 +857,11 @@ def render_role_workflows(workflows: Iterable[dict[str, Any]], role_id: str) -> 
             execution = override["execution"] if override else phase["execution"]
             lines.append(f"- **{phase['name']}**：{autonomy_label(level)}")
             lines.append(f"  - 通俗边界：{AUTONOMY_BOUNDARIES[level]}")
+            if phase["mode"] == "parallel":
+                lines.append(
+                    "  - 多实例：团长可为本角色创建多个独立实例；每个实例使用新的 "
+                    "`task_id` 和 Todo，并继承本角色相同的自主度、权限与执行边界。"
+                )
             lines.extend(_executor_lines(execution, "  "))
             lines.append("  - 验收标准：")
             lines.extend(f"    - {item}" for item in phase["acceptance"])
@@ -696,7 +883,7 @@ def render_workflow_command(workflow: dict[str, Any]) -> str:
         "",
         "## 停止、升级与确认",
         "",
-        f"- {AUTONOMY_BOUNDARIES[workflow['autonomy']]}",
+        f"- {AUTONOMY_BOUNDARIES[workflow['max_effective_autonomy']]}",
         "- 缺少输入、执行器、执行标准或验收依据时，停止并只索要会改变执行结果的最少信息。",
         "- 工具失败时按当前自主度合同处理，不得静默改用未声明工具或降低验收标准。",
         "- guided 到达关键决定、例外处理或高影响分支时必须先确认。",

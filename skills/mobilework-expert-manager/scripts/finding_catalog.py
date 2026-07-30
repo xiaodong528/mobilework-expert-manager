@@ -37,7 +37,7 @@ ENTRIES = (
     _entry(r"permission\.bash.*(?:unconditional|wildcard)|generated permission\.bash", "PERMISSION_BASH_WILDCARD_ALLOW", "permission", "unsafe-bash-permission", "Use ask or deny for Bash wildcard and exact required patterns."),
     _entry(r"permission\.external_directory.*wildcard", "PERMISSION_EXTERNAL_WILDCARD_ALLOW", "permission", "unsafe-external-directory", "Keep wildcard external access at ask or deny."),
     _entry(r"permission.*(?:match|mismatch|policy)", "PERMISSION_PROJECTION_MISMATCH", "permission", "permission-projection-drift", "Regenerate permissions from autonomy and ownership."),
-    _entry(r"legacy-permission-baseline", "LEGACY_PERMISSION_BASELINE", "permission", "legacy-permission-contract", "Migrate autonomy during the next structural modification."),
+    _entry(r"legacy-permission-baseline", "LEGACY_PERMISSION_BASELINE", "permission", "legacy-permission-contract", "Migrate to the unified skill schema during the next structural modification; add Workflow autonomy only when a formal Workflow is declared."),
     _entry(r"unused-role-bounded-fallback", "UNUSED_ROLE_BOUNDED_FALLBACK", "permission", "unassigned-role", "Assign the role to a workflow or accept bounded fallback."),
     _entry(r"workflow|autonomy|execution|executor", "WORKFLOW_CONTRACT_INVALID", "workflow", "workflow-contract", "Correct the workflow autonomy or execution contract."),
     _entry(r"README\.md: missing", "README_SECTION_MISSING", "documentation", "stale-derived-documentation", "Regenerate README.md from expert.json."),

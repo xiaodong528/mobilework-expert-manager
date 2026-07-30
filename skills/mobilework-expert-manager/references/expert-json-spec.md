@@ -189,6 +189,7 @@ executor 可以只为实际参与角色建立该 workflow 所需的 tool 所有�
 provider-specific 参数必须放入 `options`。旧 `tools` 只作为 manifest 到 `permission` 的布尔兼容
 输入，永不写入 Agent Markdown 或 `opencode.json`。
 
+统一技能池 manifest 未声明顶层 Workflow 时，permission 使用 `no-workflow-bounded-default`；
 启用 workflow autonomy 时，permission 按 `references/permission-policy-spec.md` 从角色的全部
 effective autonomy、execution 和 ownership 合并。显式规则提高计算动作时必须声明非空
 `permission_reason`；它不能改写 task、Skill、MCP、Bash 通配或外部目录硬边界。
@@ -229,6 +230,10 @@ permission: {}
 4. 专业结论必须来自对应 task 结果；团长不得自行模拟团员产出。
 5. 团员在当前 task 的最终消息中返回完整结果，不继续调度其他团员。
 6. 团员不得绕过团长直接交付最终用户答案。
+7. `parallel` Phase 的 `agents[]` 只列唯一且必参与的角色。团长可以为每个角色分别发起多个新的
+   `task` 调用，每个实例保留独立 `task_id`、Todo、输出和验收状态。
+8. 每个角色组内全部实例先通过验收，再由团长完成整个 Phase fan-in；任一必参与角色或实例
+   未通过时不得完成 Phase。
 
 默认 `permission.task`：
 
@@ -249,6 +254,11 @@ permission: {}
 或团队委派说明。
 
 ## 6. Workflow 结构
+
+顶层 `workflows` 可省略或为空。适合开放式、一次性或无法预先固定执行与验收边界的专家时，不要
+为了形式完整而创建 Workflow；Agent 仍可使用普通会话 Todo，但不能声称存在 manifest Phase。
+统一技能池 manifest 一旦声明 Workflow，其中每个 Workflow 都必须声明 autonomy、至少一个 Phase，
+并为每个 Phase 声明非空 acceptance。现代与无自主度 Workflow 不得混合。
 
 ```json
 {
@@ -312,16 +322,22 @@ permission: {}
 缺少声明或文件时生成前失败。
 
 - `mode` 只能是 `primary`、`serial` 或 `parallel`。
-- `agents[]` 只能引用已声明的 primary 或 subagent id。
-- `primary` 用于团长独有协调阶段，`agents` 可为空。
+- 单专家可以有多个 Phase；新设计使用 `primary`，兼容只引用自身的 `serial`，禁止 `parallel`。
+- 团队 `primary` 用于团长独有协调或独立集成输出，`agents` 必须为空。
+- 团队 `serial/parallel` 的 `agents[]` 必须非空且只能引用 subagent，禁止包含团长。
+- `agents[]` 不得重复；它表示唯一、必参与的角色集合，而不是运行时实例集合。
 - 有上游依赖时使用 `serial`。
-- 只有输入独立、无共享写冲突且输出可分别验收时使用 `parallel`。
+- 只有输入独立、无共享写冲突且输出可分别验收时使用 `parallel`。每个列出角色运行时至少一个
+  实例，并可分别动态扩展为 `1..N`；实例数和分片不得写死在 manifest。
 
 ### 自主度与继承
 
 - `workflow.autonomy` 使用 `scripted`、`fixed`、`bounded`、`guided`、`adaptive`。
 - `phase.autonomy` 可覆盖 workflow；`phase.agent_overrides.<agent>.autonomy` 可覆盖 phase。
 - 最终优先级为 `Agent override > phase.autonomy > workflow.autonomy`。
+- generator 内部 `phase.max_effective_autonomy` 取全部参与角色最高值，
+  `workflow.max_effective_autonomy` 取全部 Phase 最高值；两者只用于风险摘要，不是 manifest
+  字段，也不改变其他角色 permission。
 - phase 高于 workflow 时必须填写 `autonomy_reason`；Agent 高于 phase 时必须填写 `reason`。
 - override 未声明 `execution` 时完整继承 phase；一旦声明则完整替换，不做字段级合并。
 - workflow 未声明 `autonomy` 时，phase 不得声明自主度、execution 或 Agent override。
@@ -351,9 +367,10 @@ standards，executors 可选；`adaptive` 可不声明 execution。启用自主�
 ### Workflow command
 
 `workflows[].command` 只声明 `name` 与 `description`。generator 自动路由到单专家或团长并生成
-`.opencode/commands/<name>.md`。源 description 只写业务说明，不得以保留前缀 `【自主度：`
-开头；生成态 description 自动以 workflow 默认自主度开头。command 中每个 Phase 标题以 Phase
-生效自主度开头，每个参与 Agent 只出现一次并显示其生效自主度、自主度来源和 execution 来源；
+`.opencode/commands/<name>.md`。源 description 只写业务说明，不得以保留前缀 `【自主度：` 或
+`【最高生效自主度：` 开头；生成态 description 自动以 workflow 最高生效自主度开头。command
+正文同时显示声明默认自主度和最高生效自主度，每个 Phase 标题使用 Phase 最高生效自主度；每个
+参与角色只出现一次并显示其生效自主度、自主度来源和 execution 来源，运行时实例不重复写入；
 override 的原因、执行器和标准保留在该 Agent 项下。它不得包含手写 template。README、Agent、
 Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_extensions.commands[]`，两种
 来源不得重名，普通 command 不增加自主度前缀。
@@ -467,6 +484,7 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
       },
       "webfetch": "allow"
     },
+    "permission_reason": "允许只读 Git 状态检查，以便为合同修改保留可核验的变更证据。",
     "profession": "合同风险审查专家",
     "route_triggers": [
       "用户要求审查合同风险、提取关键条款或生成修改建议。"
@@ -578,6 +596,7 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
         "contract-review-expert-contract-reviewer-clause-checklist": "allow"
       }
     },
+    "permission_reason": "允许只读 Git 状态检查，以便为合同修改保留可核验的变更证据。",
     "profession": "合同风险审查专家",
     "route_triggers": [
       "用户要求审查合同风险、提取关键条款或生成修改建议。"

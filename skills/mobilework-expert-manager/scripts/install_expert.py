@@ -389,10 +389,12 @@ def commit_transaction(
     runtime_dir: Path,
     staged: dict[str, Path],
     stale: list[str],
+    required_directories: list[str] | None = None,
 ) -> None:
     backup_root = runtime_dir / f".install-backup-{uuid.uuid4().hex}"
     backups: dict[str, Path] = {}
     written: list[Path] = []
+    created_directories: list[Path] = []
     preserve_backup = False
     try:
         for relative in sorted(set([*staged, *stale])):
@@ -407,9 +409,25 @@ def commit_transaction(
             target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(source, target)
             written.append(target)
+        for relative in required_directories or []:
+            target = runtime_dir / relative
+            if target.exists():
+                if target.is_symlink() or not target.is_dir():
+                    raise FileExistsError(
+                        f"required runtime directory conflicts with an existing path: {target}"
+                    )
+                continue
+            target.mkdir(parents=True)
+            created_directories.append(target)
     except Exception as commit_error:
         recovery_errors: list[Exception] = []
         recovery_paths: list[str] = []
+        for directory in reversed(created_directories):
+            try:
+                directory.rmdir()
+            except Exception as recovery_error:
+                recovery_errors.append(recovery_error)
+                recovery_paths.append(str(directory))
         for target in reversed(written):
             try:
                 if target.exists():
@@ -591,7 +609,12 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
                     for relative in set(str(item) for item in old_files) - set(sources)
                     if not (owners.get(relative, set()) - {slug})
                 )
-        commit_transaction(runtime_dir, staged, stale)
+        commit_transaction(
+            runtime_dir,
+            staged,
+            stale,
+            required_directories=[contract.SKILLS_SUBDIR],
+        )
     except BaseException:
         if not runtime_dir_existed:
             shutil.rmtree(runtime_dir, ignore_errors=True)

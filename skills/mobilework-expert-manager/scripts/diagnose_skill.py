@@ -102,58 +102,29 @@ def diagnose_root(root: Path, result: ValidationResult) -> None:
             evidence="SKILL.md",
         )
     else:
-        frontmatter = validate_expert.parse_frontmatter(skill_md, result)
-        if frontmatter:
-            if frontmatter.get("name") != name:
-                result.error(
-                    f"SKILL.md: frontmatter name must equal skill directory {name}",
-                    code="SKILL_NAME_MISMATCH",
-                    phase="skill",
-                    path="SKILL.md",
-                    root_cause="skill-name-mismatch",
-                    evidence=name,
-                )
-            description = frontmatter.get("description")
-            if not isinstance(description, str) or not description.strip():
-                result.error(
-                    "SKILL.md: frontmatter description must be non-empty",
-                    code="SKILL_DESCRIPTION_INVALID",
-                    phase="skill",
-                    path="SKILL.md",
-                    root_cause="invalid-skill-description",
-                    evidence="",
-                )
-            elif len(description) > 1024:
-                result.error(
-                    "SKILL.md: frontmatter description must be 1024 characters or fewer",
-                    code="SKILL_DESCRIPTION_INVALID",
-                    phase="skill",
-                    path="SKILL.md",
-                    root_cause="invalid-skill-description",
-                    evidence=str(len(description)),
-                )
-            compatibility = frontmatter.get("compatibility")
-            if compatibility is not None and (
-                not isinstance(compatibility, str) or not compatibility.strip()
-            ):
-                result.error(
-                    "SKILL.md: optional frontmatter compatibility must be a non-empty string",
-                    code="SKILL_COMPATIBILITY_INVALID",
-                    phase="skill",
-                    path="SKILL.md",
-                    root_cause="invalid-skill-frontmatter",
-                    evidence="compatibility",
-                )
-            metadata = frontmatter.get("metadata")
-            if metadata is not None and not isinstance(metadata, dict):
-                result.error(
-                    "SKILL.md: optional frontmatter metadata must be a mapping",
-                    code="SKILL_METADATA_INVALID",
-                    phase="skill",
-                    path="SKILL.md",
-                    root_cause="invalid-skill-frontmatter",
-                    evidence="metadata",
-                )
+        frontmatter = validate_expert.parse_frontmatter(
+            skill_md,
+            result,
+            require_block_yaml=True,
+        )
+        if frontmatter is not None:
+            skill_contract.add_skill_markdown_issues(
+                result,
+                skill_contract.validate_skill_frontmatter(
+                    frontmatter,
+                    directory_name=name,
+                ),
+                path="SKILL.md",
+            )
+        try:
+            line_count = len(skill_md.read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeError):
+            line_count = 0
+        skill_contract.add_skill_markdown_issues(
+            result,
+            skill_contract.skill_markdown_recommendations(line_count),
+            path="SKILL.md",
+        )
 
     for current, directories, files in os.walk(root, followlinks=False):
         base = Path(current)

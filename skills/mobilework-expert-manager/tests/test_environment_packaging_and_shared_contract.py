@@ -104,7 +104,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         )
         self.assertEqual(missing["missing"], ["trusted-opencode-sidecar"])
 
-    def test_core_environment_does_not_require_pyyaml(self) -> None:
+    def test_core_environment_requires_pyyaml_for_official_frontmatter(self) -> None:
         original = importlib.util.find_spec
 
         def fake_find_spec(name: str):
@@ -114,8 +114,8 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
         with patch.object(check_environment.importlib.util, "find_spec", side_effect=fake_find_spec):
             result = check_environment.check_environment(["core"])
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["missing"], [])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["missing"], ["yaml"])
         self.assertEqual(result["hostMode"], "workspace")
 
     def test_environment_reports_mobilework_managed_output(self) -> None:
@@ -159,7 +159,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
                 self.assertFalse(result["ok"])
                 self.assertEqual(result["errors"][0]["code"], code)
 
-    def test_generator_and_validator_fall_back_without_pyyaml(self) -> None:
+    def test_generator_fails_closed_without_pyyaml(self) -> None:
         blocked_modules = self.root / "blocked-modules"
         blocked_modules.mkdir()
         (blocked_modules / "yaml.py").write_text(
@@ -192,20 +192,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             capture_output=True,
             check=False,
         )
-        self.assertEqual(created.returncode, 0, created.stderr)
-        package = output / "contract-review-expert"
-        agent = package / ".opencode" / "agents" / "contract-reviewer.md"
-        frontmatter = json.loads(agent.read_text(encoding="utf-8").split("---", 2)[1])
-        self.assertEqual(frontmatter["mode"], "primary")
-
-        validated = subprocess.run(
-            [sys.executable, str(SCRIPTS / "validate_expert.py"), str(package)],
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(validated.returncode, 0, validated.stdout + validated.stderr)
+        self.assertNotEqual(created.returncode, 0)
+        self.assertIn("PyYAML is required", created.stderr)
+        self.assertFalse((output / "contract-review-expert").exists())
 
     def test_text_scan_does_not_import_openpyxl(self) -> None:
         artifact = self.root / "summary.md"
@@ -292,7 +281,10 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             for line in frontmatter.splitlines()
             if line and not line.startswith(" ") and ":" in line
         }
-        self.assertEqual(frontmatter_keys, {"name", "description"})
+        self.assertEqual(
+            frontmatter_keys,
+            {"name", "description", "compatibility"},
+        )
         self.assertTrue((SKILL / "agents" / "openai.yaml").is_file())
         self.assertIn("<skill-root>/scripts/create_expert.py", skill_text)
         self.assertNotIn("~/.agents/skills/mobilework-expert-manager/scripts", skill_text)
@@ -353,8 +345,80 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             "Agent override > phase.autonomy > workflow.autonomy",
             "口算、目测或纯文字替代执行",
             "每个用户可直接触发、会重复使用的稳定 workflow",
+            "break-glass",
+            "记录偏离原因",
         ):
             self.assertIn(required, autonomy)
+
+    def test_todo_and_builtin_command_contracts_are_documented(self) -> None:
+        permission = (SKILL / "references" / "permission-policy-spec.md").read_text(
+            encoding="utf-8"
+        )
+        agent = (SKILL / "references" / "agent-md-spec.md").read_text(
+            encoding="utf-8"
+        )
+        runtime = (SKILL / "references" / "runtime-extensions-spec.md").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "Todo 由系统托管",
+            "`todowrite: allow`",
+            "`permission.todowrite`",
+            "`permission.todoread`",
+            "`tools.todowrite`",
+            "`tools.todoread`",
+        ):
+            self.assertIn(required, permission)
+        for required in (
+            "## Todo 与 Phase 进度",
+            "`pending`、`in_progress`、`completed`、`cancelled`",
+            "全部 acceptance",
+            "阻塞不得标记为 `completed`",
+            "自己的子任务会话中维护 Todo",
+            "不得反向修改 Workflow",
+        ):
+            self.assertIn(required, agent)
+        for required in (
+            "`/init`",
+            "`/review`",
+            "OpenCode 内置命令",
+            "不提供 override",
+            "`todowrite.ts`",
+            "`todoread.ts`",
+        ):
+            self.assertIn(required, runtime)
+
+    def test_skill_and_ui_metadata_cover_expert_contract_design_requests(self) -> None:
+        skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        openai = (SKILL / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        for marker in (
+            "自主度",
+            "Workflow",
+            "Phase",
+            "Todo",
+            "权限",
+            "custom command",
+            "设计",
+            "分析",
+            "创建",
+            "修改",
+            "诊断",
+        ):
+            self.assertIn(marker, skill_text.split("---", 2)[1])
+        self.assertIn("可选 Workflow", openai)
+        self.assertIn("动态多实例协作", openai)
+        preset_manifest_path = SKILL.parents[1] / "manifest.json"
+        if preset_manifest_path.is_file():
+            self.assertIn(
+                "设计、分析、创建、修改、诊断和校验 MobileWork 专家或专家团包",
+                preset_manifest_path.read_text(encoding="utf-8"),
+            )
+        plugin_manifest_path = SKILL.parents[1] / ".claude-plugin" / "plugin.json"
+        if plugin_manifest_path.is_file():
+            self.assertIn(
+                "Design, analyze, create, modify, diagnose, and validate",
+                plugin_manifest_path.read_text(encoding="utf-8"),
+            )
 
     def test_runtime_resource_recommendations_and_no_agents_contract_are_explicit(self) -> None:
         skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -472,9 +536,26 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             for file_name in item["files"]:
                 self.assertTrue((SKILL / file_name).is_file(), file_name)
         triggers = json.loads((SKILL / "evals" / "trigger-evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(triggers), 21)
-        self.assertEqual(sum(1 for item in triggers if item["should_trigger"]), 11)
-        self.assertEqual(sum(1 for item in triggers if not item["should_trigger"]), 10)
+        self.assertEqual(len(triggers), 33)
+        self.assertEqual(sum(1 for item in triggers if item["should_trigger"]), 19)
+        self.assertEqual(sum(1 for item in triggers if not item["should_trigger"]), 14)
+        trigger_queries = {item["query"] for item in triggers}
+        for marker in (
+            "MobileWork 专家的五档自主度",
+            "MobileWork 专家 workflow 的 Phase",
+            "MobileWork 专家团的 Todo",
+            "MobileWork expert.json 里的 custom command",
+            "没有顶层 Workflow",
+            "两种角色都能按输入动态创建多个分身",
+            "最高生效自主度",
+            "普通 OpenCode 会话里用 Todo",
+            "普通 OpenCode 项目新增 custom command",
+            "CSV 按地区动态分片",
+        ):
+            self.assertTrue(
+                any(marker in query for query in trigger_queries),
+                marker,
+            )
 
     def test_broken_fixture_reports_unique_validator_roots(self) -> None:
         fixture = SKILL / "evals" / "files" / "broken-package"

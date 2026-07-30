@@ -91,6 +91,8 @@ def check_environment(
             "actual": ".".join(str(part) for part in sys.version_info[:3]),
         }
     )
+    if "core" in features:
+        checks.append(module_status("yaml"))
     if "excel" in features:
         checks.append(module_status("openpyxl"))
     if "package" in features:

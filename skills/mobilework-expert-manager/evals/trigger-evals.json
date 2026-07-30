@@ -10,6 +10,14 @@
   {"query":"专家团里的团员权限引用了未分配给自己的 skill，按 expert.json 统一技能合同修好并重建。","should_trigger":true},
   {"query":"把我上传的完整技能 ZIP 原样放进这个 MobileWork 专家团，并分配给团长和 QA 团员。","should_trigger":true},
   {"query":"我的专家把报告写进 .opencode 了，请按 MobileWork 专家包规则修正产物目录并做便携性扫描。","should_trigger":true},
+  {"query":"分析这个 MobileWork 专家的五档自主度是否合理，并说明 fixed 的例外边界。","should_trigger":true},
+  {"query":"帮我重新设计 MobileWork 专家 workflow 的 Phase、验收标准和串并行关系。","should_trigger":true},
+  {"query":"检查 MobileWork 专家团的 Todo 进度约定，确保团长和团员不会提前完成 Phase。","should_trigger":true},
+  {"query":"MobileWork expert.json 里的 custom command 为什么和内建命令冲突？请诊断并修改。","should_trigger":true},
+  {"query":"创建一个没有顶层 Workflow 的 MobileWork 开放研究专家，保留普通 Todo 和安全默认权限。","should_trigger":true},
+  {"query":"设计一个 MobileWork 专家团 parallel Phase，让 researcher 和 reviewer 两种角色都能按输入动态创建多个分身。","should_trigger":true},
+  {"query":"分析这个 MobileWork Workflow 各 Phase 的最高生效自主度，确认它没有给低自主度角色提权。","should_trigger":true},
+  {"query":"这个专家团把团员返回和返工各写成一个 Phase，请按执行与验收边界重新设计。","should_trigger":true},
   {"query":"给普通 OpenCode 项目写一个代码审查 agent markdown，不需要 MobileWork expert.json。","should_trigger":false},
   {"query":"帮我在 opencode.json 里配置一个通用 remote MCP server，项目不是 MobileWork 专家包。","should_trigger":false},
   {"query":"写一个通用 SKILL.md，教团队使用 pytest，放在 .agents/skills 下。","should_trigger":false},
@@ -19,5 +27,9 @@
   {"query":"把 README 里的英文翻译成中文并保持 Markdown 结构。","should_trigger":false},
   {"query":"审查一个普通 OpenCode workspace 的 LSP 配置为什么没生效。","should_trigger":false},
   {"query":"设计一个多智能体协作方案，但目标平台还没定，也不需要生成 MobileWork 包。","should_trigger":false},
-  {"query":"打包一个普通 Python wheel 并检查是否包含 __pycache__。","should_trigger":false}
+  {"query":"打包一个普通 Python wheel 并检查是否包含 __pycache__。","should_trigger":false},
+  {"query":"教我在普通 OpenCode 会话里用 Todo 跟踪今天的开发任务。","should_trigger":false},
+  {"query":"给普通 OpenCode 项目新增 custom command，不涉及 MobileWork 专家包。","should_trigger":false},
+  {"query":"把一批 CSV 按地区动态分片并并行处理，不需要创建 MobileWork 专家或 expert.json。","should_trigger":false},
+  {"query":"解释 OpenCode 如何启动多个同类型 subagent，不涉及 MobileWork 专家包。","should_trigger":false}
 ]

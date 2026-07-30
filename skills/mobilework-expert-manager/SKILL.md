@@ -1,9 +1,11 @@
 ---
 name: mobilework-expert-manager
 description: >-
-  创建、转换、修改、诊断、校验、安装、打包或版本发布 MobileWork 专家与专家团时使用；
-  涵盖 expert.json、角色/Workflow、Skills、权限、MCP、运行时扩展、旧包迁移、Bundle、
+  设计、分析、创建、转换、修改、诊断、校验、安装、打包或版本发布 MobileWork 专家与专家团时使用；
+  显式覆盖 expert.json、角色、可选 Workflow、autonomy 自主度、Phase、Todo、权限 permission、
+  custom command、专家团多角色多实例 parallel、Skills、MCP、运行时扩展、旧包迁移、Bundle、
   本地 Git/SemVer 和 workspace 投影。外部 ZIP、附件或未知目录默认只做无执行静态诊断。
+compatibility: Requires Python 3.10+ and PyYAML for standards-compliant YAML frontmatter.
 ---
 
 # MobileWork 专家包管理器
@@ -55,12 +57,14 @@ JSON proposal，不自行读写路径或声称生效。
 1. 解析实际 `<skill-root>`，运行 `check_environment.py --feature core` 并读取结构化结果。
 2. 新建/结构变更先完成设计确认；已有包只从 `expert.json` 和声明资源读取事实，不从派生物反推。
 3. 新专家使用统一顶层 `skills[]`，角色用完整技能名引用；不区分通用/专用技能，不拼接自动
-   前缀，不手写 `permission.skill`。按需声明五档自主度、execution、MCP、task 和 custom tool
-   所有权；不得从职责自由文本推断能力。
+   前缀，不手写 `permission.skill`。顶层 Workflow 可省略；一旦声明，每个 Workflow 必须同时
+   声明 autonomy、至少一个 Phase 和逐 Phase acceptance。按需声明 execution、MCP、task 和
+   custom tool 所有权；不得从职责自由文本推断能力。
 4. 调用 `create_expert.py` 生成或重建。上传技能先静态诊断，再使用 `import_skill.py` 原字节写入
    `.opencode/skills/<name>/` 并分配：单专家自动分配；专家团必须指定一个或多个 Agent id，
    或选择包含团长和全部团员的 `--all-members`。`--output-dir` 只能断言宿主已解析目标；覆盖
-   另行确认 `--force`。
+   另行确认 `--force`。创建和导入都必须先通过 Agent Skills 官方 frontmatter 规范；诊断失败
+   只报告 finding，不强制转换 YAML 类型或改写上传字节。
 5. 运行 validator JSON 输出、便携性扫描和相关定向测试；失败时按 finding root cause 修复。
 6. 真实创建或修改成功后读取 `source-version-control.md`：展示累计 diff 与 SemVer 建议，并询问
    用户是否发布。未明确确认不得 commit/tag。
@@ -78,7 +82,10 @@ JSON proposal，不自行读写路径或声称生效。
 - `permission.skill` 只从角色 `skills[]` 派生。上传技能默认
   `origin: uploaded`、`edit_policy: preserved`；没有用户明确授权不得改写任何字节。
 - 显式提权需要 `permission_reason`，且不能绕过 Bash、外部目录、task、Skill、MCP 或资源硬边界。
-- 完全没有 autonomy 的旧 manifest 保持可安装兼容并报告风险 warning；一旦结构性修改就迁移。
+- unified manifest 未声明 Workflow 时使用 bounded 安全默认权限，不建立隐式 Phase；完全没有
+  autonomy 的旧 manifest 保持可安装兼容并报告风险 warning，一旦结构性修改先迁移统一技能池。
+- 专家团 `parallel` 的 `agents[]` 只列唯一且必参与的角色；团长运行时为每个角色分别创建
+  `1..N` 个独立 task 实例。实例数和分片范围不得写死在 manifest。
 
 完整矩阵只维护在 `permission-policy-spec.md`。
 
@@ -135,8 +142,9 @@ python <skill-root>/scripts/version_expert.py \
 ## 最低验收
 
 - 仓库内运行
-  `python apps/desktop/resources/presets/skills/skill-creator/scripts/quick_validate.py apps/desktop/resources/presets/skills/mobilework-expert-manager`
-  与完整 `unittest discover`；变更核心模块覆盖率达到目标。
+  `python apps/desktop/resources/presets/skills/skill-manager/scripts/quick_validate.py apps/desktop/resources/presets/skills/mobilework-expert-manager`
+  与完整 `unittest discover`；CI 使用固定提交的官方 `skills-ref` 交叉验证 manager 和生成技能，
+  生产路径只依赖内置共享校验器；变更核心模块覆盖率达到目标。
 - `expert.json`、根 `opencode.json`、Agent/Skill、权限和 Workflow 投影一致。
 - 可信包完成 generate → validate → portable scan → package → clean extract → revalidate → install；
   安装后读回 `.opencode/opencode.jsonc`、资源和 receipt。
