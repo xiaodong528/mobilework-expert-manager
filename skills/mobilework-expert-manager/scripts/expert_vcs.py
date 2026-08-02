@@ -186,7 +186,14 @@ def classify_change(previous: dict[str, Any] | None, current: dict[str, Any]) ->
     if any(previous.get(key) != current.get(key) for key in structural_keys):
         return "minor", "capability or owned resource contract changed; user review is required"
     previous_roles = {role.get("id"): role for role in _roles(previous)}
-    ownership_keys = ("permission", "custom_tools", "mcp", "skills")
+    ownership_keys = (
+        "permission",
+        "custom_tools",
+        "mcp",
+        "skills",
+        "references",
+        "instructions",
+    )
     if any(
         any(
             role.get(key) != previous_roles.get(role.get("id"), {}).get(key)

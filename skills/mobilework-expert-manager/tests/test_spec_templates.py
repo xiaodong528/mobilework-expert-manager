@@ -30,27 +30,27 @@ EXPECTED = {
     "expert-agent": (
         "agent-md-spec.md",
         "markdown",
-        "33aeecb2245b541a84bd8d0101be54c3fa39a8bf348961c98d1298f4b2099d00",
+        "6dde493ba0faaa7937934db36e8f653f5305320f4e4014fa5d744eb3b5ad20d2",
     ),
     "expert-json": (
         "expert-json-spec.md",
         "json",
-        "bd3eef1ec322de6febff188d4081120abf49ca9113aeebd53e48cb34116ca621",
+        "e7f3f6d42e972a9ddcfd4c80193eb68e7d42fbb2e451c3a7564e741603692300",
     ),
     "legacy-expert-json": (
         "expert-json-spec.md",
         "json",
-        "e05cfb867b8d4df18de7dbb92579373babdde67b43ec2956bd92fea4af84dcc9",
+        "9dbbffcd33352e6786bd0c5476d287743413c5007fcd3165bad36c4fc367e10e",
     ),
     "primary-agent": (
         "agent-md-spec.md",
         "markdown",
-        "fdc6fe683a018e9c7467beb0ff38673242afdc9d9e0f2f5ea3cf56a0e59c2bc3",
+        "54c73f69127e3f1719ddb6f39f3934c79ad5b9b4924f2baca4ea83d3262d4a3c",
     ),
     "readme": (
         "package-docs-spec.md",
         "markdown",
-        "d80ed2cf0d004ef220835eaa55f5a99bcdbee0a28d23604d6365ac49a38320d9",
+        "64eb54a7d23a7a9d2250f7a612a9465dac15712def3ff82c9bac63a6e3d98c43",
     ),
     "role-skill": (
         "skill-md-spec.md",
@@ -60,7 +60,7 @@ EXPECTED = {
     "subagent": (
         "agent-md-spec.md",
         "markdown",
-        "d416cb8ed1a99eef10d0f11e133bd114aa7ff3c0f0d8722717ce418ba4972575",
+        "2bf6a3c5d9981edc6911430e2d6cf042e4c4da47075b8ba4eca2706ae455e579",
     ),
 }
 

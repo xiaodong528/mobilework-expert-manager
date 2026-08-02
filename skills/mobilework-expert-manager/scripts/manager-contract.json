@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "contractVersion": "2.0.0",
+  "contractVersion": "2.1.0",
   "findingCatalogVersion": 2,
   "evidenceSchemaVersion": 2,
   "packageConfigFile": "opencode.json",

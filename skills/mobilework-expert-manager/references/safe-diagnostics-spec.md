@@ -17,6 +17,14 @@
 读取、secret 和便携性扫描、manifest/投影/hash 对比。Python 语法检查只读取文本并调用
 `ast.parse`，不得 import。
 
+`import_reference.py` 同样遵守零执行：本地目录中的 Python、Shell、JS/TS 只会作为 UTF-8 文本
+读取，绝不运行。DOCX 先做 ZIP metadata、路径、大小、压缩比和 CRC 检查，再只读
+`word/document.xml`；存在宏、嵌入对象或外部链接时拒绝。PDF、图片和其他无法由当前依赖安全
+转换的二进制即使伪装成文本扩展名，也会按文件 magic 返回 `conversion-required`，不会原样塞进
+Reference。本地文件和目录复用 `manager-contract.json` 的条目数、单项大小、总大小、路径长度和
+路径深度限制；symlink、FIFO 等非普通文件直接拒绝。只有用户确认来源、使用角色和复制动作并
+显式传 `--confirm` 后，才原子重建专家包。
+
 ```bash
 python scripts/diagnose_expert.py <package-dir-or-zip> --format human
 python scripts/diagnose_expert.py <package-dir-or-zip> --format json

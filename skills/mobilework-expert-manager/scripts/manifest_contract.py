@@ -119,9 +119,92 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
             for name in role_mcp:
                 if isinstance(name, str) and name not in mcp_names:
                     issues.append(ManifestIssue(f"{field}.mcp", f"references unknown MCP server {name}"))
+        for resource_field in ("references", "instructions"):
+            if resource_field not in role:
+                continue
+            try:
+                package_contract.normalize_role_aliases(
+                    role.get(resource_field),
+                    f"{field}.{resource_field}",
+                )
+            except package_contract.ContractError as exc:
+                issue_field, separator, message = str(exc).partition(": ")
+                issues.append(
+                    ManifestIssue(
+                        issue_field if separator else f"{field}.{resource_field}",
+                        message if separator else issue_field,
+                    )
+                )
 
     if len(role_ids) != len(set(role_ids)):
         issues.append(ManifestIssue("roles", "agent ids must be unique"))
+
+    runtime_extensions = manifest.get("runtime_extensions")
+    runtime_extensions = runtime_extensions if isinstance(runtime_extensions, dict) else {}
+    references = runtime_extensions.get("references")
+    reference_aliases = set(references) if isinstance(references, dict) else set()
+    role_instructions = runtime_extensions.get("role_instructions")
+    instruction_aliases = set(role_instructions) if isinstance(role_instructions, dict) else set()
+
+    explicit_reference_roles = [field for field, role in roles if "references" in role]
+    if explicit_reference_roles:
+        consumed_references: set[str] = set()
+        for field, role in roles:
+            if "references" not in role:
+                issues.append(ManifestIssue(f"{field}.references", "is required in explicit binding mode"))
+                continue
+            try:
+                values = package_contract.normalize_role_aliases(
+                    role.get("references"), f"{field}.references"
+                )
+            except package_contract.ContractError:
+                continue
+            consumed_references.update(values)
+            for alias in values:
+                if alias not in reference_aliases:
+                    issues.append(
+                        ManifestIssue(f"{field}.references", f"references unknown Reference {alias}")
+                    )
+        for alias in sorted(reference_aliases - consumed_references):
+            issues.append(
+                ManifestIssue(
+                    f"runtime_extensions.references.{alias}",
+                    "must be assigned to at least one role",
+                )
+            )
+
+    if instruction_aliases:
+        consumed_instructions: set[str] = set()
+        for field, role in roles:
+            if "instructions" not in role:
+                issues.append(ManifestIssue(f"{field}.instructions", "is required when role rules exist"))
+                continue
+            try:
+                values = package_contract.normalize_role_aliases(
+                    role.get("instructions"), f"{field}.instructions"
+                )
+            except package_contract.ContractError:
+                continue
+            consumed_instructions.update(values)
+            for alias in values:
+                if alias not in instruction_aliases:
+                    issues.append(
+                        ManifestIssue(f"{field}.instructions", f"references unknown role rule {alias}")
+                    )
+        for alias in sorted(instruction_aliases - consumed_instructions):
+            issues.append(
+                ManifestIssue(
+                    f"runtime_extensions.role_instructions.{alias}",
+                    "must be assigned to at least one role",
+                )
+            )
+    else:
+        for field, role in roles:
+            values = role.get("instructions")
+            if isinstance(values, list) and values:
+                issues.append(
+                    ManifestIssue(f"{field}.instructions", "requires runtime_extensions.role_instructions")
+                )
     try:
         skill_contract.validate_manifest_skills(manifest)
     except package_contract.ContractError as exc:

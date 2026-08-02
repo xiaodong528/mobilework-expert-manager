@@ -17,6 +17,18 @@
 生效目标版本一致时可作为显式能力证据。机器可读事实源是
 `scripts/manager-contract.json`，不得在 SKILL、reference、测试或 eval 中维护固定版本副本。
 
+当前管理器合同为 `2.1.0`。旧专家包仍可诊断、校验和安装；缺少角色 Reference 绑定时给兼容
+warning。结构性修改前先生成迁移预览，让用户确认每项 Reference 的使用角色，以及既有 workspace
+Instruction 是否仍应全局生效。不得静默把全局规则改成角色规则。
+
+Reference 能力只看已核实的 host contract：
+
+- `references=true` 时使用原生 local/Git 投影；
+- 能力不支持或未知时，local Reference 在安装阶段降级为角色专属派生 Skill；
+- 能力不支持或未知时，Git Reference 在写 workspace 前返回 `capability-missing`。
+
+不能根据 OpenCode 版本号猜测 Reference 能力。Git 异步 materialize 成功属于独立 Runtime 证据。
+
 ## 配置边界
 
 专家包配置始终位于 `<package>/opencode.json`；包内 `.opencode/**` 只保存文件型运行资源。

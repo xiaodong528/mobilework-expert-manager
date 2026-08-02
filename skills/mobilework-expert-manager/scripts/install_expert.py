@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a validated MobileWork expert package into workspace .opencode."""
+"""Install or safely uninstall a MobileWork expert package in workspace .opencode."""
 
 from __future__ import annotations
 
@@ -19,7 +19,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import package_contract as contract
+import manager_contract
+import manifest_contract
 import provenance
+import renderers
 import validate_expert
 
 
@@ -59,16 +62,49 @@ def receipt_path(runtime_dir: Path, slug: str) -> Path:
     return runtime_dir / contract.INSTALL_RECEIPT_DIR / f"{slug}.json"
 
 
+def validate_receipt(path: Path, data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    slug = data.get("slug")
+    if not isinstance(slug, str) or not contract.NAME_RE.fullmatch(slug):
+        fail(f"invalid install receipt {path.name}: slug must be lowercase kebab-case")
+    if path.stem != slug:
+        fail(f"invalid install receipt {path.name}: filename must match slug {slug}")
+    if data.get("contract") not in {1, 2}:
+        fail(f"invalid install receipt {path.name}: unsupported contract")
+    files = data.get("files")
+    if not isinstance(files, dict):
+        fail(f"invalid install receipt {path.name}: files must be an object")
+    for relative, digest in files.items():
+        try:
+            normalized = contract.posix_relative_path(
+                relative,
+                f"receipt {path.name}.files",
+            )
+        except contract.ContractError as exc:
+            fail(f"invalid install receipt {path.name}: {exc}")
+        if normalized != relative or normalized.split("/", 1)[0] not in contract.RUNTIME_DIRS:
+            fail(
+                f"invalid install receipt {path.name}: file must stay in a managed runtime directory: "
+                f"{relative}"
+            )
+        if not isinstance(digest, str) or not contract.SHA256_RE.fullmatch(digest):
+            fail(f"invalid install receipt {path.name}: files.{relative} must be a SHA-256 hash")
+    if not isinstance(data.get("config_values", {}), dict):
+        fail(f"invalid install receipt {path.name}: config_values must be an object")
+    if not isinstance(data.get("dependencies", {}), dict):
+        fail(f"invalid install receipt {path.name}: dependencies must be an object")
+    return slug, data
+
+
 def load_receipts(runtime_dir: Path) -> dict[str, dict[str, Any]]:
     root = runtime_dir / contract.INSTALL_RECEIPT_DIR
     if not root.is_dir():
         return {}
     result: dict[str, dict[str, Any]] = {}
     for path in sorted(root.glob("*.json")):
-        data = load_json(path)
-        slug = data.get("slug")
-        if isinstance(slug, str):
-            result[slug] = data
+        slug, data = validate_receipt(path, load_json(path))
+        if slug in result:
+            fail(f"duplicate install receipts for {slug}")
+        result[slug] = data
     return result
 
 
@@ -106,6 +142,8 @@ def list_owners(
 ) -> set[str]:
     owners: set[str] = set()
     for slug, receipt in receipts.items():
+        if receipt.get("contract") != 2:
+            continue
         values = receipt.get("config_values", {})
         if not isinstance(values, dict):
             continue
@@ -122,6 +160,8 @@ def dependency_owners(
 ) -> set[str]:
     owners: set[str] = set()
     for slug, receipt in receipts.items():
+        if receipt.get("contract") != 2:
+            continue
         dependencies = receipt.get("dependencies", {})
         if not isinstance(dependencies, dict):
             continue
@@ -163,7 +203,13 @@ def merge_mapping(
     return recorded
 
 
-def merge_list(config: dict[str, Any], section: str, incoming: Any) -> list[str]:
+def merge_list(
+    config: dict[str, Any],
+    section: str,
+    incoming: Any,
+    *,
+    receipts: dict[str, dict[str, Any]],
+) -> list[str]:
     if incoming is None:
         return []
     if not isinstance(incoming, list) or not all(isinstance(item, str) for item in incoming):
@@ -171,10 +217,15 @@ def merge_list(config: dict[str, Any], section: str, incoming: Any) -> list[str]
     current = config.setdefault(section, [])
     if not isinstance(current, list):
         fail(f"workspace {contract.WORKSPACE_CONFIG}.{section} must be a list")
+    recorded: list[str] = []
     for item in incoming:
         if item not in current:
             current.append(item)
-    return list(incoming)
+            recorded.append(item)
+            continue
+        if list_owners(receipts, section, item):
+            recorded.append(item)
+    return recorded
 
 
 def prune_owned_config(
@@ -203,7 +254,10 @@ def prune_owned_config(
             if key in incoming_keys:
                 continue
             if not isinstance(current_section, dict) or key not in current_section:
-                continue
+                fail(
+                    f"cannot remove missing owned config {section}.{key}; "
+                    "workspace value drifted from receipt"
+                )
             if current_section[key] != old_value:
                 fail(f"cannot remove changed owned config {section}.{key}; workspace value drifted from receipt")
             if config_owners(receipts, section, str(key)) - {slug}:
@@ -214,11 +268,15 @@ def prune_owned_config(
 
     old_scalar = old_values.get("__scalar__", {})
     if isinstance(old_scalar, dict) and "lsp" in old_scalar and not isinstance(runtime.get("lsp"), bool):
-        if "lsp" in config:
-            if config["lsp"] != old_scalar["lsp"]:
-                fail("cannot remove changed owned config lsp; workspace value drifted from receipt")
-            if not (config_owners(receipts, "__scalar__", "lsp") - {slug}):
-                config.pop("lsp")
+        if "lsp" not in config:
+            fail("cannot remove missing owned config lsp; workspace value drifted from receipt")
+        if config["lsp"] != old_scalar["lsp"]:
+            fail("cannot remove changed owned config lsp; workspace value drifted from receipt")
+        if not (config_owners(receipts, "__scalar__", "lsp") - {slug}):
+            config.pop("lsp")
+
+    if own_receipt.get("contract") != 2:
+        return
 
     for section in ["plugin", "instructions"]:
         old_items = old_values.get(section, [])
@@ -226,14 +284,27 @@ def prune_owned_config(
             continue
         incoming_items = runtime.get(section)
         incoming_set = set(incoming_items) if isinstance(incoming_items, list) else set()
+        removable = [
+            item
+            for item in old_items
+            if isinstance(item, str) and item not in incoming_set
+        ]
+        if not removable:
+            continue
         current_items = config.get(section)
         if current_items is None:
-            continue
+            fail(
+                f"cannot remove missing owned config {section}; "
+                "workspace value drifted from receipt"
+            )
         if not isinstance(current_items, list):
             fail(f"workspace {contract.WORKSPACE_CONFIG}.{section} must be a list")
-        for item in old_items:
-            if not isinstance(item, str) or item in incoming_set:
-                continue
+        for item in removable:
+            if item not in current_items:
+                fail(
+                    f"cannot remove missing owned config {section} entry {item}; "
+                    "workspace value drifted from receipt"
+                )
             if list_owners(receipts, section, item) - {slug}:
                 continue
             current_items[:] = [value for value in current_items if value != item]
@@ -255,6 +326,8 @@ def prune_owned_dependencies(
     old_dependencies = own_receipt.get("dependencies", {})
     if not isinstance(old_dependencies, dict):
         fail(f"receipt for {slug} has invalid dependencies")
+    if own_receipt.get("contract") != 2:
+        return
     for section in ["dependencies", "devDependencies"]:
         old_section = old_dependencies.get(section, {})
         if not isinstance(old_section, dict):
@@ -262,13 +335,24 @@ def prune_owned_dependencies(
         incoming_section = incoming.get(section, {})
         incoming_names = set(incoming_section) if isinstance(incoming_section, dict) else set()
         current = package_json.get(section)
-        if current is None:
+        removable_names = [name for name in old_section if name not in incoming_names]
+        if not removable_names:
             continue
+        if current is None:
+            fail(
+                f"cannot remove missing owned dependency section {section}; "
+                "workspace value drifted from receipt"
+            )
         if not isinstance(current, dict):
             fail(f"workspace package.json.{section} must be an object")
         for name, old_version in old_section.items():
-            if name in incoming_names or name not in current:
+            if name in incoming_names:
                 continue
+            if name not in current:
+                fail(
+                    f"cannot remove missing owned dependency {section}.{name}; "
+                    "workspace value drifted from receipt"
+                )
             if current[name] != old_version:
                 fail(f"cannot remove changed owned dependency {section}.{name}; version drifted from receipt")
             if dependency_owners(receipts, section, str(name)) - {slug}:
@@ -358,8 +442,9 @@ def merge_package_json(
                         f"{section}.{name} conflicts with the existing dependency group "
                         f"{other_section}"
                     )
-            if name in current and current[name] != version:
-                owners = dependency_owners(receipts, section, name)
+            existing = name in current
+            owners = dependency_owners(receipts, section, name) if existing else set()
+            if existing and current[name] != version:
                 other_owners = owners - {slug}
                 if other_owners:
                     fail(
@@ -371,18 +456,162 @@ def merge_package_json(
                 if not force:
                     fail(f"{section}.{name} can only be upgraded by the same slug with --force")
             current[name] = version
-            recorded[section][name] = version
+            if not existing or owners:
+                recorded[section][name] = version
     return recorded
 
 
-def copy_sources(package_runtime: Path) -> dict[str, Path]:
-    sources: dict[str, Path] = {}
+def copy_sources(package_runtime: Path) -> dict[str, Path | bytes]:
+    sources: dict[str, Path | bytes] = {}
     for path in sorted(package_runtime.rglob("*")):
-        if not path.is_file() or path.name == "package.json":
+        if not path.is_file():
             continue
         relative = path.relative_to(package_runtime).as_posix()
+        if relative == "package.json":
+            continue
         sources[relative] = path
     return sources
+
+
+def role_reference_consumers(manifest: dict[str, Any]) -> dict[str, list[str]]:
+    runtime_extensions = manifest.get("runtime_extensions", {})
+    references = runtime_extensions.get("references", {}) if isinstance(runtime_extensions, dict) else {}
+    aliases = list(references) if isinstance(references, dict) else []
+    roles = manifest_contract.manifest_roles(manifest)
+    explicit = any("references" in role for _field, role in roles)
+    consumers = {alias: [] for alias in aliases}
+    for _field, role in roles:
+        role_id = role.get("id")
+        if not isinstance(role_id, str):
+            continue
+        role_aliases = role.get("references", []) if explicit else aliases
+        if not isinstance(role_aliases, list):
+            continue
+        for alias in role_aliases:
+            if alias in consumers:
+                consumers[alias].append(role_id)
+    return consumers
+
+
+def receipt_bindings(manifest: dict[str, Any]) -> dict[str, Any]:
+    slug = str(manifest.get("slug", ""))
+    references = {
+        contract.namespaced_reference_alias(slug, alias): role_ids
+        for alias, role_ids in role_reference_consumers(manifest).items()
+        if role_ids
+    }
+    role_instruction_bindings: dict[str, list[str]] = {}
+    for _field, role in manifest_contract.manifest_roles(manifest):
+        role_id = role.get("id")
+        aliases = role.get("instructions", [])
+        if not isinstance(role_id, str) or not isinstance(aliases, list):
+            continue
+        for alias in aliases:
+            if isinstance(alias, str):
+                role_instruction_bindings.setdefault(alias, []).append(role_id)
+    result: dict[str, Any] = {}
+    if references:
+        result["references"] = references
+    if role_instruction_bindings:
+        result["roleInstructions"] = role_instruction_bindings
+    return result
+
+
+def target_supports_references(target: manager_contract.TargetContract) -> bool:
+    return target.capability_verified and target.capabilities.get("references") is True
+
+
+def render_reference_fallback_skill(
+    manifest: dict[str, Any],
+    alias: str,
+    entry: dict[str, Any],
+    consumers: list[str],
+) -> tuple[str, bytes]:
+    slug = str(manifest["slug"])
+    name = contract.reference_fallback_skill_name(slug, alias)
+    description = entry.get("description") or "在任务需要时查阅本专家包随附资料。"
+    relative_reference = entry["path"]
+    body = "\n".join(
+        [
+            f"# {alias} 本地资料兼容入口",
+            "",
+            "目标 Runtime 没有原生 Reference 能力时使用本能力包。",
+            f"只读查阅 `{relative_reference}`，使用时机：{description}",
+            f"分配角色：{', '.join(f'`{item}`' for item in consumers)}。",
+            "这项分配用于行为路由，不是文件系统访问隔离。不要执行资料目录中的代码或安装命令。",
+        ]
+    )
+    rendered = renderers.render_frontmatter(
+        {
+            "name": name,
+            "description": f"原生 Reference 不可用时，让已分配角色只读查阅 `{alias}` 资料。",
+            "compatibility": "opencode",
+            "metadata": {
+                "package": slug,
+                "reference": alias,
+                "type": "reference-fallback",
+            },
+        },
+        body,
+    )
+    return f"{contract.SKILLS_SUBDIR}/{name}/SKILL.md", rendered.encode("utf-8")
+
+
+def apply_reference_capability(
+    manifest: dict[str, Any],
+    runtime: dict[str, Any],
+    sources: dict[str, Path | bytes],
+    target: manager_contract.TargetContract,
+) -> list[str]:
+    runtime_extensions = manifest.get("runtime_extensions", {})
+    references = runtime_extensions.get("references", {}) if isinstance(runtime_extensions, dict) else {}
+    if not isinstance(references, dict) or not references or target_supports_references(target):
+        return []
+
+    git_aliases = sorted(
+        alias
+        for alias, entry in references.items()
+        if isinstance(entry, dict) and "repository" in entry
+    )
+    if git_aliases:
+        fail(
+            "capability-missing: target Runtime has no verified Reference support for Git aliases "
+            + ", ".join(git_aliases)
+            + "; provide a trusted local checkout and import it as a local Reference"
+        )
+
+    runtime.pop("references", None)
+    consumers = role_reference_consumers(manifest)
+    generated: list[str] = []
+    agents = runtime.get("agent")
+    if not isinstance(agents, dict):
+        fail("package opencode.json.agent must be an object")
+    for alias, entry in references.items():
+        if not isinstance(entry, dict) or "path" not in entry:
+            continue
+        path, content = render_reference_fallback_skill(
+            manifest,
+            alias,
+            entry,
+            consumers.get(alias, []),
+        )
+        if path in sources:
+            fail(f"derived Reference fallback conflicts with package file {path}")
+        sources[path] = content
+        fallback_name = contract.reference_fallback_skill_name(str(manifest["slug"]), alias)
+        generated.append(fallback_name)
+        for role_id in consumers.get(alias, []):
+            agent = agents.get(role_id)
+            if not isinstance(agent, dict):
+                fail(f"Reference consumer {role_id} is missing from package runtime config")
+            permission = agent.get("permission")
+            if not isinstance(permission, dict):
+                fail(f"Reference consumer {role_id} has invalid permission config")
+            skill_permission = permission.setdefault("skill", {"*": "deny"})
+            if not isinstance(skill_permission, dict):
+                fail(f"Reference consumer {role_id} has invalid permission.skill config")
+            skill_permission[fallback_name] = "allow"
+    return generated
 
 
 def commit_transaction(
@@ -391,6 +620,32 @@ def commit_transaction(
     stale: list[str],
     required_directories: list[str] | None = None,
 ) -> None:
+    runtime_root = runtime_dir.resolve()
+    normalized_staged: dict[str, Path] = {}
+    normalized_stale: list[str] = []
+    for label, values in (("staged", staged), ("stale", stale)):
+        items = values.items() if isinstance(values, dict) else ((item, None) for item in values)
+        for relative, source in items:
+            try:
+                normalized = contract.posix_relative_path(
+                    relative,
+                    f"install transaction {label} path",
+                )
+            except contract.ContractError as exc:
+                fail(str(exc))
+            target = (runtime_dir / normalized).resolve()
+            if not target.is_relative_to(runtime_root):
+                fail(f"install transaction {label} path escapes runtime directory: {relative}")
+            if label == "staged":
+                if normalized in normalized_staged:
+                    fail(f"install transaction duplicates staged path: {normalized}")
+                if source is None:
+                    fail(f"install transaction staged source is missing: {normalized}")
+                normalized_staged[normalized] = source
+            else:
+                normalized_stale.append(normalized)
+    staged = normalized_staged
+    stale = normalized_stale
     backup_root = runtime_dir / f".install-backup-{uuid.uuid4().hex}"
     backups: dict[str, Path] = {}
     written: list[Path] = []
@@ -458,7 +713,13 @@ def commit_transaction(
             shutil.rmtree(backup_root, ignore_errors=True)
 
 
-def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> dict[str, Any]:
+def install_package(
+    package_dir: Path,
+    workspace_dir: Path,
+    *,
+    force: bool,
+    target: manager_contract.TargetContract | None = None,
+) -> dict[str, Any]:
     package_dir = package_dir.expanduser().absolute()
     if package_dir.is_symlink():
         fail(f"package directory must not be a symlink: {package_dir}")
@@ -469,7 +730,8 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
     if not workspace_dir.is_dir():
         fail(f"workspace directory does not exist: {workspace_dir}")
 
-    validation = validate_expert.validate_package(package_dir)
+    resolved_target = target or manager_contract.resolve_target(env={})
+    validation = validate_expert.validate_package(package_dir, target=resolved_target)
     if not validation.ok:
         fail("package validation failed: " + "; ".join(validation.errors[:8]))
     manifest = load_json(package_dir / validate_expert.MANIFEST_FILE)
@@ -496,10 +758,20 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
 
     package_runtime = package_dir / contract.PACKAGE_RUNTIME_DIR
     sources = copy_sources(package_runtime)
+    reference_fallbacks = apply_reference_capability(
+        manifest,
+        runtime,
+        sources,
+        resolved_target,
+    )
     file_hashes: dict[str, str] = {}
     for relative, source in sources.items():
         target = runtime_dir / relative
-        file_hashes[relative] = contract.sha256_file(source)
+        file_hashes[relative] = (
+            contract.sha256_file(source)
+            if isinstance(source, Path)
+            else contract.sha256_bytes(source)
+        )
         if target.is_symlink():
             fail(f"workspace target must not be a symlink: {target}")
         if not target.exists():
@@ -540,7 +812,12 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
         if values:
             config_values[section] = values
     for section in ["plugin", "instructions"]:
-        values = merge_list(config, section, runtime.get(section))
+        values = merge_list(
+            config,
+            section,
+            runtime.get(section),
+            receipts=receipts,
+        )
         if values:
             config_values[section] = values
     lsp = merge_lsp(config, runtime.get("lsp"), slug=slug, force=force, receipts=receipts)
@@ -577,7 +854,10 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
         for relative, source in sources.items():
             target = staging_root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            if isinstance(source, Path):
+                shutil.copy2(source, target)
+            else:
+                target.write_bytes(source)
             staged[relative] = target
         staged_config = staging_root / contract.WORKSPACE_CONFIG
         staged_config.write_text(contract.dump_json(config), encoding="utf-8")
@@ -588,12 +868,15 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
             staged["package.json"] = staged_package_json
 
         receipt = {
-            "contract": 1,
+            "contract": 2,
             "slug": slug,
             "files": file_hashes,
             "config_values": config_values,
             "dependencies": dependencies,
         }
+        bindings = receipt_bindings(manifest)
+        if bindings:
+            receipt["bindings"] = bindings
         receipt_relative = f"{contract.INSTALL_RECEIPT_DIR}/{slug}.json"
         staged_receipt = staging_root / receipt_relative
         staged_receipt.parent.mkdir(parents=True, exist_ok=True)
@@ -623,7 +906,7 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
         shutil.rmtree(staging_root, ignore_errors=True)
 
     receipt_file = receipt_path(runtime_dir, slug)
-    evidence = provenance.collect(input_path=package_dir)
+    evidence = provenance.collect(input_path=package_dir, target=resolved_target)
     evidence.update({
         "temporaryInstallTarget": str(workspace_dir),
         "receipt": {
@@ -655,23 +938,144 @@ def install_package(package_dir: Path, workspace_dir: Path, *, force: bool) -> d
         "config": str(config_path),
         "files": sorted(file_hashes),
         "references": sorted((runtime.get("references") or {}).keys()),
+        "reference_fallbacks": sorted(reference_fallbacks),
         "instructions": runtime.get("instructions") or [],
         "required_environment": contract.extract_env_references(runtime),
         "receipt": str(receipt_file),
     }
 
 
+def uninstall_package(workspace_dir: Path, slug: str) -> dict[str, Any]:
+    """Remove one receipt-owned expert without touching drifted or shared state."""
+
+    if not contract.NAME_RE.fullmatch(slug):
+        fail("--uninstall must be a lowercase kebab-case expert slug")
+    workspace_dir = workspace_dir.expanduser().resolve()
+    if not workspace_dir.is_dir():
+        fail(f"workspace directory does not exist: {workspace_dir}")
+    runtime_dir = workspace_dir / contract.WORKSPACE_RUNTIME_DIR
+    if runtime_dir.is_symlink() or not runtime_dir.is_dir():
+        fail(f"workspace runtime directory does not exist safely: {runtime_dir}")
+    try:
+        contract.assert_no_symlinks(runtime_dir)
+    except contract.ContractError as exc:
+        fail(f"workspace runtime contains an unsafe symlink: {exc}")
+
+    receipts = load_receipts(runtime_dir)
+    own_receipt = receipts.get(slug)
+    if own_receipt is None:
+        fail(f"{slug} has no install receipt in this workspace")
+    owners = file_owners(receipts)
+    files = own_receipt.get("files", {})
+    if not isinstance(files, dict):
+        fail(f"receipt for {slug} has invalid files")
+    stale: list[str] = []
+    for relative, expected_hash in files.items():
+        if not isinstance(relative, str) or not isinstance(expected_hash, str):
+            fail(f"receipt for {slug} has invalid file ownership")
+        if owners.get(relative, set()) - {slug}:
+            continue
+        target = runtime_dir / relative
+        if target.is_symlink():
+            fail(f"cannot uninstall symlinked owned file: {relative}")
+        if not target.exists():
+            fail(f"cannot uninstall missing owned file: {relative}")
+        if not target.is_file():
+            fail(f"cannot uninstall non-file owned path: {relative}")
+        if contract.sha256_file(target) != expected_hash:
+            fail(f"cannot uninstall changed owned file: {relative}")
+        stale.append(relative)
+
+    config_path = runtime_dir / contract.WORKSPACE_CONFIG
+    config = load_jsonc(config_path)
+    prune_owned_config(
+        config,
+        {},
+        slug=slug,
+        own_receipt=own_receipt,
+        receipts=receipts,
+        force=True,
+    )
+    package_json_path = runtime_dir / "package.json"
+    package_json = load_json(package_json_path) if package_json_path.exists() else {}
+    prune_owned_dependencies(
+        package_json,
+        {},
+        slug=slug,
+        own_receipt=own_receipt,
+        receipts=receipts,
+        force=True,
+    )
+
+    staging_root = Path(tempfile.mkdtemp(prefix=f".{slug}.uninstall-", dir=runtime_dir))
+    staged: dict[str, Path] = {}
+    try:
+        staged_config = staging_root / contract.WORKSPACE_CONFIG
+        staged_config.parent.mkdir(parents=True, exist_ok=True)
+        staged_config.write_text(contract.dump_json(config), encoding="utf-8")
+        staged[contract.WORKSPACE_CONFIG] = staged_config
+        if package_json_path.exists():
+            staged_package_json = staging_root / "package.json"
+            staged_package_json.write_text(
+                contract.dump_json(package_json), encoding="utf-8"
+            )
+            staged["package.json"] = staged_package_json
+        receipt_relative = f"{contract.INSTALL_RECEIPT_DIR}/{slug}.json"
+        stale.append(receipt_relative)
+        commit_transaction(runtime_dir, staged, stale)
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
+
+    if receipt_path(runtime_dir, slug).exists():
+        fail(f"uninstall readback failed; receipt remains for {slug}")
+    for relative in files:
+        if owners.get(str(relative), set()) - {slug}:
+            continue
+        if (runtime_dir / str(relative)).exists():
+            fail(f"uninstall readback failed; owned file remains: {relative}")
+    return {
+        "ok": True,
+        "schemaVersion": 2,
+        "status": "uninstalled",
+        "runtime_status": "runtime-not-tested",
+        "workspace": str(workspace_dir),
+        "slug": slug,
+        "removed_files": sorted(files),
+        "receipt": "removed",
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package-dir", required=True, type=Path, help="Generated expert package directory")
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--package-dir", type=Path, help="Generated expert package directory")
+    operation.add_argument("--uninstall", metavar="SLUG", help="Remove resources owned by an installed expert receipt")
     parser.add_argument("--workspace-dir", required=True, type=Path, help="Target MobileWork workspace directory")
     parser.add_argument("--force", action="store_true", help="Upgrade resources owned by the same expert slug")
+    parser.add_argument("--target-opencode-version")
+    parser.add_argument("--host-contract", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    result = install_package(args.package_dir, args.workspace_dir, force=args.force)
+    if args.uninstall:
+        result = uninstall_package(args.workspace_dir, args.uninstall)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    try:
+        target = manager_contract.resolve_target(
+            cli_version=args.target_opencode_version,
+            host_contract=args.host_contract,
+        )
+    except manager_contract.ManagerContractError as exc:
+        fail(f"manager-version-contract: {exc}")
+    result = install_package(
+        args.package_dir,
+        args.workspace_dir,
+        force=args.force,
+        target=target,
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

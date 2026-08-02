@@ -19,7 +19,7 @@ import manager_contract
 class ManagerContractTests(unittest.TestCase):
     def test_policy_has_no_fixed_opencode_version(self) -> None:
         policy = manager_contract.load_policy()
-        self.assertEqual(policy["contractVersion"], "2.0.0")
+        self.assertEqual(policy["contractVersion"], "2.1.0")
         self.assertNotIn("targetOpenCodeVersion", policy)
         text = (SCRIPT_DIR / "manager-contract.json").read_text(encoding="utf-8")
         self.assertNotIn("1.18.3", text)

@@ -1,7 +1,7 @@
 # MobileWork 运行时扩展规范
 
-当专家包需要 commands、custom tools、plugins、references、workspace 全局 instructions、LSP、
-MCP 或环境变量时读取本文件。所有配置都从 `expert.json` 派生到 `opencode.json` 与 `.opencode/`；
+当专家包需要 commands、custom tools、plugins、references、角色规则、workspace 全局 instructions、
+LSP、MCP 或环境变量时读取本文件。所有配置都从 `expert.json` 派生到 `opencode.json` 与 `.opencode/`；
 不要直接编辑派生配置来掩盖上游 manifest 问题。
 
 `opencode.json` 的官方 schema、包级支持字段和 workspace/user 配置边界见
@@ -35,6 +35,7 @@ MCP 或环境变量时读取本文件。所有配置都从 `expert.json` 派生�
     ├── plugins/
     ├── references/<slug>/<alias>/
     ├── instructions/<slug>/
+    │   └── roles/
     └── package.json
 ```
 
@@ -105,11 +106,21 @@ MCP 或环境变量时读取本文件。所有配置都从 `expert.json` 派生�
       {
         "path": ".opencode/instructions/contract-review-expert/evidence.md",
         "content": "# Evidence rules\n"
+      },
+      {
+        "path": ".opencode/instructions/contract-review-expert/roles/evidence-policy.md",
+        "content": "# Evidence policy\n\nCite the source for every finding.\n"
       }
     ],
     "instructions": [
       ".opencode/instructions/contract-review-expert/*.md"
     ],
+    "role_instructions": {
+      "evidence-policy": {
+        "path": ".opencode/instructions/contract-review-expert/roles/evidence-policy.md",
+        "description": "引用审查证据时必须标明来源"
+      }
+    },
     "lsp": {
       "custom-lsp": {
         "command": ["custom-lsp-server", "--stdio"],
@@ -143,6 +154,27 @@ MCP 或环境变量时读取本文件。所有配置都从 `expert.json` 派生�
       "enabled": false
     }
   ]
+}
+```
+
+角色规则还要显式分配给角色。完整写法如下；为避免把局部规则扩大成 workspace 规则，同一路径
+不得同时进入 `instructions[]`：
+
+```json
+{
+  "runtime_extensions": {
+    "role_instructions": {
+      "evidence-policy": {
+        "path": ".opencode/instructions/contract-review-expert/roles/evidence-policy.md",
+        "description": "引用审查证据时必须标明来源"
+      }
+    }
+  },
+  "agent": {
+    "id": "contract-reviewer",
+    "references": ["playbook", "upstream"],
+    "instructions": ["evidence-policy"]
+  }
 }
 ```
 
@@ -211,8 +243,9 @@ command 是面向用户的 workflow 快捷入口，不是 workflow 本体的第�
 
 ## 5. Plugins 与依赖
 
-当用户需要类似 hook 的事件监听、工具执行前后拦截、外部服务集成或运行时行为修改时推荐
-local plugin；不要用 plugin 代替一个只需被智能体直接调用的普通 custom tool。
+当用户需要类似 hook 的事件监听、工具执行前后拦截或运行时行为修改时推荐 local plugin；
+主动读写外部软件、服务或数据库使用 MCP。不要用 plugin 代替一个只需被智能体直接调用的普通
+custom tool。
 
 - `plugins.npm[]` 合并到 `opencode.json.plugin`；条目不得重复。
 - `plugins.local[]` 生成 `.opencode/plugins/<path>`，只接受内嵌 `content` 的 `.js` 或 `.ts`。
@@ -240,9 +273,13 @@ receipt 所有权边界。
 目标 OpenCode capability contract 支持根级 `references` 时，`runtime_extensions.references` 是唯一上游声明，
 生成器把短 alias 改写为 `<slug>-<alias>` 后投影到 `opencode.json.references`。local entry 由
 `reference_files[]` 提供包内真实文件；Git entry 由 OpenCode 按 repository 异步 materialize。
+[OpenCode References 官方文档](https://opencode.ai/docs/zh-cn/references/)定义了上游字段和运行行为；
+下面更严格的包内路径、对象写法和凭据限制属于 MobileWork 的可移植性与所有权合同。
 
-用户提供需要随包分发的领域资料、规范、案例、知识库或操作手册时推荐 reference。当前合同
-只接受非空 UTF-8 文本；PDF、DOCX、图片等先转换为 Markdown 或文本，不随包保留二进制原件。
+用户提供需要随包分发的领域资料、规范、案例、知识库、操作手册或 Git 仓库时推荐 Reference。
+本地 Reference 当前只接受非空 UTF-8 文本；PDF、DOCX、图片等先安全转换为 Markdown 或文本，
+不随包保留二进制原件。外部本地目录先做零执行检查，确认后复制到包内路径；最终 manifest 不得
+保留绝对路径、`~` 或开发机相对路径。
 
 - `reference_files[].path` 必须位于 `.opencode/references/<slug>/<alias>/`。
 - 每个文件嵌入非空 UTF-8 `content`；validator 比较声明与实际内容。
@@ -251,11 +288,23 @@ receipt 所有权边界。
 - local reference 目录至少匹配一个 `reference_files[]` 文件。
 - local 对象只允许必需 `path` 与可选 `description`、`hidden`；`hidden` 必须是布尔值。
 - Git 对象只允许必需非空 `repository` 与可选非空 `branch`、字符串 `description`、布尔 `hidden`。
-- `repository` 是交给 OpenCode materialize 的不透明、无首尾空白非空字符串；manager 不限制协议、
-  主机或可达性，`http://127.0.0.1:<port>/repo.git` 等可控测试源也合法。空值和仅空白值仍拒绝。
+- `repository` 接受 Git URL、host/path 和 GitHub `owner/repo`。它不得包含 URL 密码、Token、
+  Secret 查询参数或 `{env:...}` 凭据占位；只允许远程 `git`、`http`、`https`、`ssh` URL、
+  SCP-like 地址或无 scheme 的 host/path、`owner/repo`。本地路径、`file:`、query 和 fragment
+  一律拒绝。私有仓库认证留给运行环境的 Git 凭据、SSH Agent 或宿主。
+- `branch` 省略时保持合法，但 validator 会提示 OpenCode 将跟随仓库默认分支。管理器不得据此
+  猜测一个固定分支。
+- `description` 对 local/Git 都可用。角色已分配一个没有 `description` 的 Reference 时给 warning，
+  因为 Agent 缺少“什么时候查阅”的说明。
+- `hidden` 对 local/Git 都可用，只隐藏 TUI 的 `@` 自动补全。它不会阻止 Reference 进入上下文，
+  不能用于保密或角色隔离。
 - 每个对象必须在 `path` 与 `repository` 中恰好声明一个；`branch` 仅对 Git entry 有效。
 - 每个 `reference_files[]` 都必须被一个 local entry 拥有；Git entry 不得伪造本地 backing file。
 - manifest 使用短 alias；生成配置和 CLI receipt 使用 `<slug>-<alias>`，避免多个专家互相覆盖。
+- 角色 `references[]` 只接受已声明短 alias，不接受重复项或 `*`。新包中每个 Reference 至少分配
+  给一个角色，所有角色显式写出 `references[]`，空数组有效。
+- 角色分配是路由与审计信息。原生 `opencode.json.references` 仍是 workspace 根配置，不能声称
+  未分配角色在系统层面完全不可见；严格隔离使用角色专属 Skill 或带权限的 MCP。
 
 例如 local `playbook` 与 Git `upstream` 生成：
 
@@ -275,15 +324,33 @@ receipt 所有权边界。
 }
 ```
 
+Reference 原生能力按 host contract 决定，不根据 OpenCode 版本号猜测：
+
+- `references=true` 且能力证据与目标版本一致：local/Git 条目按 namespaced alias 投影。
+- 能力不支持或未知、且只有 local Reference：安装器生成内部派生 Skill，并只分配给使用角色；
+  receipt 记录该降级资源。
+- 能力不支持或未知、且包含 Git Reference：设计、生成、校验和打包仍可完成；安装在写 workspace
+  前返回 `capability-missing`。管理器不静默 clone，也不跳过 Reference 后声称安装完整。用户可
+  提供可信本地副本，再按 local Reference 导入。
+- Git 异步 materialize 成功必须单独取得 Runtime 证据。配置解析、生成或安装通过不能代替它。
+
 ## 7. Instructions
 
-`instruction_files[]` 提供包内文件，`instructions[]` 只表示 workspace 全局指令。
+`instruction_files[]` 提供包内文件；`instructions[]` 只表示 workspace 全局指令，
+`role_instructions` 表示只写入指定 Agent Markdown 的角色规则。
 
 - `instruction_files[].path` 必须位于 `.opencode/instructions/<slug>/`，并嵌入非空 UTF-8 `content`。
 - 本地 instruction 可为文件路径或 Glob，必须至少匹配一个声明文件。
 - `instructions[]` 不得包含重复条目。
 - 远程 instruction 只允许 HTTPS；validator 会提示不可复现。HTTP 必须失败。
-- 角色专属规则放入 agent Markdown 或对应 skill，不要扩大为 workspace 全局指令。
+- `role_instructions.<alias>` 只接受 kebab-case alias、包内 Markdown `path` 和可选 `description`；
+  路径固定在 `.opencode/instructions/<slug>/roles/<alias>.md`，并由 `instruction_files[]` 提供内容。
+- 角色 `instructions[]` 只引用已声明 alias，不接受重复项或 `*`。存在角色规则时所有角色显式
+  写出 `instructions[]`，空数组有效；每条规则至少分配给一个角色。
+- 角色规则只写入被分配角色的 Agent Markdown，不写入根 `opencode.json.instructions`。同一文件
+  不得同时成为 workspace 全局规则和角色规则。
+- 角色规则只接受本地 Markdown，不接受 URL、Git 或 glob。严格隔离仍应使用角色专属 Skill 或
+  带权限的 MCP，不能把 Agent Markdown 路由当成系统访问控制。
 - 专家包不开发或生成根级 `AGENTS.md`；需要对整个 workspace 生效的自定义指令统一生成到
   `.opencode/instructions/<slug>/`，并通过 `opencode.json.instructions` 明确索引。
 
@@ -417,12 +484,25 @@ CLI 安装把 reference 和 instruction 文件路径统一改写为 `.opencode/`
 安装前完成结构、内容、hash、路径和 ownership 冲突预检。
 `agent`、`mcp`、`references`、`plugin`、`instructions` 与 `lsp` 按键或条目合并；local reference
 只改写 `path`，Git `repository` entry 原样保留。receipt 记录每个 namespaced alias 的精确值。
+receipt 可带 `bindings.references` 和 `bindings.roleInstructions`，用于审计、排错、卸载读回；
+它们不参与权限判断，旧 receipt 没有 `bindings` 仍然有效。
 `--force` 只能替换同 slug receipt 拥有的资源，不能覆盖其他专家资源。
+安装前已有且没有 receipt owner 的同值 `plugin`、`instructions` 或依赖可以复用，但不能记为本
+专家所有；以后卸载或升级时保留。所有 receipt 必须先校验文件名与 slug、contract、受管 POSIX
+相对路径和 SHA-256，事务目标及备份路径都必须留在 workspace `.opencode` 内。
+新安装写 contract 2；contract 1 可继续安装读回与卸载，但其 list/dependency ownership 不再可信，
+所以 `plugin`、`instructions` 和依赖保守保留。旧 receipt 缺少 `bindings` 仍然有效。
 安装使用 staging、备份和失败回滚；失败后 workspace 恢复到写入前状态。
+
+卸载使用 `install_expert.py --uninstall <slug> --workspace-dir <workspace>`。它只移除 receipt 记录且
+hash 未漂移的文件、该 slug 独占的配置和依赖；其他专家共享的列表项或依赖保留。owned 文件或
+配置被用户修改后，卸载在写入前停止，不把变化当作可删除缓存。配置、文件和 receipt 在同一事务
+提交，并在完成后读回。
 
 ## 12. 已知边界
 
 - MobileWork 桌面安装通过完整事务投影复制 `.opencode` 资源、共享 Skills、配置与依赖，并用
   revision ownership 台账读回；CLI 安装保留为独立兼容入口。
 - Git repository 的可访问性与 materialize 时机由 OpenCode 管理；manager 只校验声明、ownership、
-  精确投影和安装回读，不把网络 clone 成功误当作离线 package validator 的职责。
+  精确投影和安装回读，不把网络 clone 成功误当作离线 package validator 的职责。`hidden` 和角色
+  使用关系都不是底层访问控制。

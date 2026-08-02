@@ -31,6 +31,17 @@ class MigrationPlannerTests(unittest.TestCase):
                     "permission": {"bash": {"*": "allow"}},
                 },
                 "references": [{"path": "references/guide.md"}],
+                "runtime_extensions": {
+                    "references": {
+                        "policy": {
+                            "repository": "example-org/policy",
+                            "description": "Legacy policy source"
+                        }
+                    },
+                    "instructions": [
+                        ".opencode/instructions/legacy-expert/*.md"
+                    ]
+                },
             }), encoding="utf-8")
             before = provenance.tree_sha256(root)
             result = migration_planner.plan(root)
@@ -45,6 +56,9 @@ class MigrationPlannerTests(unittest.TestCase):
             self.assertTrue(result["permissionChanges"])
             self.assertIn("MIGRATION_FILENAME_MOJIBAKE", {item["code"] for item in result["sourceWarnings"]})
             self.assertGreaterEqual(result["unconfirmedCount"], 3)
+            decision_codes = {item["code"] for item in result["businessDecisions"]}
+            self.assertIn("CONFIRM_REFERENCE_CONSUMERS", decision_codes)
+            self.assertIn("CONFIRM_INSTRUCTION_SCOPE", decision_codes)
             markdown = migration_planner.render_markdown(result)
             for heading in (
                 "## Automatic actions",

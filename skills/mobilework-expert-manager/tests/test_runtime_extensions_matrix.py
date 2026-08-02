@@ -26,6 +26,17 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
         self.base = json.loads(load_spec_text("legacy-expert-json"))
         self.base["runtime_extensions"] = {}
         self.base.pop("mcp_servers", None)
+        self.reference_host = self.root / "reference-host.json"
+        self.reference_host.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "opencodeVersion": "test-runtime",
+                    "capabilities": {"references": True},
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -39,6 +50,13 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
     ) -> Path:
         data = copy.deepcopy(self.base)
         data["runtime_extensions"] = runtime_extensions or {}
+        references = data["runtime_extensions"].get("references", {})
+        data["agent"]["references"] = list(references) if isinstance(references, dict) else []
+        role_instructions = data["runtime_extensions"].get("role_instructions", {})
+        if isinstance(role_instructions, dict) and role_instructions:
+            data["agent"]["instructions"] = list(role_instructions)
+        else:
+            data["agent"].pop("instructions", None)
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
         source = self.root / name
@@ -378,6 +396,8 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
                 str(package),
                 "--workspace-dir",
                 str(workspace),
+                "--host-contract",
+                str(self.reference_host),
             ],
             text=True,
             capture_output=True,
@@ -511,6 +531,8 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
                 {"name": "review-scope", "template": "Review scope again."},
             ]
         }
+        data["agent"]["references"] = []
+        data["agent"].pop("instructions", None)
         source = self.root / "duplicate-commands"
         source.mkdir()
         manifest = source / "expert.json"

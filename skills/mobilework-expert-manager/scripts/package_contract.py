@@ -11,7 +11,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 
 PACKAGE_RUNTIME_DIR = ".opencode"
@@ -55,6 +55,8 @@ AGENT_MANIFEST_KEYS = frozenset(
         "permission",
         "permission_reason",
         "custom_tools",
+        "references",
+        "instructions",
         "tools",
     }
 )
@@ -119,6 +121,31 @@ MCP_OAUTH_KEYS = frozenset(
 )
 REFERENCE_ENTRY_KEYS = frozenset(
     {"path", "repository", "branch", "description", "hidden"}
+)
+ROLE_INSTRUCTION_ENTRY_KEYS = frozenset({"path", "description"})
+EMBEDDED_GIT_CREDENTIAL_RE = re.compile(
+    r"(?i)(?:gh[pousr]_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_-]{10,}|"
+    r"x-access-token|oauth2(?=[:@]))"
+)
+SECRET_QUERY_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth",
+        "credential",
+        "key",
+        "oauth_token",
+        "password",
+        "private_token",
+        "secret",
+        "token",
+    }
+)
+GIT_REPOSITORY_SCHEMES = frozenset({"git", "http", "https", "ssh"})
+GIT_SCP_RE = re.compile(
+    r"^(?:(?P<user>[A-Za-z0-9._-]+)@)?"
+    r"(?P<host>[A-Za-z0-9.-]+):(?P<path>[^\\\s?#]+)$"
 )
 LSP_SERVER_KEYS = frozenset(
     {"disabled", "command", "extensions", "env", "initialization"}
@@ -274,6 +301,96 @@ def _http_url(value: Any, field: str) -> str:
     return url
 
 
+def repository_contains_credentials(value: str) -> bool:
+    """Return whether a Git reference embeds credentials instead of using host auth."""
+
+    if "{env:" in value or EMBEDDED_GIT_CREDENTIAL_RE.search(value):
+        return True
+    parsed = urlparse(value)
+    try:
+        password = parsed.password
+        username = parsed.username
+    except ValueError:
+        return True
+    if password is not None:
+        return True
+    if parsed.scheme.lower() in {"http", "https"} and username is not None:
+        return True
+    return any(key.lower() in SECRET_QUERY_KEYS for key, _item in parse_qsl(parsed.query))
+
+
+def normalize_git_repository(value: Any, field: str) -> str:
+    """Accept remote Git locations while rejecting credentials and local paths."""
+
+    repository = _non_empty_string(value, field)
+    if repository_contains_credentials(repository):
+        raise ContractError(
+            f"{field}: must not embed credentials; "
+            "use the host Git credential or SSH configuration"
+        )
+    if "\\" in repository or repository.startswith(("/", "~/", "./", "../")):
+        raise ContractError(f"{field}: must be a remote Git URL, host/path, or owner/repo")
+    if re.match(r"^[A-Za-z]:", repository):
+        raise ContractError(f"{field}: must not use a local filesystem path")
+
+    scp_match = None if "://" in repository else GIT_SCP_RE.fullmatch(repository)
+    if scp_match:
+        user = scp_match.group("user")
+        host = scp_match.group("host")
+        remote_path = scp_match.group("path")
+        if remote_path.startswith(":") or (user is None and "." not in host):
+            raise ContractError(
+                f"{field}: ambiguous SCP-like location; use user@host:path, "
+                "a qualified host, or host/path"
+            )
+        parts = PurePosixPath(remote_path).parts
+        if not parts or any(part in {"", ".", ".."} for part in parts):
+            raise ContractError(f"{field}: remote Git path contains a dot or traversal segment")
+        return repository
+
+    parsed = urlparse(repository)
+    if parsed.scheme:
+        if parsed.scheme.lower() not in GIT_REPOSITORY_SCHEMES:
+            raise ContractError(
+                f"{field}: unsupported Git URL scheme {parsed.scheme}; "
+                "use git, http, https, or ssh"
+            )
+        try:
+            hostname = parsed.hostname
+            password = parsed.password
+            username = parsed.username
+            parsed.port
+        except ValueError as exc:
+            raise ContractError(f"{field}: invalid remote Git URL: {exc}") from exc
+        if not hostname or not parsed.path.strip("/"):
+            raise ContractError(f"{field}: remote Git URL must include a host and repository path")
+        if parsed.query or parsed.fragment:
+            raise ContractError(f"{field}: query strings and fragments are not allowed")
+        if password is not None:
+            raise ContractError(
+                f"{field}: must not embed credentials; "
+                "use the host Git credential or SSH configuration"
+            )
+        if parsed.scheme.lower() in {"http", "https"} and username is not None:
+            raise ContractError(
+                f"{field}: must not embed credentials; "
+                "use the host Git credential or SSH configuration"
+            )
+        path_parts = PurePosixPath(parsed.path.lstrip("/")).parts
+        if not path_parts or any(part in {"", ".", ".."} for part in path_parts):
+            raise ContractError(f"{field}: remote Git path contains a dot or traversal segment")
+        return repository
+
+    if any(char in repository for char in "?#@:"):
+        raise ContractError(f"{field}: must be a remote Git URL, host/path, or owner/repo")
+    parts = PurePosixPath(repository).parts
+    if len(parts) < 2 or any(part in {"", ".", ".."} for part in parts):
+        raise ContractError(f"{field}: must be a remote Git host/path or owner/repo")
+    if not all(re.fullmatch(r"[A-Za-z0-9._~-]+", part) for part in parts):
+        raise ContractError(f"{field}: remote Git path contains unsupported characters")
+    return repository
+
+
 def normalize_mcp_servers(value: Any) -> dict[str, dict[str, Any]]:
     """Validate and normalize the package-owned OpenCode MCP subset."""
 
@@ -415,10 +532,11 @@ def normalize_reference_entries(
             normalized["path"] = path
             local_prefixes.append(path)
         else:
-            normalized["repository"] = _non_empty_string(
+            repository = normalize_git_repository(
                 raw_entry["repository"],
                 f"{entry_field}.repository",
             )
+            normalized["repository"] = repository
             if "branch" in raw_entry:
                 normalized["branch"] = _non_empty_string(
                     raw_entry["branch"],
@@ -442,6 +560,66 @@ def normalize_reference_entries(
             raise ContractError(
                 f"reference_files path {path}: is not owned by a local references entry"
             )
+    return result
+
+
+def normalize_role_instruction_entries(
+    value: Any,
+    field: str,
+    *,
+    slug: str,
+    instruction_file_paths: Iterable[str],
+) -> dict[str, dict[str, str]]:
+    """Validate role-scoped instruction declarations backed by package Markdown."""
+
+    entries = {} if value is None else value
+    if not isinstance(entries, dict):
+        raise ContractError(f"{field}: must be a mapping")
+    backing_files = set(instruction_file_paths)
+    result: dict[str, dict[str, str]] = {}
+    for alias, raw_entry in entries.items():
+        entry_field = f"{field}.{alias}"
+        if not isinstance(alias, str) or not NAME_RE.fullmatch(alias) or len(alias) > 64:
+            raise ContractError(f"{field} key: must be lowercase-hyphen and 64 characters or fewer")
+        if not isinstance(raw_entry, dict):
+            raise ContractError(f"{entry_field}: must be a mapping")
+        unknown = sorted(set(raw_entry) - ROLE_INSTRUCTION_ENTRY_KEYS)
+        if unknown:
+            raise ContractError(f"{entry_field}: unsupported fields {', '.join(unknown)}")
+        expected = f"{instruction_prefix(slug)}/roles/{alias}.md"
+        path = posix_relative_path(raw_entry.get("path"), f"{entry_field}.path")
+        if path != expected:
+            raise ContractError(f"{entry_field}.path: must equal {expected}")
+        if path not in backing_files:
+            raise ContractError(f"{entry_field}.path: has no matching instruction_files entry")
+        normalized = {"path": path}
+        if "description" in raw_entry:
+            description = raw_entry["description"]
+            if not isinstance(description, str):
+                raise ContractError(f"{entry_field}.description: must be a string")
+            normalized["description"] = description
+        result[alias] = normalized
+    return result
+
+
+def normalize_role_aliases(value: Any, field: str) -> list[str]:
+    """Validate explicit role-to-resource alias bindings."""
+
+    if not isinstance(value, list):
+        raise ContractError(f"{field}: must be a list")
+    values = value
+    result: list[str] = []
+    for index, item in enumerate(values):
+        if item == "*":
+            raise ContractError(f"{field}[{index}]: wildcard bindings are not allowed")
+        if not isinstance(item, str) or not NAME_RE.fullmatch(item) or len(item) > 64:
+            raise ContractError(
+                f"{field}[{index}]: must be lowercase-hyphen and 64 characters or fewer"
+            )
+        result.append(item)
+    duplicate = first_duplicate(result)
+    if duplicate is not None:
+        raise ContractError(f"{field}: duplicates {duplicate}")
     return result
 
 
@@ -673,6 +851,15 @@ def instruction_prefix(slug: str) -> str:
 
 def namespaced_reference_alias(slug: str, alias: str) -> str:
     return f"{slug}-{alias}"
+
+
+def reference_fallback_skill_name(slug: str, alias: str) -> str:
+    base = f"{slug}-reference-{alias}"
+    if len(base) <= 64:
+        return base
+    digest = hashlib.sha256(base.encode("utf-8")).hexdigest()[:8]
+    prefix = base[: 64 - len(digest) - 1].rstrip("-")
+    return f"{prefix}-{digest}"
 
 
 def has_glob(value: str) -> bool:

@@ -514,6 +514,48 @@
         "Reuses same-name identical content, blocks different content by default and leaves the target byte-for-byte unchanged.",
         "Allows replacement only with both --replace and --confirm-managed, retains origin uploaded and changes edit_policy to managed."
       ]
+    },
+    {
+      "id": 136,
+      "name": "route-novice-material-script-and-team-rule",
+      "prompt": "我想做一个库存复核小组。平时要翻我给的出库规定，有一个现成的 Shell 脚本负责算差异，所有组员还要一直遵守同一套证据记录要求。先告诉我怎么安排，别急着创建。",
+      "expected_output": "The assistant proposes a Reference, a Skill script and role rules in novice language, then waits for confirmation.",
+      "files": [],
+      "expectations": [
+        "Recommends the supplied operational material as an on-demand Reference rather than a workspace-wide Instruction.",
+        "Recommends keeping the existing Shell executor inside an assigned Skill rather than rewriting it as a JS/TS custom tool.",
+        "Recommends assigning the always-on evidence rule to the relevant team roles through role instructions.",
+        "Uses the three novice-facing response sections and asks no more than three necessary questions.",
+        "Does not create files, execute the script or expand permissions before explicit confirmation."
+      ]
+    },
+    {
+      "id": 137,
+      "name": "route-novice-git-reference-without-clone",
+      "prompt": "排障手册放在 code.example.com/ops/runbooks，值班助手只在故障定位卡住时去看。它跟着默认分支持续更新。请先给建议。",
+      "expected_output": "The assistant proposes an on-demand Git Reference, explains the moving default branch and avoids repository access before confirmation.",
+      "files": [],
+      "expectations": [
+        "Recognizes the repository as a Git Reference and records when assigned roles should consult it.",
+        "Explains that omitting branch follows the repository default and may reduce reproducibility.",
+        "Treats role assignment as routing and audit information rather than strict access control.",
+        "Does not clone, fetch, probe credentials or generate package files before confirmation.",
+        "Does not misroute the knowledge repository to MCP, Plugin or workspace Instruction."
+      ]
+    },
+    {
+      "id": 138,
+      "name": "route-novice-external-check-and-event-block",
+      "prompt": "付款提交前要去第三方风控服务查一次状态，命中风险就停住，没有命中才继续。服务有查询接口，但暂时不需要改它的数据。先帮我设计。",
+      "expected_output": "The assistant combines a read-only external connection with a pre-submit event guard and waits before enabling either capability.",
+      "files": [],
+      "expectations": [
+        "Combines MCP for the external status query with Plugin or Hook for the automatic pre-submit block.",
+        "States the query, decision and continue-or-block order in business language.",
+        "Defaults to the minimum read-only external permission and asks whether a Connector or MCP implementation already exists.",
+        "Uses the three novice-facing response sections and no more than three necessary questions.",
+        "Does not connect to the service, enable a hook, write files or expand permissions before confirmation."
+      ]
     }
   ]
 }

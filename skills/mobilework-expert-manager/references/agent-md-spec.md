@@ -65,6 +65,8 @@ $workflow
 
 $allowed_skills
 
+$role_resources
+
 ## 输出规范
 
 最终回复使用结构化 Markdown，至少包含：
@@ -193,6 +195,8 @@ $subagent_calls
 
 $allowed_skills
 
+$role_resources
+
 ## 团长交付契约
 
 $handoff_contract
@@ -254,6 +258,8 @@ $workflow
 允许使用的技能：
 
 $allowed_skills
+
+$role_resources
 
 ## 输出规范
 

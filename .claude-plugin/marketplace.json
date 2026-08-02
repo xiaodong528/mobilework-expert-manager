@@ -3,7 +3,7 @@
   "owner": {
     "name": "xiaodong528"
   },
-  "description": "Installable tools for designing, validating, packaging, and managing MobileWork experts and expert teams.",
+  "description": "Installable tools that turn business goals into confirmable MobileWork expert and expert-team packages.",
   "plugins": [
     {
       "name": "mobilework-expert-manager",
@@ -11,7 +11,7 @@
         "source": "github",
         "repo": "xiaodong528/mobilework-expert-manager"
       },
-      "description": "Design, analyze, create, modify, diagnose, and validate MobileWork experts and expert teams.",
+      "description": "Recommend roles, references, rules, tools, workflows, and external connections, then create and validate MobileWork experts and expert teams after confirmation.",
       "author": {
         "name": "xiaodong528"
       },

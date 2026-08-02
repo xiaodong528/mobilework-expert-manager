@@ -1,7 +1,7 @@
 {
   "name": "mobilework-expert-manager",
-  "version": "0.4.0",
-  "description": "Design, analyze, create, modify, diagnose, and validate MobileWork experts and expert teams, including installation, packaging, versioning, and skill assignment.",
+  "version": "0.5.0",
+  "description": "Turn business goals into confirmable MobileWork expert or expert-team designs, including role-scoped references, rules, tools, installation, and packaging.",
   "author": {
     "name": "xiaodong528",
     "url": "https://github.com/xiaodong528"
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "MobileWork Expert Manager",
-    "shortDescription": "Design and manage MobileWork expert packages",
-    "longDescription": "Create, convert, modify, diagnose, validate, install, package, and version MobileWork experts and expert teams.",
+    "shortDescription": "Turn business goals into MobileWork expert packages",
+    "longDescription": "Recommend the right roles, references, rules, tools, workflows, and external connections before creating, validating, installing, or packaging MobileWork experts and expert teams.",
     "developerName": "xiaodong528",
     "category": "Developer Tools",
     "capabilities": [
@@ -29,9 +29,9 @@
     ],
     "websiteURL": "https://github.com/xiaodong528/mobilework-expert-manager",
     "defaultPrompt": [
-      "Design a MobileWork expert and confirm its roles, workflow, skills, and permissions.",
-      "Diagnose this MobileWork expert package and propose evidence-backed fixes.",
-      "Import this skill into a MobileWork expert team and assign it to the right roles."
+      "Turn this business goal into a MobileWork expert design and ask only for decisions that change the result.",
+      "Recommend where these rules, tools, references, and external connections belong before writing files.",
+      "Diagnose this MobileWork expert package and explain the problem, impact, and next action in plain language."
     ]
   }
 }

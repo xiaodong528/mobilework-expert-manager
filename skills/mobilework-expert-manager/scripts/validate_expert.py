@@ -368,7 +368,7 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
         set(raw)
         - {
             "commands", "custom_tools", "plugins", "reference_files",
-            "instruction_files", "references", "instructions", "lsp",
+            "instruction_files", "references", "instructions", "role_instructions", "lsp",
         }
     )
     if unknown_runtime:
@@ -496,6 +496,17 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
         result.error(str(exc))
         references = {}
 
+    try:
+        role_instructions = contract.normalize_role_instruction_entries(
+            raw.get("role_instructions"),
+            "runtime_extensions.role_instructions",
+            slug=slug,
+            instruction_file_paths=instruction_file_paths,
+        )
+    except contract.ContractError as exc:
+        result.error(str(exc))
+        role_instructions = {}
+
     instructions = validate_string_list(raw.get("instructions"), "runtime_extensions.instructions", result)
     duplicate_instruction = contract.first_duplicate(instructions)
     if duplicate_instruction is not None:
@@ -520,6 +531,12 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
             result.error(f"runtime_extensions.instructions[{index}]: must be under {expected}")
         if path and not contract.package_glob_matches(path, instruction_file_paths):
             result.error(f"runtime_extensions.instructions[{index}]: no matching instruction_files entry")
+        if path:
+            for alias, entry in role_instructions.items():
+                if contract.package_glob_matches(path, [entry["path"]]):
+                    result.error(
+                        f"runtime_extensions.instructions[{index}]: overlaps role rule {alias}"
+                    )
 
     try:
         lsp = contract.normalize_lsp_config(raw.get("lsp"))
@@ -537,6 +554,7 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
         "instruction_files": instruction_files,
         "references": references,
         "instructions": instructions,
+        "role_instructions": role_instructions,
         "lsp": lsp,
     }
 
@@ -692,6 +710,15 @@ def validate_role(role: Any, field: str, result: Result, *, expected_mode: str) 
         result.error(f"{field}.mcp: duplicates {duplicate_mcp}")
     validate_string_list(role.get("route_triggers"), f"{field}.route_triggers", result)
     validate_string_list(role.get("handoff_contract"), f"{field}.handoff_contract", result)
+    for resource_field in ("references", "instructions"):
+        if resource_field not in role:
+            continue
+        try:
+            contract.normalize_role_aliases(
+                role.get(resource_field), f"{field}.{resource_field}"
+            )
+        except contract.ContractError as exc:
+            result.error(str(exc))
     for mcp_name in role.get("mcp", []) if isinstance(role.get("mcp"), list) else []:
         validate_name(mcp_name, f"{field}.mcp[]", result)
     return role_id
@@ -731,6 +758,149 @@ def list_role_ids(manifest: dict[str, Any], result: Result) -> tuple[str | None,
 
 def roles_from_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return [role for _, role in manifest_contract.manifest_roles(manifest)]
+
+
+def check_role_resource_bindings(
+    manifest: dict[str, Any],
+    extensions: dict[str, Any],
+    result: Result,
+) -> None:
+    roles = manifest_contract.manifest_roles(manifest)
+    references = extensions.get("references", {})
+    role_instructions = extensions.get("role_instructions", {})
+
+    def warn_missing_reference_description(alias: str) -> None:
+        result.warn(
+            f"runtime_extensions.references.{alias}.description: add when assigned roles should use this Reference",
+            code="REFERENCE_DESCRIPTION_MISSING",
+            phase="manifest",
+            path="expert.json",
+            location=f"/runtime_extensions/references/{alias}/description",
+            root_cause="reference-guidance-missing",
+            remediation="Add a short, specific usage description.",
+        )
+
+    for alias, entry in references.items():
+        if "repository" in entry and "branch" not in entry:
+            result.warn(
+                f"runtime_extensions.references.{alias}.branch: omitted; OpenCode will use the repository default branch",
+                code="REFERENCE_GIT_DEFAULT_BRANCH",
+                phase="manifest",
+                path="expert.json",
+                location=f"/runtime_extensions/references/{alias}/branch",
+                root_cause="mutable-git-reference",
+                remediation="Confirm a branch or ref when repeatable materialization is required.",
+            )
+
+    if references:
+        explicit = [field for field, role in roles if "references" in role]
+        if not explicit:
+            result.warn(
+                "role Reference consumers are absent; legacy package-wide behavior remains valid until the next structural migration",
+                code="LEGACY_REFERENCE_BINDINGS_IMPLICIT",
+                phase="manifest",
+                path="expert.json",
+                location="/runtime_extensions/references",
+                root_cause="legacy-reference-bindings",
+                remediation="Preview a migration and assign every Reference alias to explicit role ids before structural changes.",
+            )
+            for alias, entry in references.items():
+                if not entry.get("description", "").strip():
+                    warn_missing_reference_description(alias)
+        else:
+            consumers = {alias: [] for alias in references}
+            for field, role in roles:
+                if "references" not in role:
+                    result.error(f"{field}.references: is required in explicit binding mode")
+                    continue
+                try:
+                    aliases = contract.normalize_role_aliases(
+                        role.get("references"), f"{field}.references"
+                    )
+                except contract.ContractError:
+                    continue
+                for alias in aliases:
+                    if alias not in references:
+                        result.error(f"{field}.references: references unknown Reference {alias}")
+                    else:
+                        consumers[alias].append(role.get("id"))
+            for alias, role_ids in consumers.items():
+                if not role_ids:
+                    result.error(
+                        f"runtime_extensions.references.{alias}: must be assigned to at least one role"
+                    )
+                if role_ids and not references[alias].get("description", "").strip():
+                    warn_missing_reference_description(alias)
+
+    if role_instructions:
+        consumers = {alias: [] for alias in role_instructions}
+        for field, role in roles:
+            if "instructions" not in role:
+                result.error(f"{field}.instructions: is required when role rules exist")
+                continue
+            try:
+                aliases = contract.normalize_role_aliases(
+                    role.get("instructions"), f"{field}.instructions"
+                )
+            except contract.ContractError:
+                continue
+            for alias in aliases:
+                if alias not in role_instructions:
+                    result.error(f"{field}.instructions: references unknown role rule {alias}")
+                else:
+                    consumers[alias].append(role.get("id"))
+        for alias, role_ids in consumers.items():
+            if not role_ids:
+                result.error(
+                    f"runtime_extensions.role_instructions.{alias}: must be assigned to at least one role"
+                )
+
+
+def check_reference_target_capability(
+    manifest: dict[str, Any],
+    target: manager_contract.TargetContract | None,
+    result: Result,
+) -> None:
+    if target is None:
+        return
+    runtime_extensions = manifest.get("runtime_extensions", {})
+    references = runtime_extensions.get("references", {}) if isinstance(runtime_extensions, dict) else {}
+    if not isinstance(references, dict) or not references:
+        return
+    if target.capability_verified and target.capabilities.get("references") is True:
+        return
+    git_aliases = sorted(
+        alias
+        for alias, entry in references.items()
+        if isinstance(entry, dict) and "repository" in entry
+    )
+    if git_aliases:
+        result.warn(
+            "Git Reference install requires verified Runtime Reference support; blocked aliases: "
+            + ", ".join(git_aliases),
+            code="REFERENCE_CAPABILITY_MISSING",
+            phase="config-load",
+            path="opencode.json",
+            location="/references",
+            root_cause="reference-capability-missing",
+            remediation="Provide a host contract with references=true or import a trusted local checkout.",
+        )
+    local_aliases = sorted(
+        alias
+        for alias, entry in references.items()
+        if isinstance(entry, dict) and "path" in entry
+    )
+    if local_aliases:
+        result.warn(
+            "Local References will use role-assigned compatibility Skills because Runtime Reference support is not verified: "
+            + ", ".join(local_aliases),
+            code="REFERENCE_LOCAL_FALLBACK",
+            phase="config-load",
+            path="opencode.json",
+            location="/references",
+            root_cause="reference-capability-unverified",
+            remediation="Provide a host contract with references=true to use native Reference projection.",
+        )
 
 
 def expected_skill_names(manifest: dict[str, Any]) -> list[str]:
@@ -813,7 +983,8 @@ def check_manifest_shape(manifest: dict[str, Any], result: Result) -> tuple[str 
     except contract.ContractError as exc:
         result.error(str(exc))
 
-    check_runtime_extensions_manifest(manifest, result)
+    extensions = check_runtime_extensions_manifest(manifest, result)
+    check_role_resource_bindings(manifest, extensions, result)
 
     check_skill_contract(manifest, result)
     primary_id, subagent_ids = list_role_ids(manifest, result)
@@ -1191,6 +1362,99 @@ def check_agent_markdown_shape(package_dir: Path, manifest: dict[str, Any], resu
                     result.error(f"{md_path}: {field} must match expert.json")
                 elif field not in expected_runtime and field in fm:
                     result.error(f"{md_path}: {field} must be omitted when absent from expert.json")
+
+        runtime_extensions = manifest.get("runtime_extensions", {})
+        runtime_extensions = runtime_extensions if isinstance(runtime_extensions, dict) else {}
+        references = runtime_extensions.get("references", {})
+        references = references if isinstance(references, dict) else {}
+        role_instructions = runtime_extensions.get("role_instructions", {})
+        role_instructions = role_instructions if isinstance(role_instructions, dict) else {}
+        explicit_reference_bindings = any(
+            "references" in candidate
+            for _field, candidate in manifest_contract.manifest_roles(manifest)
+        )
+        explicit_bindings = explicit_reference_bindings or bool(role_instructions)
+        if explicit_bindings:
+            if "分配资料与规则" not in body:
+                result.error(f"{md_path}: missing role resource section")
+            if explicit_reference_bindings:
+                try:
+                    assigned_references = set(
+                        contract.normalize_role_aliases(
+                            role.get("references", []),
+                            f"{agent_id}.references",
+                        )
+                    )
+                except contract.ContractError:
+                    assigned_references = set()
+            else:
+                assigned_references = set(references)
+            for alias, entry in references.items():
+                namespaced = contract.namespaced_reference_alias(str(manifest.get("slug")), alias)
+                if alias in assigned_references:
+                    if namespaced not in body:
+                        result.error(f"{md_path}: missing assigned Reference {alias}")
+                    if isinstance(entry, dict) and "path" in entry:
+                        fallback_name = contract.reference_fallback_skill_name(
+                            str(manifest.get("slug")), alias
+                        )
+                        if fallback_name not in body:
+                            result.error(
+                                f"{md_path}: missing local Reference fallback skill {fallback_name}"
+                            )
+                elif namespaced in body:
+                    result.error(f"{md_path}: contains unassigned Reference {alias}")
+
+            try:
+                assigned_instructions = set(
+                    contract.normalize_role_aliases(
+                        role.get("instructions", []),
+                        f"{agent_id}.instructions",
+                    )
+                )
+            except contract.ContractError:
+                assigned_instructions = set()
+            raw_instruction_files = runtime_extensions.get("instruction_files", [])
+            instruction_files = (
+                raw_instruction_files
+                if isinstance(raw_instruction_files, list)
+                else []
+            )
+            instruction_contents: dict[str, str] = {}
+            for alias, entry in role_instructions.items():
+                if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                    continue
+                matching = [
+                    item["content"].strip()
+                    for item in instruction_files
+                    if isinstance(item, dict)
+                    and item.get("path") == entry["path"]
+                    and isinstance(item.get("content"), str)
+                ]
+                if matching and matching[0]:
+                    instruction_contents[alias] = matching[0]
+            assigned_contents = {
+                instruction_contents[alias]
+                for alias in assigned_instructions
+                if alias in instruction_contents
+            }
+            for alias, entry in role_instructions.items():
+                if not isinstance(entry, dict):
+                    continue
+                path = entry.get("path")
+                content = instruction_contents.get(alias)
+                if alias in assigned_instructions:
+                    if f"`{alias}`" not in body:
+                        result.error(f"{md_path}: missing assigned role rule {alias}")
+                    if content and content not in body:
+                        result.error(f"{md_path}: missing role rule content for {alias}")
+                    continue
+                if f"`{alias}`" in body:
+                    result.error(f"{md_path}: contains unassigned role rule alias {alias}")
+                if isinstance(path, str) and path in body:
+                    result.error(f"{md_path}: contains unassigned role rule path {alias}")
+                if content and content not in assigned_contents and content in body:
+                    result.error(f"{md_path}: contains unassigned role rule content {alias}")
 
         expected_task = {"*": "deny"}
         if agent_id == primary_id and manifest.get("type") == "team":
@@ -1919,6 +2183,8 @@ def validate_package(
             root_cause="unreleased-expert-source",
             remediation="After a successful trusted-source modification, ask the user whether to publish a SemVer release.",
         )
+
+    check_reference_target_capability(manifest, target, result)
 
     check_declared_file_allowlist(package_dir, manifest, result)
     check_gitignore(package_dir, manifest, result)

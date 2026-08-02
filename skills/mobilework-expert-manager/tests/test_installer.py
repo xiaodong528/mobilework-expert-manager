@@ -18,6 +18,7 @@ INSTALL = SCRIPTS / "install_expert.py"
 
 sys.path.insert(0, str(SCRIPTS))
 import package_contract as contract
+import diagnose_skill
 from generator_test_support import managed_generator_env
 from spec_templates import load_spec_text
 
@@ -40,6 +41,28 @@ class InstallerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.workspace = self.root / "workspace"
         self.workspace.mkdir()
+        self.reference_host = self.root / "host-references.json"
+        self.reference_host.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "opencodeVersion": "test-runtime",
+                    "capabilities": {"references": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.no_reference_host = self.root / "host-no-references.json"
+        self.no_reference_host.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "opencodeVersion": "test-runtime",
+                    "capabilities": {"references": False},
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -65,6 +88,12 @@ class InstallerTests(unittest.TestCase):
         ext["reference_files"][0]["path"] = f".opencode/references/{slug}/playbook/overview.md"
         ext["references"]["playbook"]["path"] = f".opencode/references/{slug}/playbook"
         ext["instruction_files"][0]["path"] = f".opencode/instructions/{slug}/evidence.md"
+        ext["instruction_files"][1]["path"] = (
+            f".opencode/instructions/{slug}/roles/source-policy.md"
+        )
+        ext["role_instructions"]["source-policy"]["path"] = (
+            f".opencode/instructions/{slug}/roles/source-policy.md"
+        )
         ext["instructions"] = [f".opencode/instructions/{slug}/*.md"]
         manifest = self.root / f"{slug}.source" / "expert.json"
         manifest.parent.mkdir()
@@ -86,7 +115,13 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return output / slug
 
-    def run_install(self, package: Path, *, force: bool = False) -> subprocess.CompletedProcess[str]:
+    def run_install(
+        self,
+        package: Path,
+        *,
+        force: bool = False,
+        reference_capability: bool | None = True,
+    ) -> subprocess.CompletedProcess[str]:
         command = [
             sys.executable,
             str(INSTALL),
@@ -95,9 +130,31 @@ class InstallerTests(unittest.TestCase):
             "--workspace-dir",
             str(self.workspace),
         ]
+        if reference_capability is not None:
+            command.extend(
+                [
+                    "--host-contract",
+                    str(self.reference_host if reference_capability else self.no_reference_host),
+                ]
+            )
         if force:
             command.append("--force")
         return subprocess.run(command, text=True, capture_output=True, check=False)
+
+    def test_copy_sources_keeps_package_files_streamable(self) -> None:
+        runtime = self.root / ".opencode"
+        reference = runtime / "references/example/material/package.json"
+        reference.parent.mkdir(parents=True)
+        reference.write_text('{"kind":"reference"}\n', encoding="utf-8")
+        (runtime / "package.json").write_text('{"dependencies":{}}\n', encoding="utf-8")
+
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("must stream")):
+            sources = INSTALLER.copy_sources(runtime)
+
+        self.assertEqual(
+            sources,
+            {"references/example/material/package.json": reference},
+        )
 
     def test_installs_into_opencode_and_rebases_paths(self) -> None:
         package = self.generate()
@@ -124,9 +181,113 @@ class InstallerTests(unittest.TestCase):
         receipt = json.loads(
             (runtime / ".expert-installs/contract-review-expert.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(receipt["contract"], 1)
+        self.assertEqual(receipt["contract"], 2)
         self.assertIn("agents/contract-reviewer.md", receipt["files"])
         self.assertEqual(receipt["config_values"]["references"], config["references"])
+        self.assertEqual(
+            receipt["bindings"]["references"],
+            {"contract-review-expert-playbook": ["contract-reviewer"]},
+        )
+
+    def test_local_reference_uses_role_fallback_when_capability_is_unavailable(self) -> None:
+        package = self.generate()
+        installed = self.run_install(package, reference_capability=False)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        payload = json.loads(installed.stdout)
+        fallback = "contract-review-expert-reference-playbook"
+        self.assertEqual(payload["references"], [])
+        self.assertEqual(payload["reference_fallbacks"], [fallback])
+
+        runtime = self.workspace / ".opencode"
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
+        self.assertNotIn("references", config)
+        self.assertEqual(
+            config["agent"]["contract-reviewer"]["permission"]["skill"][fallback],
+            "allow",
+        )
+        fallback_skill = runtime / f"skills/{fallback}/SKILL.md"
+        self.assertTrue(fallback_skill.is_file())
+        self.assertIn(
+            "`.opencode/references/contract-review-expert/playbook`",
+            fallback_skill.read_text(encoding="utf-8"),
+        )
+        diagnosis = diagnose_skill.diagnose(fallback_skill.parent)
+        self.assertTrue(diagnosis.ok, diagnosis.as_dict())
+        self.assertEqual(diagnosis.as_dict()["evidenceLevel"], "valid")
+        receipt = json.loads(
+            (runtime / ".expert-installs/contract-review-expert.json").read_text(encoding="utf-8")
+        )
+        self.assertIn(f"skills/{fallback}/SKILL.md", receipt["files"])
+        self.assertEqual(
+            receipt["bindings"]["references"],
+            {"contract-review-expert-playbook": ["contract-reviewer"]},
+        )
+
+    def test_local_reference_fallback_keeps_long_usage_guidance_out_of_frontmatter(self) -> None:
+        manifest = self.write_manifest()
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["runtime_extensions"]["references"]["playbook"]["description"] = "x" * 1024
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        output = self.root / "long-description-packages"
+        generated = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(output),
+            ],
+            env=managed_generator_env(output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        installed = self.run_install(
+            output / "contract-review-expert",
+            reference_capability=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        fallback = (
+            self.workspace
+            / ".opencode/skills/contract-review-expert-reference-playbook"
+        )
+        diagnosis = diagnose_skill.diagnose(fallback)
+        self.assertTrue(diagnosis.ok, diagnosis.as_dict())
+        self.assertEqual(diagnosis.as_dict()["evidenceLevel"], "valid")
+        self.assertIn("x" * 1024, (fallback / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_git_reference_blocks_install_without_verified_capability(self) -> None:
+        manifest = self.write_manifest(slug="git-reference-expert", agent_id="git-reference-agent")
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["runtime_extensions"]["references"]["upstream"] = {
+            "repository": "example-org/contract-standard",
+            "description": "Use for upstream contract standards",
+        }
+        data["agent"]["references"].append("upstream")
+        manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        packages = self.root / "packages"
+        generated = subprocess.run(
+            [sys.executable, str(CREATE), "--manifest", str(manifest), "--output-dir", str(packages)],
+            env=managed_generator_env(packages),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+
+        installed = self.run_install(
+            packages / "git-reference-expert",
+            reference_capability=False,
+        )
+        self.assertNotEqual(installed.returncode, 0)
+        self.assertIn("capability-missing", installed.stderr)
+        self.assertIn("provide a trusted local checkout", installed.stderr)
+        self.assertFalse((self.workspace / ".opencode").exists())
 
     def test_installs_and_prunes_local_and_git_reference_ownership(self) -> None:
         manifest = self.write_manifest(slug="reference-expert", agent_id="reference-agent")
@@ -138,6 +299,7 @@ class InstallerTests(unittest.TestCase):
             "description": "Upstream playbook",
             "hidden": False,
         }
+        data["agent"]["references"].append("upstream")
         manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         packages = self.root / "packages"
         generated = subprocess.run(
@@ -179,6 +341,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(receipt["config_values"]["references"], expected)
 
         data["runtime_extensions"]["references"].pop("upstream")
+        data["agent"]["references"].remove("upstream")
         manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         regenerated = subprocess.run(
             [
@@ -346,6 +509,25 @@ class InstallerTests(unittest.TestCase):
         upgraded = self.run_install(package, force=True)
         self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
 
+    def test_legacy_receipt_without_bindings_remains_upgradable(self) -> None:
+        package = self.generate()
+        first = self.run_install(package)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        receipt_path = (
+            self.workspace
+            / ".opencode/.expert-installs/contract-review-expert.json"
+        )
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt.pop("bindings", None)
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        upgraded = self.run_install(package, force=True)
+        self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+        refreshed = json.loads(receipt_path.read_text(encoding="utf-8"))
+        self.assertIn("bindings", refreshed)
+
     def test_same_slug_force_removes_stale_owned_extensions_and_dependencies(self) -> None:
         manifest = self.write_manifest(slug="upgrade-expert", agent_id="upgrade-agent")
         data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -366,6 +548,8 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.run_install(package).returncode, 0)
 
         data.pop("runtime_extensions")
+        data["agent"]["references"] = []
+        data["agent"].pop("instructions", None)
         manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         regenerated = subprocess.run(
             [
@@ -656,6 +840,457 @@ class InstallerTests(unittest.TestCase):
         )
         self.assertEqual(len(config["instructions"]), 2)
         self.assertEqual(set(config["lsp"]), {"first-merge-lsp", "second-merge-lsp"})
+
+    def test_uninstall_removes_only_receipt_owned_expert_resources(self) -> None:
+        first = self.generate(slug="first-uninstall", agent_id="first-uninstall-agent")
+        second = self.generate(slug="second-uninstall", agent_id="second-uninstall-agent")
+        self.assertEqual(self.run_install(first).returncode, 0)
+        self.assertEqual(self.run_install(second).returncode, 0)
+
+        removed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "first-uninstall",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertEqual(json.loads(removed.stdout)["status"], "uninstalled")
+
+        runtime = self.workspace / ".opencode"
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
+        self.assertNotIn("first-uninstall-agent", config["agent"])
+        self.assertIn("second-uninstall-agent", config["agent"])
+        self.assertNotIn("first-uninstall-playbook", config["references"])
+        self.assertIn("second-uninstall-playbook", config["references"])
+        self.assertFalse((runtime / ".expert-installs/first-uninstall.json").exists())
+        self.assertTrue((runtime / ".expert-installs/second-uninstall.json").is_file())
+        self.assertFalse((runtime / "agents/first-uninstall-agent.md").exists())
+        self.assertTrue((runtime / "agents/second-uninstall-agent.md").is_file())
+
+    def test_uninstall_accepts_legacy_receipt_without_bindings(self) -> None:
+        package = self.generate()
+        self.assertEqual(self.run_install(package).returncode, 0)
+        runtime = self.workspace / ".opencode"
+        receipt_path = runtime / ".expert-installs/contract-review-expert.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["contract"] = 1
+        receipt.pop("bindings", None)
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        removed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "contract-review-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(receipt_path.exists())
+        self.assertFalse((runtime / "agents/contract-reviewer.md").exists())
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
+        self.assertEqual(
+            config["instructions"],
+            [".opencode/instructions/contract-review-expert/*.md"],
+        )
+
+    def test_legacy_receipt_list_and_dependency_ownership_is_not_trusted(self) -> None:
+        receipt = {
+            "contract": 1,
+            "slug": "legacy-expert",
+            "files": {},
+            "config_values": {
+                "plugin": ["preexisting-plugin"],
+                "instructions": ["preexisting-instruction"],
+            },
+            "dependencies": {
+                "dependencies": {"preexisting-dependency": "^1.0.0"}
+            },
+        }
+        receipts = {"legacy-expert": receipt}
+        config = {
+            "plugin": ["preexisting-plugin"],
+            "instructions": ["preexisting-instruction"],
+        }
+        package_json = {
+            "dependencies": {"preexisting-dependency": "^1.0.0"}
+        }
+        INSTALLER.prune_owned_config(
+            config,
+            {},
+            slug="legacy-expert",
+            own_receipt=receipt,
+            receipts=receipts,
+            force=True,
+        )
+        INSTALLER.prune_owned_dependencies(
+            package_json,
+            {},
+            slug="legacy-expert",
+            own_receipt=receipt,
+            receipts=receipts,
+            force=True,
+        )
+        self.assertEqual(config["plugin"], ["preexisting-plugin"])
+        self.assertEqual(config["instructions"], ["preexisting-instruction"])
+        self.assertEqual(
+            package_json["dependencies"],
+            {"preexisting-dependency": "^1.0.0"},
+        )
+        self.assertEqual(
+            INSTALLER.merge_list(
+                config,
+                "plugin",
+                ["preexisting-plugin"],
+                receipts=receipts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            INSTALLER.merge_package_json(
+                package_json,
+                {"dependencies": {"preexisting-dependency": "^1.0.0"}},
+                slug="legacy-expert",
+                force=True,
+                receipts=receipts,
+            )["dependencies"],
+            {},
+        )
+
+    def test_uninstall_refuses_changed_owned_files_without_partial_deletion(self) -> None:
+        package = self.generate()
+        self.assertEqual(self.run_install(package).returncode, 0)
+        runtime = self.workspace / ".opencode"
+        agent = runtime / "agents/contract-reviewer.md"
+        agent.write_text("user change\n", encoding="utf-8")
+
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "contract-review-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("changed owned file", rejected.stderr)
+        self.assertEqual(agent.read_text(encoding="utf-8"), "user change\n")
+        self.assertTrue(
+            (runtime / ".expert-installs/contract-review-expert.json").is_file()
+        )
+
+    def test_uninstall_refuses_missing_owned_config_without_partial_deletion(self) -> None:
+        package = self.generate()
+        self.assertEqual(self.run_install(package).returncode, 0)
+        runtime = self.workspace / ".opencode"
+        config_path = runtime / "opencode.jsonc"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.pop("instructions")
+        config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "contract-review-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("missing owned config instructions", rejected.stderr)
+        self.assertTrue((runtime / "agents/contract-reviewer.md").is_file())
+        self.assertTrue(
+            (runtime / ".expert-installs/contract-review-expert.json").is_file()
+        )
+
+    def test_uninstall_refuses_missing_owned_mapping_entry_without_partial_deletion(self) -> None:
+        package = self.generate()
+        self.assertEqual(self.run_install(package).returncode, 0)
+        runtime = self.workspace / ".opencode"
+        config_path = runtime / "opencode.jsonc"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["references"].pop("contract-review-expert-playbook")
+        config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "contract-review-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "missing owned config references.contract-review-expert-playbook",
+            rejected.stderr,
+        )
+        self.assertTrue((runtime / "agents/contract-reviewer.md").is_file())
+        self.assertTrue(
+            (runtime / ".expert-installs/contract-review-expert.json").is_file()
+        )
+
+    def test_uninstall_refuses_missing_owned_dependency_without_partial_deletion(self) -> None:
+        manifest = self.write_manifest()
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["runtime_extensions"].setdefault("plugins", {})["package_json"] = {
+            "dependencies": {"owned-dependency": "^1.0.0"}
+        }
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        output = self.root / "dependency-packages"
+        generated = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(output),
+            ],
+            env=managed_generator_env(output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        package = output / "contract-review-expert"
+        self.assertEqual(self.run_install(package).returncode, 0)
+        runtime = self.workspace / ".opencode"
+        package_json_path = runtime / "package.json"
+        package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+        package_json["dependencies"].pop("owned-dependency")
+        package_json_path.write_text(
+            json.dumps(package_json, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "contract-review-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "missing owned dependency dependencies.owned-dependency",
+            rejected.stderr,
+        )
+        self.assertTrue((runtime / "agents/contract-reviewer.md").is_file())
+        self.assertTrue(
+            (runtime / ".expert-installs/contract-review-expert.json").is_file()
+        )
+
+    def test_install_does_not_claim_preexisting_unowned_plugin(self) -> None:
+        manifest = self.write_manifest()
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["runtime_extensions"].setdefault("plugins", {})["npm"] = [
+            "preexisting-plugin"
+        ]
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        output = self.root / "plugin-packages"
+        generated = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(output),
+            ],
+            env=managed_generator_env(output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        runtime = self.workspace / ".opencode"
+        runtime.mkdir()
+        (runtime / "opencode.jsonc").write_text(
+            json.dumps({"plugin": ["preexisting-plugin"]}) + "\n",
+            encoding="utf-8",
+        )
+        package = output / "contract-review-expert"
+        self.assertEqual(self.run_install(package).returncode, 0)
+        receipt = json.loads(
+            (runtime / ".expert-installs/contract-review-expert.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertNotIn("plugin", receipt["config_values"])
+
+        removed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "contract-review-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
+        self.assertEqual(config["plugin"], ["preexisting-plugin"])
+
+    def test_install_does_not_claim_preexisting_unowned_dependency(self) -> None:
+        manifest = self.write_manifest()
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["runtime_extensions"].setdefault("plugins", {})["package_json"] = {
+            "dependencies": {"preexisting-dependency": "^1.0.0"}
+        }
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        output = self.root / "preexisting-dependency-packages"
+        generated = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(output),
+            ],
+            env=managed_generator_env(output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        runtime = self.workspace / ".opencode"
+        runtime.mkdir()
+        (runtime / "package.json").write_text(
+            json.dumps({"dependencies": {"preexisting-dependency": "^1.0.0"}})
+            + "\n",
+            encoding="utf-8",
+        )
+        package = output / "contract-review-expert"
+        self.assertEqual(self.run_install(package).returncode, 0)
+        receipt = json.loads(
+            (runtime / ".expert-installs/contract-review-expert.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(receipt["dependencies"]["dependencies"], {})
+
+        removed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "contract-review-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        package_json = json.loads((runtime / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            package_json["dependencies"],
+            {"preexisting-dependency": "^1.0.0"},
+        )
+
+    def test_uninstall_rejects_receipt_path_escape(self) -> None:
+        runtime = self.workspace / ".opencode"
+        receipts = runtime / ".expert-installs"
+        receipts.mkdir(parents=True)
+        outside = self.root / "outside.txt"
+        outside.write_text("outside\n", encoding="utf-8")
+        (receipts / "escape-expert.json").write_text(
+            json.dumps(
+                {
+                    "contract": 1,
+                    "slug": "escape-expert",
+                    "files": {"../../outside.txt": contract.sha256_file(outside)},
+                    "config_values": {},
+                    "dependencies": {},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "escape-expert",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid install receipt", rejected.stderr)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "outside\n")
+        self.assertTrue((receipts / "escape-expert.json").is_file())
+
+    def test_commit_transaction_rejects_path_escape_before_mutation(self) -> None:
+        runtime = self.workspace / ".opencode"
+        runtime.mkdir()
+        outside = self.root / "outside.txt"
+        outside.write_text("outside\n", encoding="utf-8")
+        with self.assertRaisesRegex(SystemExit, "path traversal"):
+            INSTALLER.commit_transaction(runtime, {}, ["../../outside.txt"])
+        self.assertEqual(outside.read_text(encoding="utf-8"), "outside\n")
 
     def test_commit_transaction_rolls_back_on_replace_failure(self) -> None:
         runtime = self.workspace / ".opencode"

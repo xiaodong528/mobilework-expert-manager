@@ -13,12 +13,14 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import bundle_contract
+import manager_contract
 
 
 class BundleContractTests(unittest.TestCase):
     def manifest(self) -> dict:
         return {
-            "schemaVersion": 1, "contractVersion": "2.0.0",
+            "schemaVersion": 1,
+            "contractVersion": manager_contract.load_policy()["contractVersion"],
             "generatorVersion": "fixture-generator",
             "packages": [{"file": "a.zip", "slug": "a", "version": "1.0.0", "sha256": "x"}],
             "tests": {"collected": 3, "passed": 2, "failed": 0, "skipped": 1},

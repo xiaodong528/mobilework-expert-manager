@@ -55,6 +55,9 @@ lsp
 `path` 与 `repository` 必须恰好声明一个，`branch` 只允许用于 Git。MobileWork 为保证 ownership
 和精确回读不接受上游字符串简写；local `path` 必须等于
 `.opencode/references/<slug>/<alias>`，并至少匹配一个 `reference_files[]`。
+`repository` 可使用远程 Git URL、SCP-like 地址、host/path 或 GitHub `owner/repo`，但不得夹带
+密码、Token 或其他嵌入式凭据；本地路径、`file:`、query 和 fragment 被拒绝。`hidden` 只影响
+TUI 自动补全，不提供保密或角色隔离。
 
 `mcp` 的 package-owned 子集由版本无关管理器合同定义：local 支持
 `type/command/environment/enabled/timeout`，remote 支持
@@ -123,6 +126,7 @@ permission
 | `runtime_extensions.plugins.npm[]` | 无文件 | 加入 `plugin`。 |
 | `reference_files[]` | `.opencode/references/<slug>/<alias>/...` | 作为 local `references.<alias>.path` 的 backing file，不加入 `instructions`。 |
 | `instruction_files[]` | `.opencode/instructions/<slug>/...` | 由 `instructions` 建立索引。 |
+| `role_instructions` | `.opencode/instructions/<slug>/roles/<alias>.md` | 无根配置；规则正文只写入分配角色的 Agent Markdown。 |
 
 文件内容、路径、hash 与配置索引都必须能回到 `expert.json` 的声明输入。
 OpenCode 自动发现 `.opencode/plugins/` 与 `.opencode/tools/`，所以本地 plugin 和 custom tool
@@ -130,9 +134,16 @@ OpenCode 自动发现 `.opencode/plugins/` 与 `.opencode/tools/`，所以本地
 local entry 使用 namespaced alias 和包内目录 `path`，并由 `reference_files[]` 提供真实文件；Git
 entry 使用 `repository`，可带 `branch`、`description`、`hidden`。`instructions` 只索引显式
 `instruction_files[]`，不再承载 local reference 文件。
+角色 `references[]` 只决定 Agent Markdown 中的使用说明和 receipt 审计；原生 Reference 仍是
+根级配置。角色 `instructions[]` 引用的角色规则不得进入根级 `instructions`。
 OpenCode 官方也支持根级 `command`，但专家包为保持文件 ownership 与安装冲突边界，固定使用
 `.opencode/commands/*.md`；workflow-to-command 编写规则见 `runtime-extensions-spec.md`，官方语法见
 [OpenCode Commands](https://opencode.ai/docs/commands/)。
+
+目标 capability contract 未明确证明 `references=true` 时，不根据版本号猜测支持：local
+Reference 在安装时降级为角色专属派生 Skill；Git Reference 在写 workspace 前以
+`capability-missing` 阻断。设计、生成、静态校验和打包仍可完成，但这些都不证明 Git 已异步
+materialize。
 
 这些文件安装后与其他包共享 workspace 目录；可共存包的 plugin/tool 路径必须使用 slug
 命名空间，Agent、MCP、LSP 和 command key 也必须经过跨包冲突审计。独立安装与同 workspace

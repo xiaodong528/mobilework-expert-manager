@@ -1,10 +1,10 @@
 # MobileWork Expert Manager
 
-用于创建、转换、修改、诊断、校验、安装、打包和版本发布 MobileWork 专家与专家团，并为角色
-导入和分配技能的 Claude Code 与 Codex 插件。
+把业务目标转换成可确认、可生成、可验证的 MobileWork 专家或专家团。管理器会先用白话说明
+角色、资料、规则、工具、流程和外部连接应该放在哪里，用户确认后才写入专家包。
 
-本仓库发布 `mobilework-expert-manager` 插件，并通过 `mobilework-tools` marketplace 为
-Claude Code 与 Codex 提供直接安装。其他团队仍可从自己的 marketplace 引用本仓库中的公共插件。
+本仓库同时发布 Claude Code 与 Codex 插件，并通过同名的 `mobilework-tools` Git marketplace
+提供安装。两套宿主共用 `skills/mobilework-expert-manager/`，但各自读取独立的 Manifest 和市场清单。
 
 ## 插件接口
 
@@ -12,12 +12,16 @@ Claude Code 与 Codex 提供直接安装。其他团队仍可从自己的 market
 |---|---|
 | 插件名 | `mobilework-expert-manager` |
 | Marketplace | `mobilework-tools` |
-| 当前版本 | `0.4.0` |
+| 当前版本 | `0.5.0` |
 | Skill | `mobilework-expert-manager` |
 | Claude Code 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
 | Codex 调用 | `$mobilework-expert-manager:mobilework-expert-manager` |
 
-## 安装
+## 通过插件市场安装
+
+“添加市场”和“安装插件”是两步：第一步让宿主认识 `mobilework-tools`，第二步才把
+`mobilework-expert-manager` 安装到本机。本仓库提供的是由 `xiaodong528` 维护的 Git marketplace，
+不是 OpenAI 或 Anthropic 官方市场。安装前请先检查仓库内容和权限边界。
 
 ### Claude Code
 
@@ -32,6 +36,15 @@ claude plugin install mobilework-expert-manager@mobilework-tools
 /mobilework-expert-manager:mobilework-expert-manager
 ```
 
+更新已安装版本：
+
+```bash
+claude plugin marketplace update mobilework-tools
+claude plugin update mobilework-expert-manager@mobilework-tools
+```
+
+更新完成后执行 `/reload-plugins`，或重新启动 Claude Code 会话。
+
 ### Codex
 
 ```bash
@@ -45,9 +58,30 @@ codex plugin add mobilework-expert-manager@mobilework-tools
 $mobilework-expert-manager:mobilework-expert-manager
 ```
 
+本仓库 CI 固定使用的 Codex `0.145.0` 没有单独的 `plugin update` 命令。先刷新 marketplace，
+再重新安装：
+
+```bash
+codex plugin marketplace upgrade mobilework-tools
+codex plugin remove mobilework-expert-manager@mobilework-tools
+codex plugin add mobilework-expert-manager@mobilework-tools
+```
+
+然后启动新任务，让新的插件缓存和 Skill 生效。
+
+## 两套市场文件分别负责什么
+
+| 宿主 | 市场清单 | 插件 Manifest | 安装后的调用方式 |
+|---|---|---|---|
+| Claude Code | `.claude-plugin/marketplace.json` | `.claude-plugin/plugin.json` | `/mobilework-expert-manager:mobilework-expert-manager` |
+| Codex | `.agents/plugins/marketplace.json` | `.codex-plugin/plugin.json` | `$mobilework-expert-manager:mobilework-expert-manager` |
+
+两个 marketplace 都叫 `mobilework-tools`，都指向本仓库根目录的插件。版本号必须同时更新两份
+`plugin.json`；实际技能内容只维护一份，放在 `skills/mobilework-expert-manager/`。
+
 ## 在其他 Marketplace 中引用
 
-组长在本组 `.claude-plugin/marketplace.json` 的 `plugins` 数组中加入：
+Claude Code 团队市场可以在 `.claude-plugin/marketplace.json` 的 `plugins` 数组中加入：
 
 ```json
 {
@@ -72,10 +106,35 @@ $mobilework-expert-manager:mobilework-expert-manager
 claude --plugin-dir .
 ```
 
+Codex 团队市场可以在 `.agents/plugins/marketplace.json` 的 `plugins` 数组中加入：
+
+```json
+{
+  "name": "mobilework-expert-manager",
+  "source": {
+    "source": "url",
+    "url": "https://github.com/xiaodong528/mobilework-expert-manager.git"
+  },
+  "policy": {
+    "installation": "AVAILABLE",
+    "authentication": "ON_INSTALL"
+  },
+  "category": "Developer Tools"
+}
+```
+
+这只是把插件加入团队自己的市场目录，不代表它进入了 OpenAI 的公共插件目录。
+
 ## 核心能力
 
 - 以 `expert.json` 作为专家包结构与资源所有权的唯一事实源。
+- 把模糊业务需求翻译成 Reference、Skill、Instruction、Workflow、Custom tool、Plugin/Hook、
+  MCP 或 Agent/Team 建议；未经确认不写文件、不拉取 Git、不扩大权限。
 - 支持单专家和专家团，以及角色路由、交接、验收、返工与最终集成。
+- Reference 支持包内本地资料和 Git 仓库；Git 地址、分支、说明和 `hidden` 状态进入统一合同，
+  不在专家包中保存凭据。
+- 支持把 Reference 和角色级 Instruction 分配给指定角色，并把绑定关系写入安装 receipt 供审计；
+  这些绑定是路由信息，不冒充系统级访问控制。
 - 支持串行、并行和团长协调 Workflow，以及 `scripted`、`fixed`、`bounded`、`guided`、
   `adaptive` 五档自主度。
 - 新专家使用统一顶层 `skills[]`，角色通过完整技能名引用拥有的技能。
@@ -142,7 +201,7 @@ claude --plugin-dir .
 | 执行器 | `skill-script`、`custom-tool`、`mcp-tool`、`programming-tool`、`agent` | 校验执行器引用、真实资源、参与角色和权限所有权，不从职责文本猜测能力 |
 | 运行参数 | `steps`，以及可选 `model`、`variant`、`temperature`、`top_p`、`hidden`、`options` | 精确投影到 Agent Markdown 和 `opencode.json`；未声明项继承 OpenCode、模型或 provider 默认值 |
 | 权限 | Workflow 自主度、execution、Skill/MCP/task/custom tool 所有权及显式 `permission` | 生成最小权限；禁止无条件 `bash: {"*": "allow"}`，显式提权需要 `permission_reason` |
-| 运行时扩展 | `mcp_servers` 与 `runtime_extensions` 中的 commands、tools、plugins、references、instructions、LSP | 生成 `.opencode/**` 资源、`opencode.json` 配置和可选 `.env.example` |
+| 运行时扩展 | `mcp_servers` 与 `runtime_extensions` 中的 commands、tools、plugins、Local/Git references、workspace instructions、role instructions、LSP | 生成 `.opencode/**` 资源、`opencode.json` 配置和可选 `.env.example`；角色绑定写入 Agent Markdown 与安装 receipt |
 | 安装与回滚 | 包根 `opencode.json` 和所有声明资源 | 投影到 `<workspace>/.opencode/`，按资源归属预检冲突、原子安装、失败回滚并写入 receipt |
 | 本地版本 | 包内容的累计 diff 与用户确认的 SemVer | 初始化精确包根 Git；只在用户确认后本地 commit/tag，永不自动配置 remote |
 
@@ -259,6 +318,7 @@ Python 3.11、`PyYAML==6.0.3` 和固定提交的官方 `skills-ref` 执行相同
 - [Workflow 自主度与执行合同](skills/mobilework-expert-manager/references/workflow-autonomy-spec.md)
 - [权限与资源所有权矩阵](skills/mobilework-expert-manager/references/permission-policy-spec.md)
 - [运行时扩展与安装投影](skills/mobilework-expert-manager/references/runtime-extensions-spec.md)
+- [需求转译与模块推荐](skills/mobilework-expert-manager/references/requirements-discovery.md)
 - [可分发专家包、ZIP 与便携性](skills/mobilework-expert-manager/references/portable-package-spec.md)
 - [本地 Git 与 SemVer](skills/mobilework-expert-manager/references/source-version-control.md)
 
@@ -267,7 +327,7 @@ Python 3.11、`PyYAML==6.0.3` 和固定提交的官方 `skills-ref` 执行相同
 - [Claude Code 插件开发](https://code.claude.com/docs/en/plugins)
 - [Claude Code 插件技术参考](https://code.claude.com/docs/en/plugins-reference)
 - [Claude Code 插件市场](https://code.claude.com/docs/en/plugin-marketplaces)
-- [OpenAI 插件打包](https://developers.openai.com/plugins/build/plugins)
+- [OpenAI 插件打包与市场边界](https://developers.openai.com/plugins/build/plugins)
 - [OpenCode 官方文档](https://opencode.ai/docs/)
 
 ## License

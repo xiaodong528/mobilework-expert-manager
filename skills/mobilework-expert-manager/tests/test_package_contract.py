@@ -409,6 +409,7 @@ class PackageContractTests(unittest.TestCase):
             "description": "Upstream reference",
             "hidden": False,
         }
+        data["agent"]["references"].append("upstream")
         manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         result = self.run_create(manifest)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -456,11 +457,92 @@ class PackageContractTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
 
+    def test_git_reference_rejects_embedded_credentials(self) -> None:
+        rejected = [
+            "https://user:password@example.com/reference.git",
+            "https://embedded-user@example.com/reference.git",
+            "https://example.com/reference.git?token=secret-value",
+            "https://example.com/reference.git?oauth_token=secret-value",
+            "https://{env:GIT_TOKEN}@example.com/reference.git",
+        ]
+        for repository in rejected:
+            with self.subTest(repository=repository):
+                with self.assertRaisesRegex(contract.ContractError, "must not embed credentials"):
+                    contract.normalize_reference_entries(
+                        {"upstream": {"repository": repository}},
+                        "runtime_extensions.references",
+                        slug="contract-review-expert",
+                        reference_file_paths=[],
+                    )
+        for repository in (
+            "example-org/reference",
+            "github.com/example-org/reference",
+            "git@github.com:example-org/reference.git",
+            "ssh://git@github.com/example-org/reference.git",
+        ):
+            with self.subTest(allowed=repository):
+                normalized = contract.normalize_reference_entries(
+                    {"upstream": {"repository": repository}},
+                    "runtime_extensions.references",
+                    slug="contract-review-expert",
+                    reference_file_paths=[],
+                )
+                self.assertEqual(normalized["upstream"]["repository"], repository)
+
+    def test_git_reference_rejects_local_or_ambiguous_repository_sources(self) -> None:
+        rejected = (
+            "file:///home/example/private-reference.git",
+            "file:/home/example/private-reference.git",
+            "file:relative/private-reference.git",
+            "ext::sh%20-c%20id",
+            "/home/example/private-reference.git",
+            "~/private-reference.git",
+            "../private-reference.git",
+            "C:private-reference.git",
+            "z:repo",
+            "https://example.com/reference.git?ref=main",
+            "https://example.com/reference.git#main",
+        )
+        for repository in rejected:
+            with self.subTest(repository=repository):
+                with self.assertRaises(contract.ContractError):
+                    contract.normalize_reference_entries(
+                        {"upstream": {"repository": repository}},
+                        "runtime_extensions.references",
+                        slug="contract-review-expert",
+                        reference_file_paths=[],
+                    )
+
+    def test_git_reference_without_branch_reports_default_branch_warning(self) -> None:
+        manifest, data = self.manifest()
+        data["runtime_extensions"]["reference_files"] = []
+        data["runtime_extensions"]["references"] = {
+            "upstream": {
+                "repository": "example-org/reference",
+                "description": "Use for upstream implementation guidance",
+            }
+        }
+        data["agent"]["references"] = ["upstream"]
+        manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        created = self.run_create(manifest)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        package = self.root / "out/contract-review-expert"
+        validated = subprocess.run(
+            [sys.executable, str(VALIDATE), str(package), "--format", "json"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(validated.returncode, 0, validated.stdout + validated.stderr)
+        findings = json.loads(validated.stdout)["findings"]
+        self.assertIn("REFERENCE_GIT_DEFAULT_BRANCH", {item["code"] for item in findings})
+
     def test_reference_files_must_be_owned_by_a_local_reference(self) -> None:
         manifest, data = self.manifest()
         data["runtime_extensions"]["references"] = {
             "upstream": {"repository": "https://example.com/reference.git"}
         }
+        data["agent"]["references"] = ["upstream"]
         manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         result = self.run_create(manifest)
         self.assertNotEqual(result.returncode, 0)
@@ -482,6 +564,7 @@ class PackageContractTests(unittest.TestCase):
             "repository": "https://example.com/reference.git",
             "branch": "stable",
         }
+        data["agent"]["references"].append("upstream")
         manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         created = self.run_create(manifest)
         self.assertEqual(created.returncode, 0, created.stderr)

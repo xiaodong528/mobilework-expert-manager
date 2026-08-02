@@ -98,7 +98,7 @@
 | `default_prompt` | 如存在，必须等于 `quick_prompts[0]`。 |
 | `skills` | 统一技能池；可省略或为空，条目声明完整 name、origin 与 edit_policy。 |
 | `mcp_servers` | 可选 MCP 声明；支持 local、remote、header auth、OAuth 与 timeout，详见 `runtime-extensions-spec.md`。 |
-| `runtime_extensions` | commands、tools、plugins、目标 capability contract 支持的 local/Git references、instructions、LSP。 |
+| `runtime_extensions` | commands、tools、plugins、目标 capability contract 支持的 local/Git references、角色规则、workspace instructions、LSP。 |
 | `package_resources` | 统一技能池中包括 `SKILL.md` 在内的全部声明资源及 SHA-256。 |
 
 来源资料中的宿主产品、平台发布和智能体容器叙事，在展示草案前改为 MobileWork 口径。
@@ -146,7 +146,7 @@
 
 - `id`、`name`、`display_name`、`profession`、`description`、`avatar_url`、`color`；
 - `responsibilities`、`route_triggers`、`workflow`、`quality_gates`、`handoff_contract`；
-- `skills`、`mcp`、`custom_tools`、`permission`、可选 `permission_reason`；
+- `skills`、`references`、`instructions`、`mcp`、`custom_tools`、`permission`、可选 `permission_reason`；
 - OpenCode 正式步数字段 `steps`，以及仅供 `expert.json` 读取旧包的 MobileWork 历史输入
   `max_turns`、`maxTurns`；
 - 可选运行参数 `model`、`variant`、`temperature`、`top_p`、`hidden`、`options`。
@@ -159,6 +159,19 @@
 `runtime_extensions.custom_tools[].path`。单专家不自动拥有全部包级 custom tool；workflow
 executor 可以只为实际参与角色建立该 workflow 所需的 tool 所有权。旧 `tools` mapping 仅作为
 布尔 permission 兼容输入，不是 custom tool 所有权声明。
+
+角色资源绑定合同：
+
+- `references[]` 使用 kebab-case 短 alias，只能引用 `runtime_extensions.references`；新包一旦声明
+  Reference，所有角色都显式写出数组，空数组有效，每个 Reference 至少有一个使用角色。
+- `instructions[]` 使用 kebab-case 短 alias，只能引用
+  `runtime_extensions.role_instructions`；存在角色规则时所有角色显式写出数组，每条规则至少有一个
+  使用角色。
+- 两个数组都拒绝未知、重复 alias 和 `*`。Reference 缺少 `description` 仍合法，但已分配角色时
+  validator 给 warning。
+- `references[]` 和 `instructions[]` 负责路由、生成与审计，不是访问控制。Reference 仍投影为根级
+  OpenCode 配置；角色规则则只写入被分配角色的 Agent Markdown。严格隔离资料时使用角色专属
+  Skill 或带权限的 MCP。
 
 `steps` 是 OpenCode 官方支持且新设计唯一使用的步数字段。`max_turns`、`maxTurns` 不是 OpenCode Agent
 选项，只为避免批量迁移既有 MobileWork manifest 而在 `expert.json` 输入层兼容；三种输入都
@@ -378,6 +391,9 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
 ## 7. 运行时与资源入口
 
 - `runtime_extensions`、MCP、env 和 CLI 安装投影见 `runtime-extensions-spec.md`。
+- 本地与 Git Reference 分别使用 `path` 与 `repository`，两者恰好出现一个；角色通过
+  `references[]` 声明使用关系。角色规则使用 `role_instructions` 声明本地 Markdown，再通过角色
+  `instructions[]` 分配，不进入 workspace 全局 `runtime_extensions.instructions`。
 - 头像规则见 `avatar-spec.md`。
 - `package_resources[]`、包 allowlist、业务产物和分发合同见 `portable-package-spec.md`。
 - agent 与 skill 编写方法见 `opencode-authoring-best-practices.md`。
@@ -441,11 +457,21 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
       {
         "path": ".opencode/instructions/contract-review-expert/evidence.md",
         "content": "# Evidence rule\n\nCite the relevant clause for every finding.\n"
+      },
+      {
+        "path": ".opencode/instructions/contract-review-expert/roles/source-policy.md",
+        "content": "# Source policy\n\nMark the source of every quoted clause.\n"
       }
     ],
     "instructions": [
       ".opencode/instructions/contract-review-expert/*.md"
-    ]
+    ],
+    "role_instructions": {
+      "source-policy": {
+        "path": ".opencode/instructions/contract-review-expert/roles/source-policy.md",
+        "description": "审查角色引用条款时标明来源"
+      }
+    }
   },
   "agent": {
     "id": "contract-reviewer",
@@ -457,6 +483,12 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
     "color": "#2563eb",
     "avatar_url": "avatars/contract-reviewer.png",
     "skills": [],
+    "references": [
+      "playbook"
+    ],
+    "instructions": [
+      "source-policy"
+    ],
     "responsibilities": [
       "Identify obligations, liabilities, rights, remedies, and ambiguous terms.",
       "Separate legal risk, commercial risk, and missing information.",
@@ -544,11 +576,21 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
       {
         "path": ".opencode/instructions/contract-review-expert/evidence.md",
         "content": "# Evidence rule\n\nCite the relevant clause for every finding.\n"
+      },
+      {
+        "path": ".opencode/instructions/contract-review-expert/roles/source-policy.md",
+        "content": "# Source policy\n\nMark the source of every quoted clause.\n"
       }
     ],
     "instructions": [
       ".opencode/instructions/contract-review-expert/*.md"
-    ]
+    ],
+    "role_instructions": {
+      "source-policy": {
+        "path": ".opencode/instructions/contract-review-expert/roles/source-policy.md",
+        "description": "审查角色引用条款时标明来源"
+      }
+    }
   },
   "agent": {
     "id": "contract-reviewer",
@@ -562,6 +604,12 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
     "skills": [
       {"purpose": "role-guidelines"},
       {"purpose": "clause-checklist"}
+    ],
+    "references": [
+      "playbook"
+    ],
+    "instructions": [
+      "source-policy"
     ],
     "responsibilities": [
       "Identify obligations, liabilities, rights, remedies, and ambiguous terms.",

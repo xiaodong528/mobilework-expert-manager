@@ -53,8 +53,8 @@ $quick_prompts
 - `.opencode/commands/`：可选的自定义命令。
 - `.opencode/tools/`：可选的自定义工具定义。
 - `.opencode/plugins/`：可选的本地插件；依赖只通过 `.opencode/package.json` 声明，不携带 `node_modules`。
-- `.opencode/references/<slug>/<alias>/`：可选的包内引用资料目录。
-- `.opencode/instructions/<slug>/`：可选的 workspace 全局指令文件；必须由 `opencode.json.instructions` 索引。
+- `.opencode/references/<slug>/<alias>/`：可选的包内资料目录；Git Reference 只在 `expert.json` 和 `opencode.json` 声明仓库，不生成本地 backing file。
+- `.opencode/instructions/<slug>/`：可选的指令文件；workspace 规则由 `opencode.json.instructions` 索引，`roles/` 下的角色规则只写入被分配角色的 Agent Markdown。
 - `package_resources[]`：统一声明 skill 子树内包括 `SKILL.md` 在内的全部文件及 SHA-256；实际文件保留在对应 skill 子树。
 
 本包保留 MobileWork 项目结构，不生成根级 `AGENTS.md`，也不包含非运行必需的根级配置或隐藏目录。

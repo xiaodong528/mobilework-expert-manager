@@ -37,6 +37,8 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.base = json.loads(load_spec_text("legacy-expert-json"))
         self.base["runtime_extensions"] = {}
+        self.base["agent"]["references"] = []
+        self.base["agent"].pop("instructions", None)
         self.base.pop("mcp_servers", None)
 
     def tearDown(self) -> None:
@@ -430,6 +432,7 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
             "hidden": True,
         }
         data["runtime_extensions"] = {"references": {"loopback": reference}}
+        data["agent"]["references"] = ["loopback"]
         created, package = self.generate(data, name="reference-loopback")
         self.assertEqual(created.returncode, 0, created.stderr)
         runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))

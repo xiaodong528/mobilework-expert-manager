@@ -122,8 +122,34 @@ def _plan_root(
         decisions.append({
             "code": "CONFIRM_ROOT_INSTRUCTIONS",
             "path": "AGENTS.md",
-            "question": "Which rules belong in a namespaced instruction file?",
+            "question": "Should each rule remain workspace-wide or apply only to named expert roles?",
         })
+
+    runtime_extensions = manifest.get("runtime_extensions")
+    runtime_extensions = runtime_extensions if isinstance(runtime_extensions, dict) else {}
+    runtime_references = runtime_extensions.get("references")
+    if isinstance(runtime_references, dict) and runtime_references:
+        roles = _role_pointers(manifest)
+        if roles and not any("references" in role for _pointer, role in roles):
+            for alias in sorted(runtime_references):
+                decisions.append({
+                    "code": "CONFIRM_REFERENCE_CONSUMERS",
+                    "path": f"runtime_extensions.references.{alias}",
+                    "question": "Which named roles should be told to use this Reference?",
+                })
+
+    global_instructions = runtime_extensions.get("instructions")
+    if isinstance(global_instructions, list):
+        for index, instruction in enumerate(global_instructions):
+            if isinstance(instruction, str):
+                decisions.append({
+                    "code": "CONFIRM_INSTRUCTION_SCOPE",
+                    "path": f"runtime_extensions.instructions[{index}]",
+                    "question": (
+                        "Should this rule remain workspace-wide, or become a role rule; "
+                        "if role-scoped, which named roles consume it?"
+                    ),
+                })
 
     for warning in source_warnings:
         if warning.get("code") == "MIGRATION_FILENAME_MOJIBAKE":

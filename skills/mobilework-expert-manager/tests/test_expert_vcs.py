@@ -252,6 +252,18 @@ class ExpertVcsTests(unittest.TestCase):
         current["agent"]["custom_tools"] = ["known.ts"]
         self.assertEqual(expert_vcs.classify_change(previous, current)[0], "minor")
 
+    def test_role_reference_or_instruction_binding_change_is_minor(self) -> None:
+        previous = {
+            "slug": "a",
+            "type": "expert",
+            "agent": {"id": "a", "references": [], "instructions": []},
+        }
+        for field, alias in (("references", "policy"), ("instructions", "team-rule")):
+            with self.subTest(field=field):
+                current = json.loads(json.dumps(previous))
+                current["agent"][field] = [alias]
+                self.assertEqual(expert_vcs.classify_change(previous, current)[0], "minor")
+
     def test_git_metadata_is_excluded_from_hash_and_workspace_install(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

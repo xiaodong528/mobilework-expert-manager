@@ -405,18 +405,21 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             "诊断",
         ):
             self.assertIn(marker, skill_text.split("---", 2)[1])
-        self.assertIn("可选 Workflow", openai)
-        self.assertIn("动态多实例协作", openai)
         preset_manifest_path = SKILL.parents[1] / "manifest.json"
+        self.assertIn("用白话推荐", openai)
+        self.assertIn("先让我确认", openai)
         if preset_manifest_path.is_file():
+            preset_manifest = preset_manifest_path.read_text(encoding="utf-8")
+            self.assertIn("可选 Workflow", preset_manifest)
+            self.assertIn("多角色多实例并行", preset_manifest)
             self.assertIn(
                 "设计、分析、创建、修改、诊断和校验 MobileWork 专家或专家团包",
-                preset_manifest_path.read_text(encoding="utf-8"),
+                preset_manifest,
             )
         plugin_manifest_path = SKILL.parents[1] / ".claude-plugin" / "plugin.json"
         if plugin_manifest_path.is_file():
             self.assertIn(
-                "Design, analyze, create, modify, diagnose, and validate",
+                "role-scoped references",
                 plugin_manifest_path.read_text(encoding="utf-8"),
             )
 
@@ -440,7 +443,33 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             self.assertIn("`.opencode/instructions/", text)
             self.assertIn("AGENTS.md", text)
         self.assertIn("references/runtime-extensions-spec.md", skill_text)
-        self.assertIn("PDF、DOCX、图片等先转换", discovery)
+        self.assertIn("PDF、DOCX、图片等二进制不能直接", discovery)
+        for marker in (
+            "我理解的需求",
+            "建议方案及原因",
+            "只需你确认的事项",
+            "资料库（Reference）",
+            "能力包（Skill）",
+            "共享规则（Instruction）",
+            "过程控制（Plugin/Hook）",
+            "外部连接（MCP）",
+            "用户确认前不得生成资源",
+            "每一个编号或",
+            "只能包含一个需要回答的问题",
+            "角色分配只用于路由和审计，不是访问控制",
+            "不要仅为查阅触发条件额外创建角色规则",
+            "需要开发连接器",
+            "外部写权限尚未确认时默认只读最小权限",
+        ):
+            self.assertIn(marker, discovery)
+        for marker in (
+            "这个实现前提不能被笼统的“是否同意方案”替代",
+            "每一个编号只包含一个需要回答的",
+            "不为这个触发条件额外发明角色规则",
+            "Connector、MCP、URL 或启动命令",
+            "不能承诺宿主只在触发后联网",
+        ):
+            self.assertIn(marker, skill_text)
         self.assertIn("不要用 plugin 代替", runtime)
         self.assertIn("不开发根级 `AGENTS.md`", authoring)
         for text in (runtime, authoring):
@@ -489,7 +518,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
     def test_eval_fixtures_and_trigger_balance_are_complete(self) -> None:
         evals = json.loads((SKILL / "evals" / "evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(evals["evals"]), 35)
+        self.assertEqual(len(evals["evals"]), 38)
         names = {item["name"] for item in evals["evals"]}
         self.assertEqual(
             names,
@@ -529,6 +558,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
                 "upload-and-auto-assign-single-expert-skill",
                 "upload-and-assign-skill-to-all-team-members",
                 "migrate-legacy-skills-during-upload",
+                "route-novice-material-script-and-team-rule",
+                "route-novice-git-reference-without-clone",
+                "route-novice-external-check-and-event-block",
             },
         )
         for item in evals["evals"]:

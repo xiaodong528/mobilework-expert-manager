@@ -30,7 +30,7 @@
     ├── tools/                   # 可选
     ├── plugins/                 # 可选
     ├── references/<slug>/<alias>/ # 可选
-    ├── instructions/<slug>/     # 可选
+    ├── instructions/<slug>/     # 可选；roles/ 子目录保存角色规则
     └── package.json             # 可选，不携带 node_modules
 ```
 
@@ -38,6 +38,8 @@
 `instructions/`、真实 `.env`、额外配置和其他隐藏目录非法。
 需要影响整个 workspace 的专家包指令必须放入 `.opencode/instructions/<slug>/`，并由
 `opencode.json.instructions` 索引。
+角色规则固定放入 `.opencode/instructions/<slug>/roles/`，由 `expert.json` 分配后内联到对应 Agent
+Markdown，不进入根级 `opencode.json.instructions`。
 `.opencode/` 中的 agents、skills、commands、tools、plugins、references 和 instructions 是随包
 分发的运行资源，不是专家执行任务时产生的业务文件。
 
@@ -175,6 +177,14 @@ packager 在目标目录内创建 sibling temporary zip，依次运行 Python CR
 `<workspace>/.opencode/opencode.jsonc`，并把包内 `.opencode/**` 复制到工作区对应目录；receipt
 追踪每个 slug 的文件、配置键与依赖 ownership。安装结构、路径重写、冲突和回滚规则见
 `runtime-extensions-spec.md`。
+
+卸载只依据 receipt 删除未漂移、且没有其他专家共同拥有的文件、配置和依赖。receipt 文件名、
+slug、contract、文件相对路径和 SHA-256 先整体校验；缺少 receipt、hash 变化、路径逃逸或配置
+漂移时先停止，不猜测归属。安装前已经存在且没有 receipt owner 的同值列表项或依赖不会被新包
+认领，卸载时必须保留。
+新安装写 receipt contract 2。contract 1 继续可读，但旧版可能错误认领同值列表项或依赖，因此
+升级与卸载只信任它的文件、mapping 和 scalar ownership；旧版 `plugin`、`instructions` 与依赖
+一律保守保留。缺少 `bindings` 的旧 receipt 仍然有效。
 
 旧 `.mobilework-engine` 只作为迁移检测和禁止的业务产物目录保留；安装器不读取、不写入、
 不双写也不自动删除它。重新安装专家是迁移到 `.opencode` 的支持路径。

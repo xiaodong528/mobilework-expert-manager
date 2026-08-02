@@ -288,6 +288,19 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
         return json.loads(result.stdout) if result.stdout.lstrip().startswith("{") else {}
 
     def accept(self, data: dict) -> Path:
+        runtime_extensions = data.get("runtime_extensions", {})
+        runtime_extensions = runtime_extensions if isinstance(runtime_extensions, dict) else {}
+        roles = (
+            [data["agent"]]
+            if data["type"] == "expert"
+            else [data["primary_agent"], *data["subagents"]]
+        )
+        if not runtime_extensions.get("references"):
+            for role in roles:
+                role["references"] = []
+        if not runtime_extensions.get("role_instructions"):
+            for role in roles:
+                role.pop("instructions", None)
         slug = data["slug"]
         case = self.root / slug
         case.mkdir()

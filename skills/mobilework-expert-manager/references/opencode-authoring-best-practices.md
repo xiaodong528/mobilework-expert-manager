@@ -43,6 +43,7 @@
 - 典型触发场景和路由方式；
 - 可执行的工作流程；
 - 分配给该角色的完整 skill 列表；
+- 分配给该角色的 Reference、使用时机和角色规则；
 - 输出格式、证据要求和质量门控；
 - 输入不足、工具不可用、越权、验证失败时的处理方式。
 
@@ -138,13 +139,16 @@ metadata:
 |---|---|---|
 | 随包领域资料、规范、案例、知识库或操作手册 | `reference_files[]` + 本地 `references` | 文件放入 `.opencode/references/<slug>/<alias>/`，namespaced alias 写入 `opencode.json.references`。 |
 | Git 仓库资料 | Git `references` | `repository` 必需，可选 `branch`、`description`、`hidden`；namespaced alias 写入 `opencode.json.references`，不生成 backing file。 |
-| 事件订阅、工具拦截、外部集成或运行时行为修改 | `plugins.local[]` | 文件放入 `.opencode/plugins/` 并自动发现；第三方依赖放 `.opencode/package.json`。 |
+| 指定角色或专家团内部始终遵守的规则 | `role_instructions` + 角色 `instructions[]` | 本地 Markdown 只写入分配角色的 Agent Markdown，不进入根级 instructions。 |
+| 事件订阅、工具拦截或运行时行为修改 | `plugins.local[]` | 文件放入 `.opencode/plugins/` 并自动发现；第三方依赖放 `.opencode/package.json`。 |
 | 智能体直接调用的 JavaScript/TypeScript 能力 | `custom_tools[]` | 文件放入 `.opencode/tools/` 并自动发现，不生成根级 `tools`。 |
+| 已有 Python/Shell 确定性脚本 | Skill `scripts/` + `skill-script` executor | 脚本随 Skill 声明、分配并按执行合同调用。 |
 | 整个 workspace 都要遵守的专家包指令 | `instruction_files[]` + `instructions[]` | 文件放入 `.opencode/instructions/<slug>/`，文件或 glob 写入 `opencode.json.instructions`。 |
+| 主动读写外部软件、服务或数据库 | `mcp_servers[]` | MCP 写入根配置，角色通过 `mcp[]` 获得使用关系。 |
 
 只有 npm plugin package name 写入 `opencode.json.plugin`，本地 plugin 路径不写入。本地 reference
-文件只接受 UTF-8 文本；二进制资料先转换为 Markdown 或文本。Git reference 不声明本地文件。角色专属规则放在 agent Markdown
-或对应 skill。专家包不开发根级 `AGENTS.md`。
+文件只接受 UTF-8 文本；二进制资料先转换为 Markdown 或文本。Git reference 不声明本地文件，
+也不在确认前自动 clone。Reference 的 `hidden` 和角色使用关系都不是访问控制。专家包不开发根级 `AGENTS.md`。
 
 ## Structure 与配置
 
@@ -182,6 +186,8 @@ metadata:
   两级 fan-in 与返工 `task_id` 已写入团长合同。
 - 能使用 skill script、custom tool、MCP tool 或受控 programming tool 的稳定阶段已固定执行器，不允许 Agent 临时现写替代实现。
 - 随包资料、plugins/hooks、custom tools 与 workspace instructions 已按真实需求评估，并写入设计确认稿；不依赖 generator 或 validator 自动补建。
+- 每个 Reference 和角色规则至少分配给一个角色；未分配角色的 Agent Markdown 不泄露对应路径或
+  规则正文。需要强隔离的资料没有误用 Reference 路由代替权限控制。
 - 对计划同时安装的包完成 Agent/MCP/LSP/command/plugin/tool 跨包冲突审计；plugin/tool 文件使用 slug 命名空间，并在同一临时 workspace 顺序安装读回 receipts 与配置。
 - workspace 指令只通过 `.opencode/instructions/<slug>/` 与 `opencode.json.instructions` 声明，包根目录没有 `AGENTS.md`。
 - 配置只使用 OpenCode 字段或明确的 MobileWork 扩展字段。

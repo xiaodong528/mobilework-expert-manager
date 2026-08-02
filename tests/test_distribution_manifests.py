@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_NAME = "mobilework-expert-manager"
 MARKETPLACE_NAME = "mobilework-tools"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 REPOSITORY = "https://github.com/xiaodong528/mobilework-expert-manager"
 
 
@@ -105,17 +105,22 @@ class DistributionManifestTests(unittest.TestCase):
     def test_readme_documents_current_install_contract(self) -> None:
         for expected in (
             "| Marketplace | `mobilework-tools` |",
-            "| 当前版本 | `0.4.0` |",
+            "| 当前版本 | `0.5.0` |",
             "claude plugin marketplace add xiaodong528/mobilework-expert-manager",
             "claude plugin install mobilework-expert-manager@mobilework-tools",
+            "claude plugin marketplace update mobilework-tools",
+            "claude plugin update mobilework-expert-manager@mobilework-tools",
             "codex plugin marketplace add xiaodong528/mobilework-expert-manager",
             "codex plugin add mobilework-expert-manager@mobilework-tools",
+            "codex plugin marketplace upgrade mobilework-tools",
+            "codex plugin remove mobilework-expert-manager@mobilework-tools",
             "/mobilework-expert-manager:mobilework-expert-manager",
             "$mobilework-expert-manager:mobilework-expert-manager",
+            "不是 OpenAI 或 Anthropic 官方市场",
         ):
             self.assertIn(expected, self.readme)
 
-        self.assertNotIn("0.3.0", self.readme)
+        self.assertNotIn("0.4.0", self.readme)
 
 
 if __name__ == "__main__":

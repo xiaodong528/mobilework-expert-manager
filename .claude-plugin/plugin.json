@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "mobilework-expert-manager",
   "displayName": "MobileWork Expert Manager",
-  "version": "0.4.0",
-  "description": "Design, analyze, create, modify, diagnose, and validate MobileWork experts and expert teams, including installation, packaging, versioning, and skill assignment.",
+  "version": "0.5.0",
+  "description": "Turn business goals into confirmable MobileWork expert or expert-team designs, including role-scoped references, rules, tools, installation, and packaging.",
   "author": {
     "name": "xiaodong528"
   },

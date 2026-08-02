@@ -13,6 +13,9 @@
 表、权限变化、业务确认项和需要重生成的派生物。它不提供 `--apply`，不修改源包，不从旧派生物
 覆盖 `expert.json`，不执行 package code。ZIP 先走 metadata preflight、CRC 和受限解压。
 
+旧包声明 Reference 但没有角色使用关系时，迁移预览逐项询问使用角色；已有 workspace
+Instruction 则逐项确认继续全局生效，还是改成角色规则。预览不得静默选择作用范围。
+
 ## 供应链审计
 
 validator 静态运行 warning-first 审计：package lifecycle、secret、危险路径和未声明可执行资源为

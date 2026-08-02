@@ -666,6 +666,22 @@ def normalize_instructions(raw: Any, slug: str, local_file_paths: set[str]) -> l
     return result
 
 
+def normalize_role_instructions(
+    raw: Any,
+    slug: str,
+    instruction_file_paths: set[str],
+) -> dict[str, dict[str, str]]:
+    try:
+        return contract.normalize_role_instruction_entries(
+            raw,
+            "runtime_extensions.role_instructions",
+            slug=slug,
+            instruction_file_paths=instruction_file_paths,
+        )
+    except contract.ContractError as exc:
+        fail(str(exc))
+
+
 def normalize_lsp(raw: Any) -> bool | dict[str, Any] | None:
     try:
         return contract.normalize_lsp_config(raw)
@@ -687,7 +703,7 @@ def normalize_runtime_extensions(
         set(raw)
         - {
             "commands", "custom_tools", "plugins", "reference_files",
-            "instruction_files", "references", "instructions", "lsp",
+            "instruction_files", "references", "instructions", "role_instructions", "lsp",
         }
     )
     if unknown:
@@ -717,6 +733,11 @@ def normalize_runtime_extensions(
         "references": normalize_references(raw.get("references"), slug, reference_file_paths),
         "instructions": normalize_instructions(
             raw.get("instructions"),
+            slug,
+            instruction_file_paths,
+        ),
+        "role_instructions": normalize_role_instructions(
+            raw.get("role_instructions"),
             slug,
             instruction_file_paths,
         ),
@@ -848,6 +869,12 @@ def normalize_role(
         "skills" if skill_mode == "unified" else "skill_purposes": role_skills,
         "mcp": text_list(raw.get("mcp"), f"{field}.mcp"),
         "custom_tools": text_list(raw.get("custom_tools"), f"{field}.custom_tools"),
+        "references": contract.normalize_role_aliases(
+            raw.get("references", []), f"{field}.references"
+        ),
+        "instructions": contract.normalize_role_aliases(
+            raw.get("instructions", []), f"{field}.instructions"
+        ),
         "permission": normalize_permission(raw.get("permission"), f"{field}.permission"),
         "permission_reason": optional_text(
             raw.get("permission_reason"), f"{field}.permission_reason"
@@ -862,6 +889,72 @@ def normalize_role(
     if duplicate_mcp is not None:
         fail(f"{field}.mcp duplicates {duplicate_mcp}")
     return role
+
+
+def validate_role_resource_bindings(
+    raw: dict[str, Any],
+    roles: list[dict[str, Any]],
+    runtime_extensions: dict[str, Any],
+) -> None:
+    raw_roles: list[dict[str, Any]] = []
+    if raw.get("type") == "expert" and isinstance(raw.get("agent"), dict):
+        raw_roles = [raw["agent"]]
+    elif raw.get("type") == "team":
+        primary = raw.get("primary_agent")
+        subagents = raw.get("subagents")
+        if isinstance(primary, dict) and isinstance(subagents, list):
+            raw_roles = [primary, *[item for item in subagents if isinstance(item, dict)]]
+
+    references = runtime_extensions["references"]
+    if references and not any("references" in role for role in raw_roles):
+        fail(
+            "legacy package-level References require a migration preview before structural generation; "
+            "assign every Reference alias to one or more roles"
+        )
+    if any("references" in role for role in raw_roles) and not all(
+        "references" in role for role in raw_roles
+    ):
+        fail("every role must declare references in explicit binding mode")
+
+    reference_consumers = {alias: [] for alias in references}
+    instruction_consumers = {
+        alias: [] for alias in runtime_extensions["role_instructions"]
+    }
+    for role in roles:
+        for alias in role["references"]:
+            if alias not in references:
+                fail(f"{role['id']}.references references unknown Reference {alias}")
+            reference_consumers[alias].append(role["id"])
+        for alias in role["instructions"]:
+            if alias not in runtime_extensions["role_instructions"]:
+                fail(f"{role['id']}.instructions references unknown role rule {alias}")
+            instruction_consumers[alias].append(role["id"])
+
+    for alias, consumers in reference_consumers.items():
+        if not consumers:
+            fail(f"runtime_extensions.references.{alias} must be assigned to at least one role")
+        if not references[alias].get("description", "").strip():
+            print(
+                f"warning: runtime_extensions.references.{alias}.description is empty; "
+                "add a short explanation of when assigned roles should use it",
+                file=sys.stderr,
+            )
+    for alias, consumers in instruction_consumers.items():
+        if not consumers:
+            fail(f"runtime_extensions.role_instructions.{alias} must be assigned to at least one role")
+
+    role_paths = {
+        entry["path"]
+        for entry in runtime_extensions["role_instructions"].values()
+    }
+    for pattern in runtime_extensions["instructions"]:
+        if pattern.lower().startswith("https://"):
+            continue
+        for role_path in role_paths:
+            if contract.package_glob_matches(pattern, [role_path]):
+                fail(
+                    f"runtime_extensions.instructions entry {pattern} overlaps role rule {role_path}"
+                )
 
 
 def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None) -> dict[str, Any]:
@@ -1005,6 +1098,11 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         slug,
         agent_ids=set(ids),
     )
+    validate_role_resource_bindings(
+        raw,
+        [primary, *subagents],
+        runtime_extensions,
+    )
     if any(
         [
             runtime_extensions["commands"],
@@ -1016,10 +1114,27 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
             runtime_extensions["reference_files"],
             runtime_extensions["instructions"],
             runtime_extensions["instruction_files"],
+            runtime_extensions["role_instructions"],
             runtime_extensions["lsp"] is not None,
         ]
     ):
         source_manifest["runtime_extensions"] = runtime_extensions
+
+    source_roles: list[dict[str, Any]] = []
+    if expert_type == "expert" and isinstance(source_manifest.get("agent"), dict):
+        source_roles = [source_manifest["agent"]]
+    elif expert_type == "team":
+        source_primary = source_manifest.get("primary_agent")
+        source_subagents = source_manifest.get("subagents")
+        if isinstance(source_primary, dict) and isinstance(source_subagents, list):
+            source_roles = [
+                source_primary,
+                *[item for item in source_subagents if isinstance(item, dict)],
+            ]
+    for source_role, normalized_role in zip(source_roles, [primary, *subagents], strict=True):
+        source_role["references"] = list(normalized_role["references"])
+        if runtime_extensions["role_instructions"] or "instructions" in source_role:
+            source_role["instructions"] = list(normalized_role["instructions"])
     declared_skills = (
         set([*common_skills, *role_skills])
         if skill_mode == "legacy"
@@ -1140,6 +1255,53 @@ def build_role_permission(
 
 def role_skill_lines(role: dict[str, Any]) -> str:
     return "\n".join(f"- `/{skill}` and load/use skill `{skill}`" for skill in role["allowed_skills"])
+
+
+def role_instruction_content(manifest: dict[str, Any], path: str) -> str:
+    for item in manifest["runtime_extensions"]["instruction_files"]:
+        if item["path"] == path:
+            return item["content"]
+    fail(f"role instruction {path} has no backing content")
+
+
+def render_role_resources(role: dict[str, Any], manifest: dict[str, Any]) -> str:
+    ext = manifest["runtime_extensions"]
+    lines = ["## 分配资料与规则"]
+    if not role["references"] and not role["instructions"]:
+        lines.append("\n当前角色没有分配额外资料或角色规则。")
+        return "\n".join(lines)
+
+    if role["references"]:
+        lines.append("\n### 工作资料")
+        lines.append(
+            "只在当前任务需要时查阅。这里的角色分配用于说明使用责任，不代表其他角色在系统层面无法看到根级 Reference。"
+        )
+        for alias in role["references"]:
+            entry = ext["references"][alias]
+            description = entry.get("description") or "按任务上下文判断是否需要查阅"
+            namespaced = contract.namespaced_reference_alias(manifest["slug"], alias)
+            if "repository" in entry:
+                branch = f"，ref `{entry['branch']}`" if entry.get("branch") else "，使用仓库默认分支"
+                source = f"Git `{entry['repository']}`{branch}"
+                fallback = "目标 Runtime 不支持 Reference 时停止并报告，不自行拉取仓库。"
+            else:
+                source = f"本地目录 `{entry['path']}`"
+                fallback_name = contract.reference_fallback_skill_name(manifest["slug"], alias)
+                fallback = f"原生 Reference 不可用时加载兼容能力包 `{fallback_name}`。"
+            lines.append(
+                f"- `{namespaced}`：{description}；来源：{source}。{fallback}"
+            )
+
+    if role["instructions"]:
+        lines.append("\n### 始终遵守的专家包规则")
+        for alias in role["instructions"]:
+            entry = ext["role_instructions"][alias]
+            description = entry.get("description")
+            lines.append(f"\n#### `{alias}`")
+            if description:
+                lines.append(f"\n适用说明：{description}")
+            lines.append("\n" + role_instruction_content(manifest, entry["path"]).strip())
+    return "\n".join(lines)
 
 
 def render_team_roster(manifest: dict[str, Any]) -> str:
@@ -1322,6 +1484,7 @@ def render_agent(role: dict[str, Any], manifest: dict[str, Any], *, is_primary: 
             profession=role["profession"],
             default_prompt=manifest["default_prompt"] or "none",
             allowed_skills=role_skill_lines(role),
+            role_resources=render_role_resources(role, manifest),
             route_triggers=render_role_triggers(role),
             trigger_examples=render_trigger_examples(role, manifest, is_primary=True),
             edge_case_guidance=render_edge_case_guidance(manifest, is_primary=True),
@@ -1355,6 +1518,7 @@ def render_agent(role: dict[str, Any], manifest: dict[str, Any], *, is_primary: 
             profession=role["profession"],
             default_prompt=manifest["default_prompt"] or "none",
             allowed_skills=role_skill_lines(role),
+            role_resources=render_role_resources(role, manifest),
             team_roster=render_team_roster(manifest),
             direct_routes=render_direct_routing_table(manifest),
             workflows=render_primary_workflows(manifest),
@@ -1377,6 +1541,7 @@ def render_agent(role: dict[str, Any], manifest: dict[str, Any], *, is_primary: 
             display_name=role["display_name"],
             profession=role["profession"],
             allowed_skills=role_skill_lines(role),
+            role_resources=render_role_resources(role, manifest),
             route_triggers=render_role_triggers(role),
             trigger_examples=render_trigger_examples(role, manifest, is_primary=False),
             edge_case_guidance=render_edge_case_guidance(manifest, is_primary=False),
@@ -1658,6 +1823,7 @@ def render_runtime_extensions_summary(manifest: dict[str, Any]) -> str:
     rows.append(f"| 插件 | `.opencode/plugins/` / `opencode.json.plugin` | 本地 {local_plugins} 个，npm {npm_plugins} 个 |")
     rows.append(f"| References | `.opencode/references/` / `opencode.json.references` | {len(ext['references'])} 个别名 |")
     rows.append(f"| 自定义指令 | `.opencode/instructions/` / `opencode.json.instructions` | {len(ext['instructions'])} 条 |")
+    rows.append(f"| 角色规则 | Agent Markdown | {len(ext['role_instructions'])} 条 |")
     rows.append(f"| LSP | `opencode.json.lsp` | {'已配置' if ext['lsp'] is not None else '未配置'} |")
     if not manifest["mcp"]:
         rows.append("| MCP | `opencode.json.mcp` | 未配置 |")
@@ -1764,10 +1930,19 @@ def render_readme_runtime_extensions(manifest: dict[str, Any]) -> str:
         rows.extend(f"- 本地：`.opencode/plugins/{item['path']}`" for item in ext["plugins"]["local"])
     if ext["references"]:
         rows.append("\n### References")
-        rows.extend(f"- `{name}`" for name in ext["references"])
+        roles = [manifest["primary_agent"], *manifest["subagents"]]
+        for name in ext["references"]:
+            consumers = [role["id"] for role in roles if name in role["references"]]
+            rows.append(f"- `{name}`：使用角色 {', '.join(f'`{item}`' for item in consumers)}")
     if ext["instructions"]:
         rows.append("\n### 自定义指令")
         rows.extend(f"- `{item}`" for item in ext["instructions"])
+    if ext["role_instructions"]:
+        rows.append("\n### 角色规则")
+        roles = [manifest["primary_agent"], *manifest["subagents"]]
+        for name in ext["role_instructions"]:
+            consumers = [role["id"] for role in roles if name in role["instructions"]]
+            rows.append(f"- `{name}`：使用角色 {', '.join(f'`{item}`' for item in consumers)}")
     rows.append("\n凭证请使用环境变量或密钥管理器，不要把真实 token、API key 或私有 endpoint 写入包文件。")
     return "\n".join(rows)
 
