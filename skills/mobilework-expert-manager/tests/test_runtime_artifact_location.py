@@ -82,7 +82,9 @@ class RuntimeArtifactLocationTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(payload, {"ok": True, "findings": []})
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["schemaVersion"], 2)
+        self.assertEqual(payload["data"]["findings"], [])
 
     def test_workspace_root_itself_is_allowed(self) -> None:
         (self.workspace / "summary.json").write_text('{"ok": true}\n', encoding="utf-8")
@@ -93,7 +95,9 @@ class RuntimeArtifactLocationTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(payload, {"ok": True, "findings": []})
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["schemaVersion"], 2)
+        self.assertEqual(payload["data"]["findings"], [])
 
     def test_opencode_runtime_artifact_directory_fails(self) -> None:
         artifact = self.workspace / ".opencode" / "workspace" / "run"
@@ -200,7 +204,9 @@ class RuntimeArtifactLocationTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(payload, {"ok": True, "findings": []})
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["schemaVersion"], 2)
+        self.assertEqual(payload["data"]["findings"], [])
 
 
 if __name__ == "__main__":

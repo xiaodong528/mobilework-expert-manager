@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_NAME = "mobilework-expert-manager"
 MARKETPLACE_NAME = "mobilework-tools"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 REPOSITORY = "https://github.com/xiaodong528/mobilework-expert-manager"
 
 
@@ -105,7 +105,7 @@ class DistributionManifestTests(unittest.TestCase):
     def test_readme_documents_current_install_contract(self) -> None:
         for expected in (
             "| Marketplace | `mobilework-tools` |",
-            "| 当前版本 | `0.5.0` |",
+            "| 当前版本 | `0.6.0` |",
             "claude plugin marketplace add xiaodong528/mobilework-expert-manager",
             "claude plugin install mobilework-expert-manager@mobilework-tools",
             "claude plugin marketplace update mobilework-tools",
@@ -120,7 +120,7 @@ class DistributionManifestTests(unittest.TestCase):
         ):
             self.assertIn(expected, self.readme)
 
-        self.assertNotIn("0.4.0", self.readme)
+        self.assertNotIn("0.5.0", self.readme)
 
 
 if __name__ == "__main__":

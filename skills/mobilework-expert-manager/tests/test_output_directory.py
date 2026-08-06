@@ -171,9 +171,8 @@ class OutputDirectoryTests(unittest.TestCase):
             patch.object(sys, "argv", argv),
             patch.object(GENERATOR.Path, "cwd", return_value=self.cwd),
             patch.object(GENERATOR, "write_project", return_value=wrong_project),
-            self.assertRaisesRegex(SystemExit, "generated project directory mismatch"),
         ):
-            GENERATOR.main()
+            self.assertEqual(GENERATOR.main(), 1)
 
     def test_main_rejects_missing_core_generated_files(self) -> None:
         project_dir = self.cwd / "contract-review-expert"
@@ -184,9 +183,8 @@ class OutputDirectoryTests(unittest.TestCase):
             patch.object(sys, "argv", argv),
             patch.object(GENERATOR.Path, "cwd", return_value=self.cwd),
             patch.object(GENERATOR, "write_project", return_value=project_dir),
-            self.assertRaisesRegex(SystemExit, "missing required generated file"),
         ):
-            GENERATOR.main()
+            self.assertEqual(GENERATOR.main(), 1)
 
     def test_generated_json_files_must_be_readable(self) -> None:
         project_dir = self.root / "generated" / "contract-review-expert"

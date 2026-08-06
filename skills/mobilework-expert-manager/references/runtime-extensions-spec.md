@@ -70,7 +70,7 @@ LSP、MCP 或环境变量时读取本文件。所有配置都从 `expert.json` �
       }
     ],
     "plugins": {
-      "npm": ["opencode-example-plugin"],
+      "npm": ["opencode-example-plugin@1.0.0"],
       "local": [
         {
           "path": "notify.ts",
@@ -247,7 +247,9 @@ command 是面向用户的 workflow 快捷入口，不是 workflow 本体的第�
 主动读写外部软件、服务或数据库使用 MCP。不要用 plugin 代替一个只需被智能体直接调用的普通
 custom tool。
 
-- `plugins.npm[]` 合并到 `opencode.json.plugin`；条目不得重复。
+- `plugins.npm[]` 合并到 `opencode.json.plugin`；新生成包必须使用精确 SemVer，且按规范化后的
+  `name@selector` 判重。历史包中的 bare、range 或 dist-tag 仍可验证，但会产生
+  `PLUGIN_NPM_SPEC_UNPINNED` warning。
 - `plugins.local[]` 生成 `.opencode/plugins/<path>`，只接受内嵌 `content` 的 `.js` 或 `.ts`。
 - `plugins.package_json` 只接受 `dependencies` 与 `devDependencies`，生成 `.opencode/package.json`。
 - 包内不得携带 `node_modules`、lock 缓存或安装产物。
@@ -454,8 +456,8 @@ Reference 原生能力按 host contract 决定，不根据 OpenCode 版本号猜
 - 真实 token、key 和私有 endpoint 不得明文写入包。
 - 角色 `mcp[]` 只能引用已声明 MCP，生成权限与运行配置必须一致。
 - 同名 MCP、未知字段、local/remote 交叉字段、缺失 command/URL 必须在生成前失败，不能静默覆盖或补占位。
-- 目标版本与能力必须由 CLI、环境、host contract 或可信 sidecar 显式证明；schema 中未声明的 local
-  `cwd` 不属于当前合同。
+- 目标版本与能力必须由 CLI、环境、host contract，或 caller 已核验来源且显式提供的 sidecar
+  version evidence 证明；schema 中未声明的 local `cwd` 不属于当前合同。
 
 ## 10. 环境变量
 
@@ -486,18 +488,31 @@ CLI 安装把 reference 和 instruction 文件路径统一改写为 `.opencode/`
 只改写 `path`，Git `repository` entry 原样保留。receipt 记录每个 namespaced alias 的精确值。
 receipt 可带 `bindings.references` 和 `bindings.roleInstructions`，用于审计、排错、卸载读回；
 它们不参与权限判断，旧 receipt 没有 `bindings` 仍然有效。
-`--force` 只能替换同 slug receipt 拥有的资源，不能覆盖其他专家资源。
+`--force` 只能升级同 slug receipt 拥有且当前未漂移的资源，不能覆盖其他专家资源。升级和卸载在
+创建 staging 前验证全部 owned 文件（包括共享文件）、mapping、scalar LSP，以及 contract 2/3 的
+list 和 dependency；初检漂移返回 `INSTALL_OWNED_STATE_DRIFT`、稳定 preview SHA-256 和 exit 1，
+且不创建 staging。合并所消费的完整 config、package.json、receipt tree 及安装目标状态来自同一受
+保护 capture；提交前同时重检 ownership 与 capture fingerprint。晚期变化返回 exit 1、丢弃
+staging，且不提交目标状态，并保留触发变化的并发用户字节。
 安装前已有且没有 receipt owner 的同值 `plugin`、`instructions` 或依赖可以复用，但不能记为本
 专家所有；以后卸载或升级时保留。所有 receipt 必须先校验文件名与 slug、contract、受管 POSIX
 相对路径和 SHA-256，事务目标及备份路径都必须留在 workspace `.opencode` 内。
-新安装写 contract 2；contract 1 可继续安装读回与卸载，但其 list/dependency ownership 不再可信，
-所以 `plugin`、`instructions` 和依赖保守保留。旧 receipt 缺少 `bindings` 仍然有效。
-安装使用 staging、备份和失败回滚；失败后 workspace 恢复到写入前状态。
+新安装及成功升级写 contract 3，并记录 `packageTreeSha256`、`manifestSha256`、
+`managerContractSha256`、`targetOpenCodeVersion`、`targetCapabilitiesSha256` 和
+`projectionSha256`。contract 1/2 可继续保守卸载和无漂移升级，但只有 contract 3 能进入
+`config-loadable` 证据链。contract 1 的 list/dependency ownership 不可信，所以 `plugin`、
+`instructions` 和依赖保守保留。旧 receipt 缺少 `bindings` 仍然有效。经显式四重确认的 POSIX
+高危丢弃与 exact backup 恢复合同统一见 `manager-contract.md`；普通 `--force` 永不丢弃漂移。
+POSIX 安装使用 dirfd/no-follow、shared atomic no-replace、备份和失败回滚；rollback 成功时
+workspace 恢复到写入前状态。Windows 普通写入仍是未获得 protocol-v2/transaction 证据的兼容路径，
+高危丢弃与恢复以 exit 4 阻止。rollback 自身失败时返回内部错误并保留脱敏 recovery paths 与备份，
+不能宣称已经恢复。
 
-卸载使用 `install_expert.py --uninstall <slug> --workspace-dir <workspace>`。它只移除 receipt 记录且
-hash 未漂移的文件、该 slug 独占的配置和依赖；其他专家共享的列表项或依赖保留。owned 文件或
-配置被用户修改后，卸载在写入前停止，不把变化当作可删除缓存。配置、文件和 receipt 在同一事务
-提交，并在完成后读回。
+卸载使用 `install_expert.py --uninstall <slug> --workspace-dir <workspace>`。它先要求该 receipt 的
+全部 ownership（包括随后会保留的共享文件）保持未漂移，再只移除 hash 未漂移且不共享的文件、
+该 slug 独占的配置和依赖；其他专家共享的列表项或依赖保留。owned 文件或配置被用户修改后，
+卸载在写入前停止，不把变化当作可删除缓存。配置、文件和 receipt 在同一事务提交，并在完成后
+读回。
 
 ## 12. 已知边界
 

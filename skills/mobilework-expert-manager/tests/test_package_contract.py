@@ -461,6 +461,7 @@ class PackageContractTests(unittest.TestCase):
         rejected = [
             "https://user:password@example.com/reference.git",
             "https://embedded-user@example.com/reference.git",
+            "https://ghp_1234567890abcdefghijkl@example.com/reference.git",
             "https://example.com/reference.git?token=secret-value",
             "https://example.com/reference.git?oauth_token=secret-value",
             "https://{env:GIT_TOKEN}@example.com/reference.git",
@@ -886,7 +887,10 @@ class PackageContractTests(unittest.TestCase):
         extra = package / ".opencode/tools/undeclared.ts"
         extra.parent.mkdir(parents=True, exist_ok=True)
         extra.write_text("unexpected\n", encoding="utf-8")
-        with self.assertRaisesRegex(SystemExit, "not declared by expert.json"):
+        with self.assertRaisesRegex(
+            SystemExit,
+            "undeclared package file|not declared by expert.json",
+        ):
             PACKAGER.make_zip(package, self.root / "dist-extra")
 
 

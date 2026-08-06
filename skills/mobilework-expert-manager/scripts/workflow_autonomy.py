@@ -11,6 +11,7 @@ from typing import Any, Iterable
 import package_contract
 import skill_contract
 import permission_policy
+import manager_contract
 
 
 AUTONOMY_LEVELS = ("scripted", "fixed", "bounded", "guided", "adaptive")
@@ -60,8 +61,13 @@ PHASE_KEYS = frozenset(
 EXECUTION_KEYS = frozenset({"executors", "standards"})
 AGENT_OVERRIDE_KEYS = frozenset({"autonomy", "execution", "reason"})
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-OPENCODE_SERVER_COMMAND_REGISTRY_VERSION = "v1.16.2"
-OPENCODE_SERVER_BUILTIN_COMMANDS = frozenset({"init", "review"})
+_MANAGER_POLICY = manager_contract.load_policy()
+OPENCODE_SERVER_COMMAND_REGISTRY_SOURCE = _MANAGER_POLICY["reservedCommands"][
+    "source"
+]
+OPENCODE_SERVER_BUILTIN_COMMANDS = frozenset(
+    _MANAGER_POLICY["reservedCommands"]["names"]
+)
 
 
 class WorkflowContractError(ValueError):

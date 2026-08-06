@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import bundle_contract
+import cli_contract
+import output_sanitizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
     try:
         manifest = bundle_contract.create_manifest(
@@ -39,10 +40,22 @@ def main() -> int:
             source_commit=args.source_commit,
         )
     except bundle_contract.BundleContractError as exc:
-        print(json.dumps({"ok": False, "code": "BUNDLE_CREATE_ERROR", "message": str(exc)}, ensure_ascii=False))
+        print(
+            output_sanitizer.json_dumps({
+                "ok": False,
+                "code": "BUNDLE_CREATE_ERROR",
+                "message": output_sanitizer.sanitize_exception(exc),
+            })
+        )
         return 1
-    print(json.dumps({"ok": True, "manifest": manifest}, ensure_ascii=False, indent=2))
+    print(output_sanitizer.json_dumps({"ok": True, "manifest": manifest}, indent=2))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "create-bundle-manifest", _legacy_main, argv=argv
+    )
 
 
 if __name__ == "__main__":

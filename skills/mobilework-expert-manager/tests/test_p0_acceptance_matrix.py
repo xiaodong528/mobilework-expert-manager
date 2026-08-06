@@ -335,7 +335,10 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
             [sys.executable, str(INSTALL), "--package-dir", str(extracted), "--workspace-dir", str(workspace)]
         )
         self.assertEqual(installed["status"], "installable")
-        self.assertEqual(installed["runtime_status"], "runtime-not-tested")
+        self.assertEqual(
+            installed["data"]["runtime_status"],
+            "runtime-not-tested",
+        )
         runtime = workspace / ".opencode"
         self.assertFalse((workspace / ".mobilework-engine").exists())
         config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))

@@ -5,15 +5,16 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import json
 import os
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
+import cli_contract
 import execution_context
 import manager_contract
+import output_sanitizer
 
 
 MINIMUM_PYTHON = (3, 10)
@@ -26,6 +27,11 @@ FEATURES = (
     "config-load",
     "coverage",
 )
+
+
+class ManagerArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise cli_contract.CliArgumentError(message)
 
 
 def module_status(name: str) -> dict[str, Any]:
@@ -130,7 +136,7 @@ def check_environment(
                     "name": "target-opencode-contract",
                     "available": False,
                     "required": True,
-                    "reason": str(error),
+                    "reason": output_sanitizer.sanitize_exception(error),
                 }
             )
     missing = [
@@ -146,7 +152,10 @@ def check_environment(
             workspace_root=workspace_root,
         ).as_dict()
     except execution_context.ExecutionContextError as error:
-        routing_error = {"code": error.code, "message": str(error)}
+        routing_error = {
+            "code": error.code,
+            "message": output_sanitizer.sanitize_exception(error),
+        }
         routing = {
             "version": 1,
             "ok": False,
@@ -158,22 +167,39 @@ def check_environment(
             "pathSource": None,
             "errors": [routing_error],
         }
-    return {
-        "ok": not missing and routing_error is None,
-        "features": features,
-        "checks": checks,
-        "missing": missing,
-        "executionContext": routing,
-        "hostMode": routing["hostMode"],
-        "workspaceRoot": routing["workspaceRoot"],
-        "outputRoot": routing["outputRoot"],
-        "pathSource": routing["pathSource"],
-        "errors": routing["errors"],
-    }
+    return output_sanitizer.sanitize_mapping(
+        {
+            "ok": not missing and routing_error is None,
+            "features": features,
+            "checks": checks,
+            "missing": missing,
+            "executionContext": routing,
+            "hostMode": routing["hostMode"],
+            "workspaceRoot": routing["workspaceRoot"],
+            "outputRoot": routing["outputRoot"],
+            "pathSource": routing["pathSource"],
+            "errors": routing["errors"],
+        }
+    )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def validate_feature_request(values: list[str], sidecar: Path | None) -> None:
+    if "all" in values and sidecar is None:
+        raise cli_contract.CliArgumentError(
+            "--feature all requires an explicit --sidecar path",
+            code="ENVIRONMENT_SIDECAR_REQUIRED",
+            status="environment-argument-error",
+            phase="environment-preflight",
+            execution_policy="read-only-environment-preflight",
+            data={
+                "requestedFeatures": list(values),
+                "requiredArgument": "--sidecar",
+            },
+        )
+
+
+def build_parser(policy: dict[str, Any]) -> ManagerArgumentParser:
+    parser = ManagerArgumentParser(description=__doc__)
     parser.add_argument(
         "--feature",
         action="append",
@@ -191,18 +217,162 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional explicit read-only host contract for config-load preflight",
     )
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    result = check_environment(
-        selected_features(args.feature),
-        sidecar=args.sidecar,
-        host_contract=args.host_contract,
+    parser.add_argument(
+        "--format",
+        choices=policy["cli"]["formats"],
+        default="json",
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["ok"] else 1
+    parser.add_argument(
+        "--schema-version",
+        choices=policy["cli"]["supportedSchemaVersions"],
+        default=policy["cli"]["defaultSchemaVersion"],
+        type=int,
+    )
+    return parser
+
+
+def parse_args(
+    argv: list[str] | None = None,
+    policy: dict[str, Any] | None = None,
+) -> argparse.Namespace:
+    resolved_policy = manager_contract.load_policy() if policy is None else policy
+    args = build_parser(resolved_policy).parse_args(argv)
+    validate_feature_request(args.feature, args.sidecar)
+    return args
+
+
+def _result(payload: dict[str, Any], policy: dict[str, Any]) -> cli_contract.CliResult:
+    ok = payload.get("ok") is True
+    findings: list[dict[str, str]] = []
+    reported_codes: set[str] = set()
+    errors = payload.get("errors", [])
+    if isinstance(errors, list):
+        for item in errors:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "ENVIRONMENT_CONTEXT_ERROR")
+            reported_codes.add(code)
+            findings.append(
+                {
+                    "code": code,
+                    "severity": "error",
+                    "phase": "environment-preflight",
+                    "path": "",
+                    "location": "execution-context",
+                    "message": str(item.get("message") or "execution context is unavailable"),
+                    "rootCause": "environment-unavailable",
+                    "remediation": "Correct the requested environment before execution.",
+                    "evidence": "",
+                }
+            )
+    missing = payload.get("missing", [])
+    if isinstance(missing, list):
+        for name in missing:
+            code = (
+                "MANAGER_VERSION_CONTRACT_ERROR"
+                if name == "target-opencode-contract"
+                else "ENVIRONMENT_DEPENDENCY_MISSING"
+            )
+            if code in reported_codes:
+                continue
+            findings.append(
+                {
+                    "code": code,
+                    "severity": "error",
+                    "phase": "environment-preflight",
+                    "path": "",
+                    "location": str(name),
+                    "message": f"required environment dependency is unavailable: {name}",
+                    "rootCause": "environment-unavailable",
+                    "remediation": "Provide the required dependency or narrow the requested features.",
+                    "evidence": "",
+                }
+            )
+    return cli_contract.CliResult(
+        operation="check-environment",
+        ok=ok,
+        status="environment-ready" if ok else "environment-unavailable",
+        evidence_level="valid" if ok else "invalid",
+        gates=cli_contract.default_gates(),
+        runtime={"status": "not-tested", "reason": "preflight-only"},
+        execution={
+            "policy": "read-only-environment-preflight",
+            "attempted": False,
+            "reason": "preflight-only",
+        },
+        provenance={
+            "contractVersion": policy["contractVersion"],
+            "managerContractSha256": manager_contract.policy_sha256(),
+        },
+        findings=findings,
+        data={key: value for key, value in payload.items() if key != "ok"},
+        exit_code=(
+            cli_contract.ExitCode.SUCCESS
+            if ok
+            else cli_contract.ExitCode.ARGUMENT_ENVIRONMENT_OR_VERSION_ERROR
+        ),
+        legacy_payload=payload,
+    )
+
+
+def _execute(args: argparse.Namespace, policy: dict[str, Any]) -> cli_contract.CliResult:
+    return _result(
+        check_environment(
+            selected_features(args.feature),
+            sidecar=args.sidecar,
+            host_contract=args.host_contract,
+        ),
+        policy,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    requested_format, requested_schema = cli_contract.requested_output(raw_argv)
+    try:
+        policy = manager_contract.load_policy()
+        cli_contract.CliPolicy.from_policy(policy)
+    except (manager_contract.ManagerContractError, cli_contract.CliFailure) as error:
+        failure = cli_contract.CliInternalError(
+            str(error),
+            code="MANAGER_POLICY_INVALID",
+            phase="manager-contract",
+        )
+        return cli_contract.run_cli(
+            "check-environment",
+            lambda: (_ for _ in ()).throw(failure),
+            output_format=requested_format,
+            schema_version=requested_schema,
+            policy=None,
+        )
+    if any(token in {"-h", "--help"} for token in raw_argv):
+        return cli_contract.run_cli(
+            "check-environment",
+            lambda: cli_contract.help_result(
+                "check-environment",
+                build_parser(policy).format_help(),
+            ),
+            output_format=requested_format,
+            schema_version=requested_schema,
+            policy=policy,
+        )
+    try:
+        args = parse_args(raw_argv, policy)
+    except cli_contract.CliFailure as failure:
+        return cli_contract.run_cli(
+            "check-environment",
+            lambda: (_ for _ in ()).throw(failure),
+            output_format=requested_format,
+            schema_version=requested_schema,
+            policy=policy,
+        )
+    return cli_contract.run_cli(
+        "check-environment",
+        lambda: _execute(args, policy),
+        output_format=args.format,
+        schema_version=args.schema_version,
+        policy=policy,
+    )
 
 
 if __name__ == "__main__":

@@ -13,20 +13,25 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import package_contract as contract
+import cli_contract
 import execution_context
 import gitignore_contract
 import manifest_contract
+import output_sanitizer
 import permission_policy
+import plugin_contract
 import renderers
 import skill_contract
 import workflow_autonomy
@@ -54,6 +59,13 @@ CONTROLLED_TARGET_ENV = "MOBILEWORK_EXPERT_MANAGER_TARGET"
 PACKAGE_LOCK_SUFFIX = ".mobilework.lock"
 PACKAGE_LOCK_OWNER = "owner.json"
 PACKAGE_LOCK_TIMEOUT_SECONDS = 30.0
+PACKAGE_LOCK_HEARTBEAT_SECONDS = 1.0
+PACKAGE_LOCK_STALE_SECONDS = 30.0
+PACKAGE_LOCK_POLL_SECONDS = 0.05
+PACKAGE_LOCK_PROTOCOL_VERSION = 2
+PACKAGE_LOCK_OWNER_FIELDS = frozenset(
+    {"ownerToken", "pid", "createdAt", "heartbeatAt", "protocolVersion"}
+)
 AVATAR_PALETTE = [
     "#2563eb",
     "#0f766e",
@@ -67,7 +79,7 @@ AVATAR_PALETTE = [
 
 
 def fail(message: str) -> None:
-    raise SystemExit(f"error: {message}")
+    raise SystemExit(f"error: {output_sanitizer.sanitize_text(message)}")
 
 
 def normalized_output_dir(output_dir: Path | None) -> Path:
@@ -85,6 +97,39 @@ def package_lock_path(output_root: Path, slug: str) -> Path:
 
 
 def process_is_alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_invalid_parameter = 87
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == error_invalid_parameter:
+                return False
+            # Access denied and unexpected lookup failures are fail-closed:
+            # an unverified PID must not allow another process to steal a lock.
+            return True
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -94,55 +139,312 @@ def process_is_alive(pid: int) -> bool:
     return True
 
 
+def utc_now() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def valid_lock_timestamp(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
+
+
+def normalized_lock_owner(value: Any) -> dict[str, Any] | None:
+    if (
+        isinstance(value, dict)
+        and set(value) == PACKAGE_LOCK_OWNER_FIELDS
+        and isinstance(value.get("ownerToken"), str)
+        and bool(value["ownerToken"])
+        and isinstance(value.get("pid"), int)
+        and not isinstance(value["pid"], bool)
+        and value["pid"] > 0
+        and valid_lock_timestamp(value.get("createdAt")) is not None
+        and valid_lock_timestamp(value.get("heartbeatAt")) is not None
+        and value.get("protocolVersion") == PACKAGE_LOCK_PROTOCOL_VERSION
+    ):
+        return {**value, "kind": "v2"}
+
+    # Read compatibility for generators that were already running during the
+    # protocol-v2 rollout. New Python and Electron owners publish v2 only.
+    if (
+        isinstance(value, dict)
+        and isinstance(value.get("pid"), int)
+        and not isinstance(value["pid"], bool)
+        and value["pid"] > 0
+        and isinstance(value.get("token"), str)
+        and bool(value["token"])
+        and valid_lock_timestamp(value.get("startedAt")) is not None
+    ):
+        return {
+            "ownerToken": value["token"],
+            "pid": value["pid"],
+            "createdAt": value["startedAt"],
+            "heartbeatAt": value["startedAt"],
+            "protocolVersion": 1,
+            "kind": "legacy",
+        }
+    return None
+
+
 def read_lock_owner(lock_path: Path) -> dict[str, Any] | None:
     try:
         raw = json.loads((lock_path / PACKAGE_LOCK_OWNER).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return raw if isinstance(raw, dict) else None
+    return normalized_lock_owner(raw)
+
+
+def write_lock_owner(lock_path: Path, owner: dict[str, Any]) -> None:
+    temporary = lock_path / f".{PACKAGE_LOCK_OWNER}.{owner['ownerToken']}.{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(owner, separators=(",", ":")) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, lock_path / PACKAGE_LOCK_OWNER)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def lock_owner_is_stale(
+    owner: dict[str, Any] | None,
+    stale_seconds: float,
+    *,
+    now: float | None = None,
+) -> bool:
+    heartbeat = valid_lock_timestamp(owner.get("heartbeatAt")) if owner else None
+    return bool(
+        owner
+        and heartbeat is not None
+        and (time.time() if now is None else now) - heartbeat >= stale_seconds
+        and not process_is_alive(owner["pid"])
+    )
+
+
+def quarantine_token(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "-", value)[:160]
+    return sanitized or "unknown"
+
+
+def restore_lock_quarantine(lock_path: Path, quarantine_path: Path) -> bool:
+    if lock_path.exists():
+        return False
+    try:
+        rename_lock_directory(quarantine_path, lock_path)
+    except OSError:
+        return False
+    return True
+
+
+def rename_lock_directory(source: Path, target: Path) -> None:
+    retryable_windows_errors = {5, 32, 33}
+    attempt = 0
+    while True:
+        try:
+            source.rename(target)
+            return
+        except OSError as error:
+            if (
+                os.name != "nt"
+                or getattr(error, "winerror", None) not in retryable_windows_errors
+                or attempt >= 249
+            ):
+                raise
+            # Windows refuses a directory rename while another contender is
+            # briefly reading owner.json. Retrying preserves ownership.
+            attempt += 1
+            time.sleep(0.002)
+
+
+def cleanup_unpublished_lock(
+    lock_path: Path,
+    owner_token: str,
+    created_identity: tuple[int, int],
+) -> None:
+    quarantine_path = lock_path.with_name(
+        f"{lock_path.name}.unpublished-{quarantine_token(owner_token)}-{uuid.uuid4().hex}"
+    )
+    try:
+        rename_lock_directory(lock_path, quarantine_path)
+    except FileNotFoundError:
+        return
+    moved_metadata = quarantine_path.stat(follow_symlinks=False)
+    moved_identity = (moved_metadata.st_dev, moved_metadata.st_ino)
+    if moved_identity != created_identity:
+        restored = restore_lock_quarantine(lock_path, quarantine_path)
+        location = (
+            "restored replacement lock"
+            if restored
+            else f"quarantine kept at {quarantine_path.name}"
+        )
+        raise RuntimeError(
+            f"expert package lock changed before owner publication; {location}"
+        )
+    shutil.rmtree(quarantine_path)
+
+
+def quarantine_owned_lock(
+    lock_path: Path,
+    expected: dict[str, Any],
+    reason: str,
+    validate: Callable[[dict[str, Any]], bool],
+) -> Path | None:
+    quarantine_path = lock_path.with_name(
+        f"{lock_path.name}.{reason}-{quarantine_token(expected['ownerToken'])}-{uuid.uuid4().hex}"
+    )
+    try:
+        rename_lock_directory(lock_path, quarantine_path)
+    except FileNotFoundError:
+        return None
+
+    moved = read_lock_owner(quarantine_path)
+    if (
+        moved is None
+        or moved.get("ownerToken") != expected.get("ownerToken")
+        or not validate(moved)
+    ):
+        restored = restore_lock_quarantine(lock_path, quarantine_path)
+        location = (
+            "restored original lock"
+            if restored
+            else f"quarantine kept at {quarantine_path.name}"
+        )
+        raise RuntimeError(f"expert package lock changed during quarantine; {location}")
+    return quarantine_path
+
+
+def reclaim_stale_lock(lock_path: Path, stale_seconds: float) -> bool:
+    owner = read_lock_owner(lock_path)
+    if not lock_owner_is_stale(owner, stale_seconds):
+        return False
+    assert owner is not None
+    quarantine_path = quarantine_owned_lock(
+        lock_path,
+        owner,
+        "stale",
+        lambda moved: lock_owner_is_stale(moved, stale_seconds),
+    )
+    if quarantine_path is not None:
+        shutil.rmtree(quarantine_path)
+    return True
+
+
+def start_lock_heartbeat(
+    lock_path: Path,
+    owner: dict[str, Any],
+    interval_seconds: float,
+) -> tuple[threading.Event, threading.Thread]:
+    stopped = threading.Event()
+
+    def heartbeat() -> None:
+        while not stopped.wait(interval_seconds):
+            current = read_lock_owner(lock_path)
+            if (
+                current is None
+                or current.get("kind") != "v2"
+                or current.get("ownerToken") != owner["ownerToken"]
+            ):
+                return
+            owner["heartbeatAt"] = utc_now()
+            try:
+                write_lock_owner(lock_path, owner)
+            except OSError:
+                return
+
+    thread = threading.Thread(
+        target=heartbeat,
+        name="mobilework-package-lock-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stopped, thread
+
+
+def release_owned_lock(lock_path: Path, owner: dict[str, Any]) -> None:
+    current = read_lock_owner(lock_path)
+    if (
+        current is None
+        or current.get("kind") != "v2"
+        or current.get("ownerToken") != owner["ownerToken"]
+    ):
+        raise RuntimeError("expert package lock ownership changed; refusing to delete active lock")
+    quarantine_path = quarantine_owned_lock(
+        lock_path,
+        owner,
+        "release",
+        lambda moved: moved.get("kind") == "v2"
+        and moved.get("ownerToken") == owner["ownerToken"],
+    )
+    if quarantine_path is None:
+        raise RuntimeError("expert package lock disappeared before release")
+    shutil.rmtree(quarantine_path)
 
 
 @contextlib.contextmanager
-def package_lock(output_root: Path, slug: str):
+def package_lock(
+    output_root: Path,
+    slug: str,
+    *,
+    timeout_seconds: float = PACKAGE_LOCK_TIMEOUT_SECONDS,
+    heartbeat_seconds: float = PACKAGE_LOCK_HEARTBEAT_SECONDS,
+    stale_seconds: float = PACKAGE_LOCK_STALE_SECONDS,
+    poll_seconds: float = PACKAGE_LOCK_POLL_SECONDS,
+):
     """Share a sibling package lock with MobileWork's projection synchronizer."""
+    if heartbeat_seconds <= 0:
+        raise ValueError("expert package lock heartbeat_seconds must be positive")
+    if stale_seconds <= heartbeat_seconds:
+        raise ValueError("expert package lock stale_seconds must be greater than heartbeat_seconds")
+    if timeout_seconds < 0 or poll_seconds <= 0:
+        raise ValueError("expert package lock timeout/poll values are invalid")
     lock_path = package_lock_path(output_root, slug)
     started_at = time.monotonic()
-    owner_token = f"{os.getpid()}-{time.time_ns()}-{uuid.uuid4().hex}"
+    timestamp = utc_now()
+    owner: dict[str, Any] = {
+        "ownerToken": uuid.uuid4().hex,
+        "pid": os.getpid(),
+        "createdAt": timestamp,
+        "heartbeatAt": timestamp,
+        "protocolVersion": PACKAGE_LOCK_PROTOCOL_VERSION,
+    }
     while True:
+        created_identity: tuple[int, int]
         try:
-            lock_path.mkdir()
+            lock_path.mkdir(mode=0o700)
+            created_metadata = lock_path.stat(follow_symlinks=False)
+            created_identity = (created_metadata.st_dev, created_metadata.st_ino)
         except FileExistsError:
-            owner = read_lock_owner(lock_path)
-            owner_pid = owner.get("pid") if owner else None
-            if isinstance(owner_pid, int) and owner_pid > 0 and not process_is_alive(owner_pid):
-                shutil.rmtree(lock_path, ignore_errors=True)
+            if reclaim_stale_lock(lock_path, stale_seconds):
                 continue
-            if time.monotonic() - started_at >= PACKAGE_LOCK_TIMEOUT_SECONDS:
+            if time.monotonic() - started_at >= timeout_seconds:
                 fail(f"timed out waiting for expert package lock: {slug}")
-            time.sleep(0.05)
+            time.sleep(poll_seconds)
             continue
         try:
-            (lock_path / PACKAGE_LOCK_OWNER).write_text(
-                json.dumps(
-                    {
-                        "pid": os.getpid(),
-                        "token": owner_token,
-                        "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
+            write_lock_owner(lock_path, owner)
         except Exception:
-            shutil.rmtree(lock_path, ignore_errors=True)
+            cleanup_unpublished_lock(lock_path, owner["ownerToken"], created_identity)
             raise
         break
+    stopped, heartbeat_thread = start_lock_heartbeat(lock_path, owner, heartbeat_seconds)
     try:
         yield
     finally:
-        owner = read_lock_owner(lock_path)
-        if owner and owner.get("token") == owner_token:
-            shutil.rmtree(lock_path, ignore_errors=True)
+        stopped.set()
+        heartbeat_thread.join()
+        release_owned_lock(lock_path, owner)
 
 
 def calculate_package_revision(package_dir: Path) -> str:
@@ -604,15 +906,36 @@ def normalize_plugins(raw: Any) -> dict[str, Any]:
     unknown = sorted(set(raw) - {"npm", "local", "package_json"})
     if unknown:
         fail(f"runtime_extensions.plugins contains unsupported fields: {', '.join(unknown)}")
-    npm = text_list(raw.get("npm"), "runtime_extensions.plugins.npm")
-    duplicate_npm = contract.first_duplicate(npm)
-    if duplicate_npm is not None:
-        fail(f"runtime_extensions.plugins.npm duplicates {duplicate_npm}")
-    for index, package_name in enumerate(npm):
-        if not package_name.strip() or any(char.isspace() for char in package_name):
-            fail(f"runtime_extensions.plugins.npm[{index}] must be a non-empty package name")
+    npm_specs = text_list(raw.get("npm"), "runtime_extensions.plugins.npm")
+    parsed_npm: list[plugin_contract.NpmPluginSpec] = []
+    canonical_indexes: dict[str, int] = {}
+    duplicate: tuple[int, int] | None = None
+    for index, npm_spec in enumerate(npm_specs):
+        try:
+            parsed = plugin_contract.parse_npm_plugin_spec(npm_spec)
+        except plugin_contract.PluginContractError as exc:
+            fail(
+                f"{plugin_contract.ERROR_CODE}: runtime_extensions.plugins.npm[{index}]: {exc}"
+            )
+        previous_index = canonical_indexes.get(parsed["canonicalKey"])
+        if previous_index is not None and duplicate is None:
+            duplicate = (index, previous_index)
+        canonical_indexes[parsed["canonicalKey"]] = index
+        parsed_npm.append(parsed)
+    if duplicate is not None:
+        index, previous_index = duplicate
+        fail(
+            f"{plugin_contract.DUPLICATE_CODE}: runtime_extensions.plugins.npm[{index}] "
+            f"duplicates the canonical npm Plugin declared at index {previous_index}"
+        )
+    for index, parsed in enumerate(parsed_npm):
+        if not parsed["isPinned"]:
+            fail(
+                f"{plugin_contract.UNPINNED_CODE}: runtime_extensions.plugins.npm[{index}] "
+                "must pin a registry package to an exact SemVer"
+            )
     return {
-        "npm": npm,
+        "npm": [parsed["normalized"] for parsed in parsed_npm],
         "local": normalize_embedded_files(
             raw.get("local"),
             "runtime_extensions.plugins.local",
@@ -645,7 +968,10 @@ def normalize_instructions(raw: Any, slug: str, local_file_paths: set[str]) -> l
             fail(f"runtime_extensions.instructions[{index}] must be non-empty")
         if value.lower().startswith("https://"):
             print(
-                f"warning: runtime_extensions.instructions[{index}] is remote and not reproducible: {value}",
+                output_sanitizer.sanitize_text(
+                    f"warning: runtime_extensions.instructions[{index}] "
+                    f"is remote and not reproducible: {value}"
+                ),
                 file=sys.stderr,
             )
             result.append(value)
@@ -935,8 +1261,10 @@ def validate_role_resource_bindings(
             fail(f"runtime_extensions.references.{alias} must be assigned to at least one role")
         if not references[alias].get("description", "").strip():
             print(
-                f"warning: runtime_extensions.references.{alias}.description is empty; "
-                "add a short explanation of when assigned roles should use it",
+                output_sanitizer.sanitize_text(
+                    f"warning: runtime_extensions.references.{alias}.description is empty; "
+                    "add a short explanation of when assigned roles should use it"
+                ),
                 file=sys.stderr,
             )
     for alias, consumers in instruction_consumers.items():
@@ -2226,7 +2554,10 @@ def _write_project_locked(manifest: dict[str, Any], output_root: Path, *, force:
             shutil.rmtree(backup)
         except OSError as error:
             print(
-                f"warning: package committed but backup cleanup failed; recovery copy kept at {backup}: {error}",
+                output_sanitizer.sanitize_text(
+                    "warning: package committed but backup cleanup failed; "
+                    f"recovery copy kept at {backup}: {error}"
+                ),
                 file=sys.stderr,
             )
     return project_dir
@@ -2274,7 +2605,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
     if shutil.which("git") is None:
         fail("Git is required to create or modify a version-controlled expert source")
@@ -2353,13 +2684,24 @@ def main() -> int:
     except expert_vcs.ExpertVcsError as exc:
         fail(f"expert was generated but local Git initialization failed: {exc}")
     print(
-        "VERSION_PENDING: expert source changed successfully; ask the user whether to "
-        "publish the proposed SemVer with version_expert.py. "
-        + json.dumps(vcs, ensure_ascii=False),
+        output_sanitizer.sanitize_text(
+            "VERSION_PENDING: expert source changed successfully; ask the user whether to "
+            "publish the proposed SemVer with version_expert.py. "
+            + output_sanitizer.json_dumps(vcs)
+        ),
         file=sys.stderr,
     )
-    print(project_dir)
+    print(output_sanitizer.sanitize_text(str(project_dir)))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "create-expert",
+        _legacy_main,
+        argv=argv,
+        default_format="human",
+    )
 
 
 if __name__ == "__main__":

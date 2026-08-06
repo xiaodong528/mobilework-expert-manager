@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 import math
 import re
 import stat
@@ -103,12 +104,17 @@ def _windows_reserved(parts: tuple[str, ...]) -> str | None:
 
 
 def inspect_archive(
-    source: Path,
+    source: Path | bytes,
     *,
     limits: ArchiveLimits | None = None,
     require_single_root: bool = True,
+    display_path: Path | None = None,
 ) -> ArchiveInspection:
-    source = source.expanduser().resolve()
+    source_path = (
+        source.expanduser().resolve()
+        if isinstance(source, Path)
+        else (display_path or Path("snapshot.zip"))
+    )
     active_limits = limits or default_limits()
     issues: list[ArchiveIssue] = []
     members: list[str] = []
@@ -119,12 +125,21 @@ def inspect_archive(
     total = 0
 
     try:
-        archive = zipfile.ZipFile(source)
+        archive = zipfile.ZipFile(
+            source if isinstance(source, Path) else io.BytesIO(source)
+        )
     except (OSError, zipfile.BadZipFile) as exc:
         return ArchiveInspection(
-            source,
+            source_path,
             active_limits,
-            (_issue("ZIP_INVALID", f"cannot read ZIP metadata: {exc}", source.name, root_cause="corrupt-archive"),),
+            (
+                _issue(
+                    "ZIP_INVALID",
+                    f"cannot read ZIP metadata: {exc}",
+                    source_path.name,
+                    root_cause="corrupt-archive",
+                ),
+            ),
             (),
             (),
             0,
@@ -137,7 +152,7 @@ def inspect_archive(
                 _issue(
                     "ZIP_ENTRY_COUNT_LIMIT",
                     f"ZIP has {len(infos)} entries; limit is {active_limits.max_entries}",
-                    source.name,
+                    source_path.name,
                     root_cause="archive-resource-limit",
                 )
             )
@@ -197,11 +212,11 @@ def inspect_archive(
                 issues.append(_issue("ZIP_COMPRESSION_RATIO_LIMIT", f"ZIP entry compression ratio {ratio:.1f}:1 exceeds limit", name, root_cause="archive-resource-limit"))
 
     if total > active_limits.max_total_uncompressed_bytes:
-        issues.append(_issue("ZIP_TOTAL_SIZE_LIMIT", f"ZIP expands to {total} bytes; limit is {active_limits.max_total_uncompressed_bytes}", source.name, root_cause="archive-resource-limit"))
+        issues.append(_issue("ZIP_TOTAL_SIZE_LIMIT", f"ZIP expands to {total} bytes; limit is {active_limits.max_total_uncompressed_bytes}", source_path.name, root_cause="archive-resource-limit"))
     if require_single_root and len(roots) != 1:
-        issues.append(_issue("ZIP_ROOT_COUNT_INVALID", f"ZIP must contain exactly one package root; found {sorted(roots)}", source.name, root_cause="invalid-archive-layout"))
+        issues.append(_issue("ZIP_ROOT_COUNT_INVALID", f"ZIP must contain exactly one package root; found {sorted(roots)}", source_path.name, root_cause="invalid-archive-layout"))
     return ArchiveInspection(
-        source,
+        source_path,
         active_limits,
         tuple(issues),
         tuple(members),
@@ -210,7 +225,11 @@ def inspect_archive(
     )
 
 
-def safe_extract(source: Path, target: Path, inspection: ArchiveInspection) -> None:
+def safe_extract(
+    source: Path | bytes,
+    target: Path,
+    inspection: ArchiveInspection,
+) -> None:
     """Extract an already-inspected archive while enforcing actual byte counts."""
 
     if inspection.errors:
@@ -219,12 +238,15 @@ def safe_extract(source: Path, target: Path, inspection: ArchiveInspection) -> N
         source,
         limits=inspection.limits,
         require_single_root=bool(inspection.roots),
+        display_path=inspection.source,
     )
     if current.errors or current.members != inspection.members:
         raise ValueError("archive changed or failed reinspection before extraction")
     target.mkdir(parents=True, exist_ok=True)
     total = 0
-    with zipfile.ZipFile(source) as archive:
+    with zipfile.ZipFile(
+        source if isinstance(source, Path) else io.BytesIO(source)
+    ) as archive:
         for info in archive.infolist():
             destination = target.joinpath(*PurePosixPath(info.filename).parts)
             if info.is_dir():

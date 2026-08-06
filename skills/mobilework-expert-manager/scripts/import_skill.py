@@ -17,16 +17,26 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import create_expert
+import cli_contract
 import diagnose_skill
 import execution_context
 import manifest_contract
+import output_sanitizer
 import package_contract
+import safe_input
 import skill_contract
 import validate_expert
 
 
 class ImportSkillError(RuntimeError):
     """Raised when a skill import cannot be committed safely."""
+
+
+def _inspect_source(source: Path) -> safe_input.InputSnapshot:
+    try:
+        return safe_input.inspect(source)
+    except safe_input.InputInspectionError as exc:
+        raise ImportSkillError(str(exc)) from exc
 
 
 def load_manifest(package_dir: Path) -> dict[str, Any]:
@@ -148,6 +158,7 @@ def import_skill(
         raise ImportSkillError(
             "--replace and --confirm-managed must be provided together"
         )
+    source_snapshot = _inspect_source(source)
     validation = validate_expert.validate_package(package_dir)
     if not validation.ok:
         raise ImportSkillError(
@@ -157,8 +168,11 @@ def import_skill(
 
     with tempfile.TemporaryDirectory(prefix="mobilework-skill-import-") as temp:
         temp_root = Path(temp)
+        staged_source = source_snapshot.materialize(
+            temp_root / "source-snapshot" / source_snapshot.source.name
+        )
         source_root = diagnose_skill.materialize_skill(
-            source,
+            staged_source,
             temp_root / "uploaded",
         )
         diagnosis = diagnose_skill.diagnose(source_root)
@@ -299,7 +313,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
     try:
         result = import_skill(
@@ -311,13 +325,23 @@ def main() -> int:
             confirm_managed=args.confirm_managed,
         )
     except (ImportSkillError, package_contract.ContractError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {output_sanitizer.sanitize_exception(exc)}", file=sys.stderr)
         return 2
     except Exception as exc:
-        print(f"error: internal manager failure: {exc}", file=sys.stderr)
+        print(
+            "error: internal manager failure: "
+            + output_sanitizer.sanitize_exception(exc),
+            file=sys.stderr,
+        )
         return 3
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(output_sanitizer.json_dumps(result, indent=2))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "import-skill", _legacy_main, argv=argv
+    )
 
 
 if __name__ == "__main__":

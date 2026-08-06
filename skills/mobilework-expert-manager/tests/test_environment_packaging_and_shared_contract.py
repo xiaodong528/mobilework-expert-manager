@@ -303,7 +303,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             "候选设计",
             "未确认项",
             "每轮最多组织 3 个",
-            "是否确认按此设计开始生成",
+            "是否确认按此业务确认卡开始生成",
             "结构性修改",
             "直接执行",
             "`--force`",
@@ -454,19 +454,19 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             "过程控制（Plugin/Hook）",
             "外部连接（MCP）",
             "用户确认前不得生成资源",
-            "每一个编号或",
-            "只能包含一个需要回答的问题",
+            "每个 question 对象只问一个决定",
+            "整轮只写一个精炼的业务组合问题",
             "角色分配只用于路由和审计，不是访问控制",
             "不要仅为查阅触发条件额外创建角色规则",
-            "需要开发连接器",
+            "外部连接能力仍需开发",
             "外部写权限尚未确认时默认只读最小权限",
         ):
             self.assertIn(marker, discovery)
         for marker in (
-            "这个实现前提不能被笼统的“是否同意方案”替代",
-            "每一个编号只包含一个需要回答的",
+            "不得由 assistant",
+            "枚举实现渠道",
+            "正文降级不列编号或并列问句",
             "不为这个触发条件额外发明角色规则",
-            "Connector、MCP、URL 或启动命令",
             "不能承诺宿主只在触发后联网",
         ):
             self.assertIn(marker, skill_text)
@@ -518,7 +518,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
     def test_eval_fixtures_and_trigger_balance_are_complete(self) -> None:
         evals = json.loads((SKILL / "evals" / "evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(evals["evals"]), 38)
+        self.assertEqual(len(evals["evals"]), 40)
         names = {item["name"] for item in evals["evals"]}
         self.assertEqual(
             names,
@@ -550,7 +550,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
                 "prove-opencode-workspace-install-projection",
                 "verify-version-independent-manager-contract",
                 "block-hostile-zip-and-ooxml-before-loading",
-                "plan-legacy-migration-read-only",
+                "require-input-before-legacy-migration",
                 "audit-supply-chain-warning-first",
                 "create-and-validate-manifest-driven-bundle",
                 "version-trusted-expert-with-local-git-semver",
@@ -561,33 +561,119 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
                 "route-novice-material-script-and-team-rule",
                 "route-novice-git-reference-without-clone",
                 "route-novice-external-check-and-event-block",
+                "multiturn-single-expert-ledger-budget-and-delegation",
+                "multiturn-team-technical-mapping-return",
             },
         )
         for item in evals["evals"]:
             self.assertTrue(item["expectations"])
             for file_name in item["files"]:
                 self.assertTrue((SKILL / file_name).is_file(), file_name)
-        triggers = json.loads((SKILL / "evals" / "trigger-evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(triggers), 33)
-        self.assertEqual(sum(1 for item in triggers if item["should_trigger"]), 19)
-        self.assertEqual(sum(1 for item in triggers if not item["should_trigger"]), 14)
-        trigger_queries = {item["query"] for item in triggers}
-        for marker in (
-            "MobileWork 专家的五档自主度",
-            "MobileWork 专家 workflow 的 Phase",
-            "MobileWork 专家团的 Todo",
-            "MobileWork expert.json 里的 custom command",
-            "没有顶层 Workflow",
-            "两种角色都能按输入动态创建多个分身",
-            "最高生效自主度",
-            "普通 OpenCode 会话里用 Todo",
-            "普通 OpenCode 项目新增 custom command",
-            "CSV 按地区动态分片",
-        ):
-            self.assertTrue(
-                any(marker in query for query in trigger_queries),
-                marker,
+        for item in evals["evals"][-2:]:
+            self.assertIn("pr-smoke", item["suites"])
+            self.assertIn("multi-turn", item["suites"])
+            self.assertGreaterEqual(len(item["conversation"]), 3)
+            self.assertEqual(
+                item["critical_expectation_indexes"],
+                list(range(len(item["expectations"]))),
             )
+        triggers = json.loads(
+            (SKILL / "evals" / "trigger-evals.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(triggers), 40)
+        self.assertTrue(
+            all(set(item) == {"query", "should_trigger"} for item in triggers)
+        )
+        self.assertEqual(len({item["query"] for item in triggers}), 40)
+
+        positive = [item for item in triggers if item["should_trigger"]]
+        negative = [item for item in triggers if not item["should_trigger"]]
+        self.assertEqual((len(positive), len(negative)), (20, 20))
+        implicit_positive = [
+            item
+            for item in positive
+            if not any(
+                marker in item["query"]
+                for marker in ("MobileWork", "专家", "expert.json")
+            )
+        ]
+        self.assertGreaterEqual(len(implicit_positive), 10)
+
+        negative_queries = [item["query"] for item in negative]
+        self.assertGreaterEqual(
+            sum(
+                "MobileWork" in query
+                and any(
+                    marker in query
+                    for marker in ("登录页", "输入框", "设置页", "导航", "自动更新", "快捷键")
+                )
+                for query in negative_queries
+            ),
+            6,
+        )
+        self.assertGreaterEqual(
+            sum(
+                "Skill" in query or "SKILL.md" in query
+                for query in negative_queries
+            ),
+            6,
+        )
+        self.assertGreaterEqual(
+            sum("OpenCode" in query for query in negative_queries),
+            8,
+        )
+
+        repository_root_override = os.environ.get("MOBILEWORK_REPO_ROOT")
+        if repository_root_override:
+            repository_root = Path(repository_root_override)
+        elif len(SKILL.parents) > 5:
+            repository_root = SKILL.parents[5]
+        else:
+            self.skipTest("MobileWork repository root is unavailable")
+        skill_creator = (
+            repository_root
+            / "apps/desktop/resources/presets/skills/mobilework-skill-creator"
+        )
+        run_loop_path = skill_creator / "scripts" / "run_loop.py"
+        if not run_loop_path.is_file():
+            self.skipTest("mobilework-skill-creator is unavailable")
+        spec = importlib.util.spec_from_file_location(
+            "mobilework_skill_creator_run_loop_for_contract_test",
+            run_loop_path,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        run_loop = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(skill_creator))
+        try:
+            spec.loader.exec_module(run_loop)
+        finally:
+            sys.path.remove(str(skill_creator))
+
+        train, held_out = run_loop.split_eval_set(triggers, 0.4, seed=42)
+        self.assertEqual((len(train), len(held_out)), (24, 16))
+        self.assertEqual(
+            (
+                sum(item["should_trigger"] for item in train),
+                sum(item["should_trigger"] for item in held_out),
+            ),
+            (12, 8),
+        )
+        self.assertEqual(
+            run_loop.split_eval_set(triggers, 0.4, seed=42),
+            (train, held_out),
+        )
+        keyword_correct = sum(
+            (
+                any(
+                    marker in item["query"]
+                    for marker in ("MobileWork", "专家", "expert.json")
+                )
+                == item["should_trigger"]
+            )
+            for item in triggers
+        )
+        self.assertLess(keyword_correct / len(triggers), 0.70)
 
     def test_broken_fixture_reports_unique_validator_roots(self) -> None:
         fixture = SKILL / "evals" / "files" / "broken-package"

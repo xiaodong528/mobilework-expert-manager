@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import finding_catalog
 import manager_contract
+import output_sanitizer
 import provenance
+import safe_input
 
 
 EVIDENCE_LEVELS = ("invalid", "valid", "installable", "config-loadable")
@@ -30,7 +33,7 @@ class Finding:
     evidence: str
 
     def as_dict(self) -> dict[str, str]:
-        return asdict(self)
+        return output_sanitizer.sanitize_mapping(asdict(self))
 
 
 def _location(message: str, phase: str) -> tuple[str, str]:
@@ -51,8 +54,17 @@ class ValidationResult:
         *,
         execution_reason: str = "untrusted-package",
         input_path: Any | None = None,
+        input_snapshot: safe_input.InputSnapshot | None = None,
+        input_error: safe_input.InputInspectionError | None = None,
         target: manager_contract.TargetContract | None = None,
     ) -> None:
+        if sum(
+            value is not None
+            for value in (input_path, input_snapshot, input_error)
+        ) > 1:
+            raise ValueError(
+                "input_path, input_snapshot, and input_error are mutually exclusive"
+            )
         self.findings: list[Finding] = []
         self.execution = {
             "policy": "static-only",
@@ -62,7 +74,75 @@ class ValidationResult:
         self.gates = {name: "not-run" for name in GATE_NAMES}
         self.evidence_level = "valid"
         self.runtime = {"status": "not-tested", "reason": execution_reason}
-        self.provenance = provenance.collect(input_path=input_path, target=target)
+        self.input_snapshot = input_snapshot
+        self.input_inspection_error = input_error
+        if self.input_snapshot is None and input_path is not None:
+            try:
+                self.input_snapshot = safe_input.inspect(Path(input_path))
+            except safe_input.InputInspectionError as exc:
+                self.input_inspection_error = exc
+        self.provenance = provenance.collect(
+            input_snapshot=self.input_snapshot,
+            input_error=self.input_inspection_error,
+            target=target,
+        )
+        manager_contract_evidence = self.provenance.get("managerContract")
+        if (
+            isinstance(manager_contract_evidence, dict)
+            and manager_contract_evidence.get("status") == "invalid"
+        ):
+            self.error(
+                "manager contract is invalid: "
+                + str(manager_contract_evidence.get("error", "unavailable")),
+                code="MANAGER_CONTRACT_INVALID",
+                phase="manager",
+                root_cause="invalid-manager-contract",
+                remediation=(
+                    "Restore scripts/manager-contract.json from the canonical "
+                    "skill package before retrying."
+                ),
+                evidence="",
+            )
+            self.block_downstream_gates()
+
+    def block_input_preflight(self) -> ValidationResult:
+        failure = self.input_inspection_error
+        if failure is None:
+            raise ValueError("input preflight did not fail")
+        if failure.code == "INPUT_NOT_FOUND":
+            root_cause = "missing-input"
+            remediation = "Provide an existing input path and retry."
+        elif failure.code.startswith(
+            ("INPUT_ENTRY_", "INPUT_FILE_", "INPUT_TOTAL_", "INPUT_PATH_")
+        ):
+            root_cause = "input-resource-limit"
+            remediation = (
+                "Reduce the input size, entry count, path length, or path depth "
+                "and retry."
+            )
+        elif failure.code == "INPUT_CHANGED_DURING_SCAN":
+            root_cause = "input-changed-during-scan"
+            remediation = "Stop concurrent writes and retry with a stable input tree."
+        else:
+            root_cause = "unsafe-input-type"
+            remediation = (
+                "Replace the unsafe filesystem object with owned regular files "
+                "and directories."
+            )
+        self.error(
+            str(failure),
+            code=failure.code,
+            phase="input-preflight",
+            path=failure.path,
+            root_cause=root_cause,
+            remediation=remediation,
+            evidence=failure.path,
+        )
+        self.set_gate("portability", "blocked")
+        self.set_gate("install", "blocked")
+        self.set_gate("configLoad", "blocked")
+        self.finalize_contract()
+        return self
 
     def set_gate(self, name: str, value: str) -> None:
         if name not in self.gates:
@@ -70,6 +150,13 @@ class ValidationResult:
         if value not in GATE_VALUES:
             raise ValueError(f"invalid gate value {value}")
         self.gates[name] = value
+
+    def block_downstream_gates(self) -> None:
+        """Mark gates that cannot run after an input or contract failure."""
+
+        for name in ("portability", "install", "configLoad"):
+            if self.gates[name] == "not-run":
+                self.gates[name] = "blocked"
 
     def add(
         self,
@@ -90,18 +177,29 @@ class ValidationResult:
         actual_phase = phase or inferred_phase
         inferred_path, inferred_location = _location(message, actual_phase)
         actual_code = code or inferred_code
-        safe_evidence = "" if "SECRET" in actual_code else (evidence or message[:240])
+        safe_message = output_sanitizer.sanitize_text(message)
+        safe_evidence = (
+            ""
+            if "SECRET" in actual_code
+            else output_sanitizer.sanitize_text(evidence or safe_message[:240])
+        )
         self.findings.append(
             Finding(
                 code=actual_code,
                 severity=severity,
                 phase=actual_phase,
-                path=path if path is not None else inferred_path,
-                location=location if location is not None else inferred_location,
-                message=message,
-                rootCause=root_cause or inferred_root,
-                remediation=remediation or inferred_remediation,
-                evidence=safe_evidence,
+                path=output_sanitizer.sanitize_text(
+                    path if path is not None else inferred_path
+                ),
+                location=output_sanitizer.sanitize_text(
+                    location if location is not None else inferred_location
+                ),
+                message=safe_message,
+                rootCause=output_sanitizer.sanitize_text(root_cause or inferred_root),
+                remediation=output_sanitizer.sanitize_text(
+                    remediation or inferred_remediation
+                ),
+                evidence=safe_evidence[:240],
             )
         )
         if severity == "error":
@@ -169,17 +267,21 @@ class ValidationResult:
     def as_dict(self, *, schema_version: int = 2) -> dict[str, Any]:
         common = self._common()
         if schema_version == 1:
-            return {"schemaVersion": 1, "status": self.status, **common}
+            return output_sanitizer.sanitize_mapping(
+                {"schemaVersion": 1, "status": self.status, **common}
+            )
         if schema_version != 2:
             raise ValueError(f"unsupported schema version {schema_version}")
-        return {
-            "schemaVersion": 2,
-            "evidenceLevel": self.evidence_level,
-            "gates": dict(self.gates),
-            "runtime": dict(self.runtime),
-            "provenance": dict(self.provenance),
-            **common,
-        }
+        return output_sanitizer.sanitize_mapping(
+            {
+                "schemaVersion": 2,
+                "evidenceLevel": self.evidence_level,
+                "gates": dict(self.gates),
+                "runtime": dict(self.runtime),
+                "provenance": dict(self.provenance),
+                **common,
+            }
+        )
 
     def print_summary(self, *, output_format: str = "human", schema_version: int = 2) -> None:
         if output_format == "json":
@@ -190,11 +292,11 @@ class ValidationResult:
         if errors:
             print(f"ERRORS ({len(errors)}):")
             for item in errors:
-                print(f"- [{item.code}] {item.message}")
+                print(f"- [{item.code}] {output_sanitizer.sanitize_text(item.message)}")
         if warnings:
             print(f"WARNINGS ({len(warnings)}):")
             for item in warnings:
-                print(f"- [{item.code}] {item.message}")
+                print(f"- [{item.code}] {output_sanitizer.sanitize_text(item.message)}")
         if self.findings:
             print(f"{len(self.groups())} root causes affecting {len(self.findings)} validation points.")
         if self.ok:

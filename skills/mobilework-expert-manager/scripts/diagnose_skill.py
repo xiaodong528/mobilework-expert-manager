@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import shutil
 import sys
@@ -15,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import archive_inspector
+import cli_contract
 import manager_contract
 import package_contract
 import skill_contract
@@ -205,30 +207,41 @@ def diagnose(
         input_path=source,
         target=target,
     )
-    if not source.exists():
-        result.error(
-            f"skill source does not exist: {source}",
-            code="SKILL_SOURCE_MISSING",
-            phase="skill",
-            root_cause="missing-skill-source",
-            evidence=source.name,
-        )
-        result.finalize_contract()
-        return result
-    if source.is_dir():
-        try:
-            root = locate_skill_root(source)
-        except (OSError, package_contract.ContractError) as exc:
+    if result.input_inspection_error is not None:
+        if result.input_inspection_error.code == "INPUT_NOT_FOUND":
             result.error(
-                str(exc),
-                code="SKILL_ROOT_INVALID",
+                f"skill source does not exist: {source}",
+                code="SKILL_SOURCE_MISSING",
                 phase="skill",
-                root_cause="invalid-skill-root",
+                root_cause="missing-skill-source",
                 evidence=source.name,
             )
+            result.block_downstream_gates()
             result.finalize_contract()
             return result
-        diagnose_root(root, result)
+        return result.block_input_preflight()
+    snapshot = result.input_snapshot
+    if snapshot is None:
+        raise RuntimeError("input preflight produced neither a snapshot nor an error")
+    if snapshot.kind == "directory":
+        with tempfile.TemporaryDirectory(
+            prefix="mobilework-skill-snapshot-diagnosis-"
+        ) as temp:
+            staged_source = snapshot.materialize(Path(temp) / source.name)
+            try:
+                root = locate_skill_root(staged_source)
+            except (OSError, package_contract.ContractError) as exc:
+                result.error(
+                    str(exc),
+                    code="SKILL_ROOT_INVALID",
+                    phase="skill",
+                    root_cause="invalid-skill-root",
+                    evidence=source.name,
+                )
+                result.block_downstream_gates()
+                result.finalize_contract()
+                return result
+            diagnose_root(root, result)
         result.execution["reason"] = "untrusted-skill-directory"
         return result
     if source.suffix.lower() != ".zip":
@@ -239,10 +252,16 @@ def diagnose(
             root_cause="unsupported-skill-source",
             evidence=source.name,
         )
+        result.block_downstream_gates()
         result.finalize_contract()
         return result
+    archive_bytes = snapshot.read_bytes()
     try:
-        inspection = archive_inspector.inspect_archive(source)
+        inspection = archive_inspector.inspect_archive(
+            archive_bytes,
+            display_path=source,
+        )
+        result.provenance["inputLimits"] = result.provenance.get("limits", {})
         result.provenance["limits"] = inspection.limits.as_dict()
         for issue in inspection.issues:
             result.add(
@@ -256,10 +275,10 @@ def diagnose(
             )
         if inspection.errors:
             result.set_gate("contract", "blocked")
-            result.set_gate("portability", "blocked")
+            result.block_downstream_gates()
             return result
         result.set_gate("archive", "passed")
-        with zipfile.ZipFile(source) as archive:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
             bad = archive.testzip()
             if bad is not None:
                 result.error(
@@ -269,10 +288,15 @@ def diagnose(
                     root_cause="corrupt-archive",
                     evidence=bad,
                 )
+                result.block_downstream_gates()
                 return result
         with tempfile.TemporaryDirectory(prefix="mobilework-skill-diagnosis-") as temp:
             extraction_root = Path(temp)
-            archive_inspector.safe_extract(source, extraction_root, inspection)
+            archive_inspector.safe_extract(
+                archive_bytes,
+                extraction_root,
+                inspection,
+            )
             root = locate_skill_root(extraction_root / inspection.roots[0])
             diagnose_root(root, result)
             result.execution["reason"] = "untrusted-skill-zip"
@@ -285,6 +309,7 @@ def diagnose(
             root_cause="corrupt-archive",
             evidence=source.name,
         )
+        result.block_downstream_gates()
         result.finalize_contract()
         return result
 
@@ -304,7 +329,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
     try:
         target = manager_contract.resolve_target(
@@ -313,10 +338,48 @@ def main() -> int:
         )
         result = diagnose(args.source, target=target)
     except manager_contract.ManagerContractError as exc:
-        print(f"error: version contract error: {exc}", file=sys.stderr)
+        result = ValidationResult(
+            execution_reason="version-contract-error",
+            target=manager_contract.TargetContract(
+                version="unknown",
+                source="version-contract-error",
+                capabilities={},
+                capability_verified=False,
+            ),
+        )
+        result.error(
+            f"version contract error: {exc}",
+            code="MANAGER_VERSION_CONTRACT_ERROR",
+            phase="manager",
+            root_cause="invalid-version-contract",
+            evidence="",
+        )
+        result.print_summary(
+            output_format=args.format,
+            schema_version=args.schema_version,
+        )
         return 2
     except Exception as exc:
-        print(f"error: internal manager failure: {exc}", file=sys.stderr)
+        result = ValidationResult(
+            execution_reason="manager-internal-error",
+            target=manager_contract.TargetContract(
+                version="unknown",
+                source="manager-internal-error",
+                capabilities={},
+                capability_verified=False,
+            ),
+        )
+        result.error(
+            f"internal manager failure: {exc}",
+            code="MANAGER_INTERNAL_ERROR",
+            phase="manager",
+            root_cause="manager-internal-error",
+            evidence="",
+        )
+        result.print_summary(
+            output_format=args.format,
+            schema_version=args.schema_version,
+        )
         return 3
     if args.runtime:
         result.execution["reason"] = "untrusted-runtime-blocked"
@@ -327,6 +390,16 @@ def main() -> int:
         return 4
     result.print_summary(output_format=args.format, schema_version=args.schema_version)
     return 0 if result.ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "diagnose-skill",
+        _legacy_main,
+        argv=argv,
+        default_format="human",
+        delegated_output_flags=("format", "schema-version"),
+    )
 
 
 if __name__ == "__main__":

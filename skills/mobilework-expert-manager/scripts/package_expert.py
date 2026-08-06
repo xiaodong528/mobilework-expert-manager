@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -14,6 +13,10 @@ from pathlib import Path
 
 import package_contract as contract
 import archive_inspector
+import cli_contract
+import output_sanitizer
+import package_snapshot
+import safe_input
 import scan_portable_artifacts
 import validate_expert
 
@@ -32,23 +35,36 @@ EXCLUDED_SUFFIXES = {".log", ".py" + "c", ".pyo"}
 
 
 def fail(message: str) -> None:
-    raise SystemExit(f"error: {message}")
+    raise SystemExit(f"error: {output_sanitizer.sanitize_text(message)}")
 
 
 def should_skip(path: Path, package_dir: Path) -> bool:
-    rel = path.relative_to(package_dir)
+    return should_skip_relative(path.relative_to(package_dir).as_posix())
+
+
+def should_skip_relative(relative: str) -> bool:
+    rel = Path(relative)
     if any(part in EXCLUDED_DIRS for part in rel.parts):
         return True
-    if path.name in EXCLUDED_FILES:
+    if rel.name in EXCLUDED_FILES:
         return True
-    return path.suffix in EXCLUDED_SUFFIXES
+    return rel.suffix in EXCLUDED_SUFFIXES
 
 
-def package_slug(package_dir: Path) -> str:
-    manifest_path = package_dir / validate_expert.MANIFEST_FILE
+def _snapshot(package: Path | safe_input.InputSnapshot) -> safe_input.InputSnapshot:
+    return (
+        package
+        if isinstance(package, safe_input.InputSnapshot)
+        else package_snapshot.inspect_directory(package)
+    )
+
+
+def package_slug(package: Path | safe_input.InputSnapshot) -> str:
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest = package_snapshot.load_json(
+            _snapshot(package), validate_expert.MANIFEST_FILE
+        )
+    except (safe_input.InputInspectionError, ValueError) as exc:
         fail(f"cannot read expert.json: {exc}")
     slug = manifest.get("slug")
     if not isinstance(slug, str) or not slug:
@@ -56,30 +72,41 @@ def package_slug(package_dir: Path) -> str:
     return slug
 
 
-def write_zip(package_dir: Path, zip_path: Path, slug: str) -> None:
+def write_zip(
+    package: Path | safe_input.InputSnapshot,
+    zip_path: Path,
+    slug: str,
+) -> None:
     try:
-        contract.assert_no_symlinks(package_dir)
-        manifest = json.loads((package_dir / validate_expert.MANIFEST_FILE).read_text(encoding="utf-8"))
+        snapshot = _snapshot(package)
+        manifest = package_snapshot.load_json(
+            snapshot, validate_expert.MANIFEST_FILE
+        )
         declared_files = contract.declared_package_files(manifest)
-    except (contract.ContractError, OSError, json.JSONDecodeError) as exc:
+    except (contract.ContractError, safe_input.InputInspectionError, ValueError) as exc:
         fail(str(exc))
 
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        skills_dir = package_dir / contract.PACKAGE_RUNTIME_DIR / contract.SKILLS_SUBDIR
-        if skills_dir.is_dir() and not any(skills_dir.iterdir()):
-            archive.write(
-                skills_dir,
-                Path(slug) / contract.PACKAGE_RUNTIME_DIR / contract.SKILLS_SUBDIR,
+        skills_relative = (
+            f"{contract.PACKAGE_RUNTIME_DIR}/{contract.SKILLS_SUBDIR}"
+        )
+        if skills_relative in snapshot.directories and not any(
+            item.relative_path.startswith(skills_relative + "/")
+            for item in snapshot.files
+        ):
+            archive.writestr(
+                f"{slug}/{skills_relative}/",
+                b"",
             )
-        for path in sorted(package_dir.rglob("*")):
-            if not path.is_file() or should_skip(path, package_dir):
+        for item in snapshot.files:
+            relative = item.relative_path
+            if should_skip_relative(relative):
                 continue
-            rel = path.relative_to(package_dir)
-            if not contract.is_allowed_package_path(Path(rel.as_posix())):
-                fail(f"path is outside the package allowlist: {rel.as_posix()}")
-            if rel.as_posix() not in declared_files:
-                fail(f"path is not declared by expert.json: {rel.as_posix()}")
-            archive.write(path, Path(slug) / rel)
+            if not contract.is_allowed_package_path(Path(relative)):
+                fail(f"path is outside the package allowlist: {relative}")
+            if relative not in declared_files:
+                fail(f"path is not declared by expert.json: {relative}")
+            archive.writestr(f"{slug}/{relative}", item.content)
 
 
 def test_zip_python(zip_path: Path, slug: str) -> None:
@@ -101,8 +128,12 @@ def test_zip_external(zip_path: Path) -> None:
     except FileNotFoundError:
         fail("unzip is required unless --skip-unzip-test is used")
     if proc.returncode != 0:
-        print(proc.stdout, end="")
-        print(proc.stderr, end="", file=sys.stderr)
+        print(output_sanitizer.sanitize_text(proc.stdout or ""), end="")
+        print(
+            output_sanitizer.sanitize_text(proc.stderr or ""),
+            end="",
+            file=sys.stderr,
+        )
         fail(f"zip integrity test failed: {zip_path}")
 
 
@@ -124,7 +155,12 @@ def verify_extracted_package(zip_path: Path, output_dir: Path, slug: str) -> Non
         findings = scan_portable_artifacts.scan_root(extracted)
         errors = [item for item in findings if item.get("severity", "error") == "error"]
         if errors:
-            print(json.dumps({"ok": False, "findings": findings}, ensure_ascii=False, indent=2))
+            print(
+                output_sanitizer.json_dumps(
+                    {"ok": False, "findings": findings},
+                    indent=2,
+                )
+            )
             fail("extracted package failed portability scan")
 
 
@@ -134,10 +170,18 @@ def make_zip(
     *,
     force: bool = False,
     run_external_test: bool = True,
+    input_snapshot: safe_input.InputSnapshot | None = None,
 ) -> Path:
-    package_dir = package_dir.expanduser().resolve()
+    package_dir = package_dir.expanduser().absolute()
     output_dir = output_dir.expanduser().resolve()
-    slug = package_slug(package_dir)
+    if input_snapshot is None:
+        snapshot, validation = package_snapshot.inspect_and_validate(package_dir)
+    else:
+        snapshot = input_snapshot
+        validation = package_snapshot.validate_snapshot(snapshot)
+    if snapshot is None or not validation.ok:
+        fail("package validation failed: " + "; ".join(validation.errors[:8]))
+    slug = package_slug(snapshot)
     zip_path = output_dir / f"{slug}.zip"
     output_dir.mkdir(parents=True, exist_ok=True)
     if zip_path.exists() and not force:
@@ -147,7 +191,7 @@ def make_zip(
     os.close(handle)
     temporary_zip = Path(temporary_name)
     try:
-        write_zip(package_dir, temporary_zip, slug)
+        write_zip(snapshot, temporary_zip, slug)
         test_zip_python(temporary_zip, slug)
         if run_external_test:
             test_zip_external(temporary_zip)
@@ -173,21 +217,45 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
-    package_dir = args.package_dir.expanduser().absolute()
-    result = validate_expert.validate_package(package_dir)
-    result.print_summary()
-    if not result.ok:
-        return 1
-    zip_path = make_zip(
-        package_dir,
-        args.output_dir,
-        force=args.force,
-        run_external_test=not args.skip_unzip_test,
+    try:
+        package_dir = args.package_dir.expanduser().absolute()
+        snapshot, result = package_snapshot.inspect_and_validate(package_dir)
+        if not result.ok:
+            result.print_summary()
+            return 1
+        if snapshot is None:
+            fail("package snapshot is unavailable after successful validation")
+        zip_path = make_zip(
+            package_dir,
+            args.output_dir,
+            force=args.force,
+            run_external_test=not args.skip_unzip_test,
+            input_snapshot=snapshot,
+        )
+        print(
+            output_sanitizer.json_dumps(
+                {"ok": True, "zip_path": str(zip_path)},
+                indent=2,
+            )
+        )
+        return 0
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(
+            "error: internal manager failure: "
+            + output_sanitizer.sanitize_exception(exc),
+            file=sys.stderr,
+        )
+        return 3
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "package-expert", _legacy_main, argv=argv
     )
-    print(json.dumps({"ok": True, "zip_path": str(zip_path)}, ensure_ascii=False, indent=2))
-    return 0
 
 
 if __name__ == "__main__":

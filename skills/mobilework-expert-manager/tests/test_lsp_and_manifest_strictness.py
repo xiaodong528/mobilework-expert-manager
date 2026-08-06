@@ -265,9 +265,13 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
             (
                 "npm",
                 lambda data: data.update(
-                    {"runtime_extensions": {"plugins": {"npm": ["demo-plugin", "demo-plugin"]}}}
+                    {
+                        "runtime_extensions": {
+                            "plugins": {"npm": ["demo-plugin@1.0.0", "demo-plugin@1.0.0"]}
+                        }
+                    }
                 ),
-                "plugins.npm duplicates demo-plugin",
+                "PLUGIN_NPM_SPEC_DUPLICATE",
             ),
             (
                 "instructions",
@@ -308,7 +312,7 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
 
         valid = copy.deepcopy(self.base)
         valid["runtime_extensions"] = {
-            "plugins": {"npm": ["demo-plugin"]},
+            "plugins": {"npm": ["demo-plugin@1.0.0"]},
             "instruction_files": [
                 {
                     "path": ".opencode/instructions/contract-review-expert/rule.md",
@@ -325,7 +329,7 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
             package,
             lambda manifest: (
                 manifest["runtime_extensions"]["plugins"].update(
-                    {"npm": ["demo-plugin", "demo-plugin"]}
+                    {"npm": ["demo-plugin@1.0.0", "demo-plugin@1.0.0"]}
                 ),
                 manifest["runtime_extensions"].update(
                     {
@@ -340,7 +344,7 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
         )
         rejected = self.validate(package)
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("runtime_extensions.plugins.npm: duplicates demo-plugin", rejected.stdout)
+        self.assertIn("PLUGIN_NPM_SPEC_DUPLICATE", rejected.stdout)
         self.assertIn("runtime_extensions.instructions: duplicates", rejected.stdout)
         self.assertIn("agent.mcp: duplicates local-demo", rejected.stdout)
 

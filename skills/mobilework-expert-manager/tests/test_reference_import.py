@@ -104,7 +104,7 @@ class ReferenceImportTests(unittest.TestCase):
         result = self.run_import(source, "--confirm")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["sourceExecution"], "not-attempted")
+        self.assertEqual(payload["data"]["sourceExecution"], "not-attempted")
         self.assertFalse(sentinel.exists())
 
         manifest = json.loads((self.package / "expert.json").read_text(encoding="utf-8"))
@@ -226,6 +226,105 @@ class ReferenceImportTests(unittest.TestCase):
                         expected,
                     ):
                         reference_importer.collect_source(source)
+
+    def test_import_consumes_captured_snapshot_after_original_source_changes(
+        self,
+    ) -> None:
+        source = self.root / "snapshot-rules.md"
+        source.write_text("original captured rules\n", encoding="utf-8")
+        original_inspect = reference_importer.safe_input.inspect
+        source_inspections = 0
+
+        def inspect_then_change(path, *args, **kwargs):
+            nonlocal source_inspections
+            snapshot = original_inspect(path, *args, **kwargs)
+            if Path(path).absolute() == source.absolute():
+                source_inspections += 1
+                source.write_text("changed after snapshot\n", encoding="utf-8")
+            return snapshot
+
+        with patch.object(
+            reference_importer.safe_input,
+            "inspect",
+            side_effect=inspect_then_change,
+        ):
+            result = reference_importer.import_reference(
+                self.package,
+                source,
+                alias="company-rules",
+                description="审查公司合同时查阅",
+                assign_to=[],
+                all_members=False,
+                hidden=False,
+                replace=False,
+                confirmed=True,
+            )
+
+        self.assertEqual(source_inspections, 1)
+        self.assertEqual(result["action"], "imported")
+        imported = (
+            self.package
+            / ".opencode/references/contract-review-expert/company-rules/snapshot-rules.md"
+        )
+        self.assertEqual(
+            imported.read_text(encoding="utf-8"),
+            "original captured rules\n",
+        )
+        self.assertEqual(
+            source.read_text(encoding="utf-8"),
+            "changed after snapshot\n",
+        )
+
+    def test_input_change_during_reference_scan_fails_without_package_write(
+        self,
+    ) -> None:
+        source = self.root / "changing-rules.md"
+        source.write_text("rules\n", encoding="utf-8")
+        before = create_expert.calculate_package_revision(self.package)
+        failure = reference_importer.safe_input.InputInspectionError(
+            "INPUT_CHANGED_DURING_SCAN",
+            "input changed while it was read",
+            source.name,
+        )
+
+        with patch.object(
+            reference_importer.safe_input,
+            "inspect",
+            side_effect=failure,
+        ):
+            with self.assertRaisesRegex(
+                reference_importer.ImportReferenceError,
+                "INPUT_CHANGED_DURING_SCAN",
+            ):
+                reference_importer.import_reference(
+                    self.package,
+                    source,
+                    alias="company-rules",
+                    description="审查公司合同时查阅",
+                    assign_to=[],
+                    all_members=False,
+                    hidden=False,
+                    replace=False,
+                    confirmed=True,
+                )
+
+        self.assertEqual(create_expert.calculate_package_revision(self.package), before)
+
+    def test_nested_reference_symlink_is_rejected_before_import(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink is unavailable")
+        source = self.root / "nested-symlink-source"
+        source.mkdir()
+        outside = self.root / "outside-rules.md"
+        outside.write_text("outside\n", encoding="utf-8")
+        (source / "rules.md").symlink_to(outside)
+        before = create_expert.calculate_package_revision(self.package)
+
+        rejected = self.run_import(source, "--confirm")
+
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("symlink", rejected.stderr)
+        self.assertEqual(create_expert.calculate_package_revision(self.package), before)
 
     def test_imported_package_json_reference_is_installed_and_receipted(self) -> None:
         source = self.root / "package.json"

@@ -72,7 +72,9 @@ JSON 顶层包含 `schemaVersion`、`ok`、`status`、计数、groups、findings
 
 - `invalid`：静态合同失败，安装器阻止；
 - `installable`：可信临时安装及 receipt 读回通过；
-- `config-loadable`：可信临时安装通过仓库锁定 sidecar 的 pure config 解析；
+- `config-loadable`：可信安装通过 caller 显式提供且另行核验来源的 sidecar pure config 解析；
+  sidecar 从安全打开的同一 descriptor 复制为私有可执行副本，记录的 hash/version 绑定该实际
+  执行副本；
 - `runtime-not-tested`：因信任、沙箱或环境没有运行 Runtime；
 - `runtime-verified`：来源 Electron 新会话发现 Agent。
 

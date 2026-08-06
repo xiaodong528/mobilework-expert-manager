@@ -1,35 +1,162 @@
 [
-  {"query":"请在临时目录创建一个 MobileWork 发票审核专家，包含 expert.json、头像、推荐问法和验证结果。","should_trigger":true},
-  {"query":"把这份客服 SOP 转成 MobileWork 专家团，团长负责分派，质检和知识库维护作为团员。","should_trigger":true},
-  {"query":"帮我检查 ~/.mobilework/my-experts/legal-reviewer 这个专家包为什么 validator 不通过，只读诊断。","should_trigger":true},
-  {"query":"给现有 expert.json 增加 remote MCP、reference 和 {env:API_TOKEN}，然后重生成专家包。","should_trigger":true},
-  {"query":"把这个旧 Claude/Qoder 插件迁成可分发的 MobileWork expert，不要带旧宿主配置。","should_trigger":true},
-  {"query":"创建一个由产品经理、架构师、开发和 QA 组成的 MobileWork 专家团，设置串并行 workflow。","should_trigger":true},
-  {"query":"将这个 MobileWork 专家完整安装到临时 workspace，检查 .opencode receipt 和 opencode.jsonc 合并配置。","should_trigger":true},
-  {"query":"把已经校验通过的 MobileWork expert 打包成便携 zip，并对干净解压包复验。","should_trigger":true},
-  {"query":"专家团里的团员权限引用了未分配给自己的 skill，按 expert.json 统一技能合同修好并重建。","should_trigger":true},
-  {"query":"把我上传的完整技能 ZIP 原样放进这个 MobileWork 专家团，并分配给团长和 QA 团员。","should_trigger":true},
-  {"query":"我的专家把报告写进 .opencode 了，请按 MobileWork 专家包规则修正产物目录并做便携性扫描。","should_trigger":true},
-  {"query":"分析这个 MobileWork 专家的五档自主度是否合理，并说明 fixed 的例外边界。","should_trigger":true},
-  {"query":"帮我重新设计 MobileWork 专家 workflow 的 Phase、验收标准和串并行关系。","should_trigger":true},
-  {"query":"检查 MobileWork 专家团的 Todo 进度约定，确保团长和团员不会提前完成 Phase。","should_trigger":true},
-  {"query":"MobileWork expert.json 里的 custom command 为什么和内建命令冲突？请诊断并修改。","should_trigger":true},
-  {"query":"创建一个没有顶层 Workflow 的 MobileWork 开放研究专家，保留普通 Todo 和安全默认权限。","should_trigger":true},
-  {"query":"设计一个 MobileWork 专家团 parallel Phase，让 researcher 和 reviewer 两种角色都能按输入动态创建多个分身。","should_trigger":true},
-  {"query":"分析这个 MobileWork Workflow 各 Phase 的最高生效自主度，确认它没有给低自主度角色提权。","should_trigger":true},
-  {"query":"这个专家团把团员返回和返工各写成一个 Phase，请按执行与验收边界重新设计。","should_trigger":true},
-  {"query":"给普通 OpenCode 项目写一个代码审查 agent markdown，不需要 MobileWork expert.json。","should_trigger":false},
-  {"query":"帮我在 opencode.json 里配置一个通用 remote MCP server，项目不是 MobileWork 专家包。","should_trigger":false},
-  {"query":"写一个通用 SKILL.md，教团队使用 pytest，放在 .agents/skills 下。","should_trigger":false},
-  {"query":"分析一下 MCP 协议的 streamable HTTP 和 stdio 传输有什么区别。","should_trigger":false},
-  {"query":"检查这个普通 npm 插件的 package.json 依赖冲突，不要转换成专家。","should_trigger":false},
-  {"query":"给我的 Codex agent 增加一条 permission 规则，禁止 rm 命令。","should_trigger":false},
-  {"query":"把 README 里的英文翻译成中文并保持 Markdown 结构。","should_trigger":false},
-  {"query":"审查一个普通 OpenCode workspace 的 LSP 配置为什么没生效。","should_trigger":false},
-  {"query":"设计一个多智能体协作方案，但目标平台还没定，也不需要生成 MobileWork 包。","should_trigger":false},
-  {"query":"打包一个普通 Python wheel 并检查是否包含 __pycache__。","should_trigger":false},
-  {"query":"教我在普通 OpenCode 会话里用 Todo 跟踪今天的开发任务。","should_trigger":false},
-  {"query":"给普通 OpenCode 项目新增 custom command，不涉及 MobileWork 专家包。","should_trigger":false},
-  {"query":"把一批 CSV 按地区动态分片并并行处理，不需要创建 MobileWork 专家或 expert.json。","should_trigger":false},
-  {"query":"解释 OpenCode 如何启动多个同类型 subagent，不涉及 MobileWork 专家包。","should_trigger":false}
+  {
+    "query": "把客服交付 SOP 整理成一个可安装的三角色团队包：负责人分派任务，质检和知识维护并行处理；先给业务确认卡，不要生成。",
+    "should_trigger": true
+  },
+  {
+    "query": "我想做一个单角色合同风险助手，输入 PDF/DOCX，输出带原文出处的风险清单；请先确认职责、流程和验收门。",
+    "should_trigger": true
+  },
+  {
+    "query": "现有审核团队包里团长和团员的职责重叠了，先读清当前清单，给我结构修改前后的确认稿，暂时别覆盖文件。",
+    "should_trigger": true
+  },
+  {
+    "query": "已确认的发票复核设计要生成到任务临时目录：单角色、两项 managed skills、缺页即停止；生成后做 JSON、资源和便携性校验。",
+    "should_trigger": true
+  },
+  {
+    "query": "把这个旧 Claude/Qoder 合规插件迁成可分发的团队包，保留业务规则，去掉旧宿主配置，并先给迁移设计确认稿。",
+    "should_trigger": true
+  },
+  {
+    "query": "把 uploaded-review 技能 ZIP 原样导入这个三角色包，只分配给负责人和 QA；要保留每个文件的 hash，不能执行上传内容。",
+    "should_trigger": true
+  },
+  {
+    "query": "将这个三角色包完整安装到临时 workspace，读回 agents、skills、opencode.jsonc 合并结果和 receipt，别只做轻量复制。",
+    "should_trigger": true
+  },
+  {
+    "query": "给采购复核小组设计负责人分派、票据与政策并行、缺证据返工的稳定流程，并明确每项能力归哪个角色；先不要创建文件。",
+    "should_trigger": true
+  },
+  {
+    "query": "这个包里成员权限引用了没分配给自己的 skill，请按统一技能池修正角色引用、权限投影和派生文件，再完整验证。",
+    "should_trigger": true
+  },
+  {
+    "query": "把六个已校验角色包组成 bundle，生成唯一 manifest、受控摘要和每个 ZIP 的 hash，然后验证汇总数字没有漂移。",
+    "should_trigger": true
+  },
+  {
+    "query": "旧包还在用 common_skills、maxTurns 和根 AGENTS.md；只做迁移规划，列 JSON Patch、资源移动和重生成清单，并证明源目录不变。",
+    "should_trigger": true
+  },
+  {
+    "query": "只读检查这个角色包的 manifest、资源、派生配置和便携性分别有什么问题；不要导入模块、不要修复、不要覆盖。",
+    "should_trigger": true
+  },
+  {
+    "query": "请在临时目录创建一个 MobileWork 发票审核专家，包含 expert.json、头像、推荐问法和验证结果。",
+    "should_trigger": true
+  },
+  {
+    "query": "给现有 expert.json 增加 remote MCP、reference 和 {env:API_TOKEN}，先更新业务确认卡，再按确认结果重生成专家包。",
+    "should_trigger": true
+  },
+  {
+    "query": "设计一个 MobileWork 专家团 parallel Phase，让 researcher 和 reviewer 两种角色能按输入动态创建多个分身。",
+    "should_trigger": true
+  },
+  {
+    "query": "将这个 MobileWork 专家完整安装到临时 workspace，检查 .opencode receipt 和 opencode.jsonc 合并配置。",
+    "should_trigger": true
+  },
+  {
+    "query": "把已经校验通过的 MobileWork expert 打包成便携 zip，并对干净解压包复验。",
+    "should_trigger": true
+  },
+  {
+    "query": "分析这个 MobileWork 专家的五档自主度是否合理，算清 workflow、Phase 和角色 override 的最高生效边界。",
+    "should_trigger": true
+  },
+  {
+    "query": "检查 MobileWork 专家团的 Todo 进度约定，确保团长和团员不会提前完成 Phase。",
+    "should_trigger": true
+  },
+  {
+    "query": "MobileWork expert.json 里的 custom command 为什么和内建命令冲突？请诊断并做最小修改。",
+    "should_trigger": true
+  },
+  {
+    "query": "MobileWork 登录页的 Logo 在窄窗口被裁掉了，请修复响应式布局和品牌色，不要改任何专家包。",
+    "should_trigger": false
+  },
+  {
+    "query": "MobileWork 聊天输入框上传 PDF 后预览卡片重复出现，帮我定位前端状态问题。",
+    "should_trigger": false
+  },
+  {
+    "query": "MobileWork 设置页的模型供应商列表刷新后顺序跳动，只修 UI 排序和缓存。",
+    "should_trigger": false
+  },
+  {
+    "query": "MobileWork 左侧导航的专家入口按钮在折叠状态没有 tooltip，请补交互和组件测试，不要创建或修改专家。",
+    "should_trigger": false
+  },
+  {
+    "query": "MobileWork 自动更新下载到 100% 后一直显示安装中，请检查 Electron updater 日志。",
+    "should_trigger": false
+  },
+  {
+    "query": "给 MobileWork 会话页新增 Cmd+Shift+P 快捷键，只改键盘交互，不涉及团队包或运行时资源。",
+    "should_trigger": false
+  },
+  {
+    "query": "写一个通用 SKILL.md 教团队使用 pytest，放在 .agents/skills 下，不要生成角色、团队或安装清单。",
+    "should_trigger": false
+  },
+  {
+    "query": "这个普通 Skill 的 frontmatter 缺少 description，帮我修好 SKILL.md 并检查相对链接。",
+    "should_trigger": false
+  },
+  {
+    "query": "把下载目录里的 code-review Skill 安装到 ~/.agents/skills，保持原目录结构；它不是团队包。",
+    "should_trigger": false
+  },
+  {
+    "query": "给一个通用数据清洗 Skill 增加 scripts/normalize.py 和 references/schema.md，不需要角色分配或 workflow。",
+    "should_trigger": false
+  },
+  {
+    "query": "比较两个普通 Skill 的 description 哪个更容易被正确触发，只做触发文案评审。",
+    "should_trigger": false
+  },
+  {
+    "query": "把这个 Skill 的 PNG assets 压缩到 500 KB 以下，文件内容之外都不要改。",
+    "should_trigger": false
+  },
+  {
+    "query": "帮我在普通 OpenCode 项目的 opencode.json 里配置一个 remote MCP server，不涉及 MobileWork 包。",
+    "should_trigger": false
+  },
+  {
+    "query": "给普通 OpenCode 项目写一个代码审查 agent markdown，只需要单个 agent 文件。",
+    "should_trigger": false
+  },
+  {
+    "query": "审查一个普通 OpenCode workspace 的 LSP 配置为什么没生效，别改角色或团队定义。",
+    "should_trigger": false
+  },
+  {
+    "query": "给普通 OpenCode 项目新增 /review custom command，直接读取 $ARGUMENTS，不需要任何打包流程。",
+    "should_trigger": false
+  },
+  {
+    "query": "解释 OpenCode 如何在一次会话中启动多个同类型 subagent，并给一个最小示例。",
+    "should_trigger": false
+  },
+  {
+    "query": "教我在普通 OpenCode 会话里用 Todo 跟踪今天的开发任务，不需要持久化团队状态。",
+    "should_trigger": false
+  },
+  {
+    "query": "给我的 OpenCode agent 增加一条 permission 规则禁止 rm，只修改现有 agent 配置。",
+    "should_trigger": false
+  },
+  {
+    "query": "为普通 OpenCode workspace 写一个监听 tool.execute.before 的 Plugin hook，不要转换成可分发角色包。",
+    "should_trigger": false
+  }
 ]

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,14 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import package_contract as contract
+import cli_contract
 import gitignore_contract
 import manifest_contract
 import manager_contract
 import permission_policy
+import plugin_contract
 import renderers
+import safe_input
 import skill_contract
 import supply_chain_audit
 from validation_result import ValidationResult
@@ -105,6 +109,60 @@ NON_PORTABLE_TEXT_PATTERNS = [
 
 
 Result = ValidationResult
+
+
+def _has_finding(result: Result, *, code: str, location: str) -> bool:
+    return any(
+        finding.code == code and finding.location == location
+        for finding in result.findings
+    )
+
+
+def _parse_runtime_config_npm_plugins(
+    config: dict[str, Any],
+    result: Result,
+) -> tuple[list[tuple[int, plugin_contract.NpmPluginSpec]], bool]:
+    if "plugin" not in config:
+        return [], True
+    raw_plugins = config.get("plugin")
+    if not isinstance(raw_plugins, list):
+        result.error(f"{RUNTIME_CONFIG}: plugin must be a list")
+        return [], False
+
+    parsed_plugins: list[tuple[int, plugin_contract.NpmPluginSpec]] = []
+    valid = True
+    for index, item in enumerate(raw_plugins):
+        location = f"/plugin/{index}"
+        if not isinstance(item, str):
+            result.error(
+                f"{RUNTIME_CONFIG}: plugin[{index}] must be a string",
+                code=plugin_contract.ERROR_CODE,
+                phase="runtime-config",
+                path=RUNTIME_CONFIG,
+                location=location,
+                root_cause="invalid-npm-plugin-spec",
+                remediation="Project a valid registry npm Plugin spec from expert.json.",
+                evidence="",
+            )
+            valid = False
+            continue
+        try:
+            parsed = plugin_contract.parse_npm_plugin_spec(item)
+        except plugin_contract.PluginContractError as exc:
+            result.error(
+                f"{RUNTIME_CONFIG}: plugin[{index}] is invalid: {exc}",
+                code=plugin_contract.ERROR_CODE,
+                phase="runtime-config",
+                path=RUNTIME_CONFIG,
+                location=location,
+                root_cause="invalid-npm-plugin-spec",
+                remediation="Project a valid registry npm Plugin spec from expert.json.",
+                evidence="",
+            )
+            valid = False
+            continue
+        parsed_plugins.append((index, parsed))
+    return parsed_plugins, valid
 
 
 def load_unique_yaml_mapping(raw_frontmatter: str) -> Any:
@@ -436,7 +494,7 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
     )
     plugins = raw.get("plugins", {})
     plugin_files: list[str] = []
-    npm_plugins: list[str] = []
+    npm_plugin_specs: list[plugin_contract.NpmPluginSpec] = []
     if plugins is None:
         plugins = {}
     if not isinstance(plugins, dict):
@@ -447,13 +505,70 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
             result.error(
                 f"runtime_extensions.plugins: unsupported fields: {', '.join(unknown_plugins)}"
             )
-        npm_plugins = validate_string_list(plugins.get("npm"), "runtime_extensions.plugins.npm", result)
-        duplicate_npm = contract.first_duplicate(npm_plugins)
-        if duplicate_npm is not None:
-            result.error(f"runtime_extensions.plugins.npm: duplicates {duplicate_npm}")
-        for index, item in enumerate(npm_plugins):
-            if not item.strip() or any(char.isspace() for char in item):
-                result.error(f"runtime_extensions.plugins.npm[{index}]: must be a non-empty package name")
+        raw_npm_plugins = validate_string_list(
+            plugins.get("npm"),
+            "runtime_extensions.plugins.npm",
+            result,
+        )
+        canonical_indexes: dict[str, int] = {}
+        for index, item in enumerate(raw_npm_plugins):
+            location = f"/runtime_extensions/plugins/npm/{index}"
+            try:
+                parsed = plugin_contract.parse_npm_plugin_spec(item)
+            except plugin_contract.PluginContractError as exc:
+                if not _has_finding(
+                    result,
+                    code=plugin_contract.ERROR_CODE,
+                    location=location,
+                ):
+                    result.error(
+                        f"runtime_extensions.plugins.npm[{index}]: {exc}",
+                        code=plugin_contract.ERROR_CODE,
+                        phase="manifest",
+                        path=MANIFEST_FILE,
+                        location=location,
+                        root_cause="invalid-npm-plugin-spec",
+                        remediation="Use a registry package with a valid npm selector.",
+                        evidence="",
+                    )
+                continue
+            previous_index = canonical_indexes.get(parsed["canonicalKey"])
+            if previous_index is not None:
+                if not _has_finding(
+                    result,
+                    code=plugin_contract.DUPLICATE_CODE,
+                    location=location,
+                ):
+                    result.error(
+                        f"runtime_extensions.plugins.npm[{index}]: duplicates the canonical "
+                        f"npm Plugin declared at index {previous_index}",
+                        code=plugin_contract.DUPLICATE_CODE,
+                        phase="manifest",
+                        path=MANIFEST_FILE,
+                        location=location,
+                        root_cause="duplicate-npm-plugin-spec",
+                        remediation="Declare each canonical npm Plugin selector only once.",
+                        evidence="",
+                    )
+            else:
+                canonical_indexes[parsed["canonicalKey"]] = index
+            if not parsed["isPinned"] and not _has_finding(
+                result,
+                code=plugin_contract.UNPINNED_CODE,
+                location=location,
+            ):
+                result.warn(
+                    f"runtime_extensions.plugins.npm[{index}]: legacy npm Plugin spec "
+                    "is not pinned to an exact SemVer",
+                    code=plugin_contract.UNPINNED_CODE,
+                    phase="supply-chain",
+                    path=MANIFEST_FILE,
+                    location=location,
+                    root_cause="unlocked-plugin",
+                    remediation="Pin the npm Plugin to an exact SemVer in newly generated packages.",
+                    evidence="",
+                )
+            npm_plugin_specs.append(parsed)
         plugin_files = validate_embedded_files(
             plugins.get("local"),
             "runtime_extensions.plugins.local",
@@ -548,7 +663,7 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
         "command_names": command_names,
         "custom_tools": custom_tools,
         "plugin_files": plugin_files,
-        "npm_plugins": npm_plugins,
+        "npm_plugin_specs": npm_plugin_specs,
         "package_json": package_json if isinstance(plugins, dict) else {},
         "reference_files": reference_files,
         "instruction_files": instruction_files,
@@ -966,7 +1081,12 @@ def manifest_issue_already_reported(
     return False
 
 
-def check_manifest_shape(manifest: dict[str, Any], result: Result) -> tuple[str | None, list[str]]:
+def check_manifest_shape(
+    manifest: dict[str, Any],
+    result: Result,
+    *,
+    extensions: dict[str, Any] | None = None,
+) -> tuple[str | None, list[str]]:
     first_manifest_error = len(result.errors)
     validate_name(manifest.get("slug"), "slug", result)
     public_name = validate_text(manifest.get("name"), "name", result, required=True)
@@ -983,8 +1103,12 @@ def check_manifest_shape(manifest: dict[str, Any], result: Result) -> tuple[str 
     except contract.ContractError as exc:
         result.error(str(exc))
 
-    extensions = check_runtime_extensions_manifest(manifest, result)
-    check_role_resource_bindings(manifest, extensions, result)
+    active_extensions = (
+        extensions
+        if extensions is not None
+        else check_runtime_extensions_manifest(manifest, result)
+    )
+    check_role_resource_bindings(manifest, active_extensions, result)
 
     check_skill_contract(manifest, result)
     primary_id, subagent_ids = list_role_ids(manifest, result)
@@ -1025,8 +1149,23 @@ def check_workflows(manifest: dict[str, Any], role_ids: set[str], result: Result
         result.error(str(exc))
 
 
-def check_files(package_dir: Path, manifest: dict[str, Any], result: Result) -> None:
-    primary_id, subagent_ids = check_manifest_shape(manifest, result)
+def check_files(
+    package_dir: Path,
+    manifest: dict[str, Any],
+    result: Result,
+    *,
+    extensions: dict[str, Any] | None = None,
+) -> None:
+    active_extensions = (
+        extensions
+        if extensions is not None
+        else check_runtime_extensions_manifest(manifest, result)
+    )
+    primary_id, subagent_ids = check_manifest_shape(
+        manifest,
+        result,
+        extensions=active_extensions,
+    )
     agents_dir = package_dir / EXPERT_DIR / AGENTS_SUBDIR
     skills_dir = package_dir / EXPERT_DIR / SKILLS_SUBDIR
 
@@ -1048,7 +1187,7 @@ def check_files(package_dir: Path, manifest: dict[str, Any], result: Result) -> 
         if not (skills_dir / skill_name / "SKILL.md").exists():
             result.error(f"missing skill file: {skill_name}/SKILL.md")
 
-    ext = check_runtime_extensions_manifest(manifest, result)
+    ext = active_extensions
     commands_dir = package_dir / EXPERT_DIR / COMMANDS_SUBDIR
     workflows = manifest.get("workflows", [])
     if isinstance(workflows, list):
@@ -1810,7 +1949,22 @@ def check_permission_policy(
                 break
 
 
-def check_runtime_config(package_dir: Path, config: dict[str, Any], manifest: dict[str, Any], result: Result) -> None:
+def check_runtime_config(
+    package_dir: Path,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+    result: Result,
+    *,
+    extensions: dict[str, Any] | None = None,
+) -> list[tuple[int, plugin_contract.NpmPluginSpec]]:
+    active_extensions = (
+        extensions
+        if extensions is not None
+        else check_runtime_extensions_manifest(manifest, result)
+    )
+    config_npm_plugins, config_npm_plugins_valid = (
+        _parse_runtime_config_npm_plugins(config, result)
+    )
     check_package_owned_config_keys(
         config,
         contract.OPENCODE_PACKAGE_ROOT_KEYS,
@@ -1825,7 +1979,7 @@ def check_runtime_config(package_dir: Path, config: dict[str, Any], manifest: di
     agents = config.get("agent")
     if not isinstance(agents, dict):
         result.error(f"{RUNTIME_CONFIG}: agent must be an object")
-        return
+        return config_npm_plugins
 
     expected_agent_ids = {
         role.get("id")
@@ -1874,12 +2028,12 @@ def check_runtime_config(package_dir: Path, config: dict[str, Any], manifest: di
     elif mcp != expected_mcp:
         result.error(f"{RUNTIME_CONFIG}: mcp must exactly match expert.json mcp_servers")
 
-    ext = check_runtime_extensions_manifest(manifest, result)
-    runtime_ext = manifest.get("runtime_extensions", {})
-    plugins = runtime_ext.get("plugins", {}) if isinstance(runtime_ext, dict) else {}
-    npm_plugins = plugins.get("npm", []) if isinstance(plugins, dict) else []
-    if npm_plugins:
-        if config.get("plugin") != npm_plugins:
+    ext = active_extensions
+    manifest_npm_plugins = ext.get("npm_plugin_specs", [])
+    if manifest_npm_plugins:
+        manifest_keys = [item["canonicalKey"] for item in manifest_npm_plugins]
+        config_keys = [item["canonicalKey"] for _index, item in config_npm_plugins]
+        if config_npm_plugins_valid and config_keys != manifest_keys:
             result.error(f"{RUNTIME_CONFIG}: plugin must match expert.json runtime_extensions.plugins.npm")
     elif "plugin" in config:
         result.error(f"{RUNTIME_CONFIG}: plugin must be omitted when runtime_extensions.plugins.npm is empty")
@@ -1962,6 +2116,7 @@ def check_runtime_config(package_dir: Path, config: dict[str, Any], manifest: di
                     result.error(
                         f"{md_path}: {field} must be omitted when absent from expert.json"
                     )
+    return config_npm_plugins
 
 
 def scan_secrets(package_dir: Path, result: Result) -> None:
@@ -2144,10 +2299,45 @@ def validate_package(
     package_dir: Path,
     *,
     target: manager_contract.TargetContract | None = None,
+    input_snapshot: safe_input.InputSnapshot | None = None,
 ) -> Result:
-    result = Result(input_path=package_dir, target=target)
-    if not package_dir.exists() or not package_dir.is_dir():
+    if input_snapshot is None:
+        try:
+            input_snapshot = safe_input.inspect_package(package_dir)
+        except safe_input.InputInspectionError as error:
+            result = Result(input_error=error, target=target)
+        else:
+            if input_snapshot.kind == "directory":
+                with tempfile.TemporaryDirectory(
+                    prefix="mobilework-package-validation-snapshot-"
+                ) as temp:
+                    staged_package = input_snapshot.materialize(
+                        Path(temp) / (package_dir.name or "package")
+                    )
+                    return validate_package(
+                        staged_package,
+                        target=target,
+                        input_snapshot=input_snapshot,
+                    )
+            result = Result(input_snapshot=input_snapshot, target=target)
+    else:
+        result = Result(input_snapshot=input_snapshot, target=target)
+    if result.input_inspection_error is not None:
+        if result.input_inspection_error.code != "INPUT_NOT_FOUND":
+            return result.block_input_preflight()
         result.error(f"package directory does not exist: {package_dir}")
+        result.finalize_contract()
+        return result
+    if result.input_snapshot is None or result.input_snapshot.kind != "directory":
+        result.error(
+            f"package input must be a directory: {package_dir.name}",
+            code="PACKAGE_INPUT_NOT_DIRECTORY",
+            phase="input-preflight",
+            path=package_dir.name,
+            root_cause="invalid-package-input-kind",
+            remediation="Provide the extracted expert package directory.",
+            evidence=package_dir.name,
+        )
         result.finalize_contract()
         return result
 
@@ -2186,19 +2376,32 @@ def validate_package(
 
     check_reference_target_capability(manifest, target, result)
 
+    extensions = check_runtime_extensions_manifest(manifest, result)
     check_declared_file_allowlist(package_dir, manifest, result)
     check_gitignore(package_dir, manifest, result)
-    check_files(package_dir, manifest, result)
+    check_files(package_dir, manifest, result, extensions=extensions)
     check_avatar_assets(package_dir, manifest, result)
     check_agent_markdown_shape(package_dir, manifest, result)
     check_skill_markdown_shape(package_dir, manifest, result)
     check_readme_shape(package_dir, manifest, result)
     check_workflow_projection_parity(package_dir, manifest, result)
-    check_runtime_config(package_dir, config, manifest, result)
+    config_npm_plugins = check_runtime_config(
+        package_dir,
+        config,
+        manifest,
+        result,
+        extensions=extensions,
+    )
     check_permission_policy(package_dir, manifest, config, result)
     check_env_example(package_dir, config, result)
     check_static_syntax(package_dir, result)
-    supply_chain_audit.add_to_result(result, package_dir, manifest, config)
+    supply_chain_audit.add_to_result(
+        result,
+        package_dir,
+        manifest,
+        config,
+        parsed_plugins=config_npm_plugins,
+    )
     scan_secrets(package_dir, result)
     scan_portability(package_dir, result)
     if result.gates["portability"] == "not-run":
@@ -2222,7 +2425,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
     package_dir = args.package_dir.expanduser().absolute()
     try:
@@ -2234,7 +2437,6 @@ def main() -> int:
     except manager_contract.ManagerContractError as exc:
         result = Result(
             execution_reason="version-contract-error",
-            input_path=package_dir,
             target=manager_contract.TargetContract(
                 version="unknown",
                 source="version-contract-error",
@@ -2276,6 +2478,16 @@ def main() -> int:
         return 4
     result.print_summary(output_format=args.format, schema_version=args.schema_version)
     return 0 if result.ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "validate-expert",
+        _legacy_main,
+        argv=argv,
+        default_format="human",
+        delegated_output_flags=("format", "schema-version"),
+    )
 
 
 if __name__ == "__main__":

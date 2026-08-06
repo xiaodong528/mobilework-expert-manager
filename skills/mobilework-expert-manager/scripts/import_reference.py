@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -20,10 +20,13 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import archive_inspector
+import cli_contract
 import create_expert
 import execution_context
 import manifest_contract
+import output_sanitizer
 import package_contract
+import safe_input
 import validate_expert
 
 
@@ -89,19 +92,6 @@ def _check_path_limits(
         )
 
 
-def _bounded_bytes(path: Path, limit: int) -> bytes:
-    try:
-        with path.open("rb") as stream:
-            data = stream.read(limit + 1)
-    except OSError as exc:
-        raise ImportReferenceError(f"cannot read source file {path.name}: {exc}") from exc
-    if len(data) > limit:
-        raise ImportReferenceError(
-            f"source file exceeds {limit} bytes: {path.name}"
-        )
-    return data
-
-
 def load_manifest(package_dir: Path) -> dict[str, Any]:
     try:
         value = json.loads(
@@ -154,22 +144,13 @@ def assignment_ids(
     return requested
 
 
-def _safe_relative(path: Path, root: Path) -> PurePosixPath:
-    try:
-        relative = path.relative_to(root)
-    except ValueError as exc:
-        raise ImportReferenceError(f"source path escapes the import root: {path.name}") from exc
-    value = PurePosixPath(relative.as_posix())
-    if not value.parts or any(
-        part in {"", ".", ".."} or part in FORBIDDEN_PARTS
-        for part in value.parts
-    ):
-        raise ImportReferenceError(f"unsafe source path: {relative.as_posix()}")
-    return value
-
-
-def _docx_text(path: Path) -> str:
-    inspection = archive_inspector.inspect_archive(path, require_single_root=False)
+def _docx_text(path: PurePosixPath, data: bytes) -> str:
+    display_path = Path(path.as_posix())
+    inspection = archive_inspector.inspect_archive(
+        data,
+        display_path=display_path,
+        require_single_root=False,
+    )
     if inspection.errors:
         codes = ", ".join(sorted({item.code for item in inspection.errors}))
         raise ImportReferenceError(f"DOCX preflight failed for {path.name}: {codes}")
@@ -187,7 +168,7 @@ def _docx_text(path: Path) -> str:
         )
     if "word/document.xml" not in members:
         raise ImportReferenceError(f"DOCX is missing word/document.xml: {path.name}")
-    with zipfile.ZipFile(path) as archive:
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
         bad = archive.testzip()
         if bad is not None:
             raise ImportReferenceError(f"DOCX CRC failed for {path.name}: {bad}")
@@ -224,10 +205,9 @@ def _docx_text(path: Path) -> str:
     return f"# {path.stem}\n\n" + "\n\n".join(paragraphs) + "\n"
 
 
-def _text_content(path: Path, *, max_bytes: int) -> tuple[str, str]:
+def _text_content(path: PurePosixPath, data: bytes) -> tuple[str, str]:
     if path.suffix.lower() == ".docx":
-        return f"{path.stem}.md", _docx_text(path)
-    data = _bounded_bytes(path, max_bytes)
+        return f"{path.stem}.md", _docx_text(path, data)
     detected = _binary_magic(data[:16])
     if detected is not None:
         raise ImportReferenceError(
@@ -249,120 +229,89 @@ def _text_content(path: Path, *, max_bytes: int) -> tuple[str, str]:
     return path.name, content
 
 
-def collect_source(source: Path) -> list[tuple[PurePosixPath, str]]:
-    source = source.expanduser().absolute()
-    limits = archive_inspector.default_limits()
-    if source.is_symlink():
-        raise ImportReferenceError("source must not be a symlink")
-    if source.is_file():
-        root = source.parent
-        paths = [source]
-    elif source.is_dir():
-        root = source
-        paths = []
-        entry_count = 0
-        total_bytes = 0
-        for current, directories, files in os.walk(source, followlinks=False):
-            base = Path(current)
-            directories[:] = sorted(
-                directory for directory in directories if directory not in IGNORED_NAMES
-            )
-            for directory in directories:
-                candidate = base / directory
-                if candidate.is_symlink():
-                    raise ImportReferenceError(
-                        f"source contains symlink: {candidate.relative_to(source).as_posix()}"
-                    )
-                if directory in FORBIDDEN_PARTS:
-                    raise ImportReferenceError(
-                        f"source contains forbidden directory: {candidate.relative_to(source).as_posix()}"
-                    )
-                relative = _safe_relative(candidate, root)
-                _check_path_limits(relative, limits)
-                entry_count += 1
-                if entry_count > limits.max_entries:
-                    raise ImportReferenceError(
-                        f"source exceeds {limits.max_entries} entries"
-                    )
-            for name in sorted(files):
-                if name in IGNORED_NAMES:
-                    continue
-                candidate = base / name
-                if candidate.is_symlink():
-                    raise ImportReferenceError(
-                        f"source contains symlink: {candidate.relative_to(source).as_posix()}"
-                    )
-                if not candidate.is_file():
-                    raise ImportReferenceError(
-                        "source contains a non-regular file: "
-                        f"{candidate.relative_to(source).as_posix()}"
-                    )
-                relative = _safe_relative(candidate, root)
-                _check_path_limits(relative, limits)
-                entry_count += 1
-                if entry_count > limits.max_entries:
-                    raise ImportReferenceError(
-                        f"source exceeds {limits.max_entries} entries"
-                    )
-                try:
-                    size = candidate.stat().st_size
-                except OSError as exc:
-                    raise ImportReferenceError(
-                        f"cannot inspect source file {relative.as_posix()}: {exc}"
-                    ) from exc
-                if size > limits.max_entry_uncompressed_bytes:
-                    raise ImportReferenceError(
-                        f"source file exceeds {limits.max_entry_uncompressed_bytes} bytes: "
-                        f"{relative.as_posix()}"
-                    )
-                total_bytes += size
-                if total_bytes > limits.max_total_uncompressed_bytes:
-                    raise ImportReferenceError(
-                        "source files exceed total size limit "
-                        f"{limits.max_total_uncompressed_bytes} bytes"
-                    )
-                paths.append(candidate)
-    else:
-        raise ImportReferenceError("source must be an existing local file or directory")
+def _inspection_failure(
+    error: safe_input.InputInspectionError,
+    limits: archive_inspector.ArchiveLimits,
+) -> ImportReferenceError:
+    path = error.path
+    messages = {
+        "INPUT_NOT_FOUND": "source must be an existing local file or directory",
+        "INPUT_ENTRY_COUNT_LIMIT": f"source exceeds {limits.max_entries} entries",
+        "INPUT_FILE_SIZE_LIMIT": (
+            f"source file exceeds {limits.max_entry_uncompressed_bytes} bytes: {path}"
+        ),
+        "INPUT_TOTAL_SIZE_LIMIT": (
+            "source files exceed total size limit "
+            f"{limits.max_total_uncompressed_bytes} bytes"
+        ),
+        "INPUT_PATH_LENGTH_LIMIT": (
+            f"source path exceeds {limits.max_path_characters} characters: {path}"
+        ),
+        "INPUT_PATH_DEPTH_LIMIT": (
+            f"source path exceeds depth {limits.max_path_depth}: {path}"
+        ),
+        "INPUT_SYMLINK_FORBIDDEN": f"source contains symlink: {path}",
+        "INPUT_REPARSE_POINT_FORBIDDEN": (
+            f"source contains a Windows reparse point: {path}"
+        ),
+        "INPUT_SPECIAL_FILE_FORBIDDEN": (
+            f"source contains a non-regular file: {path}"
+        ),
+    }
+    return ImportReferenceError(messages.get(error.code, str(error)))
 
-    if source.is_file():
-        relative = _safe_relative(source, root)
-        _check_path_limits(relative, limits)
-        try:
-            size = source.stat().st_size
-        except OSError as exc:
-            raise ImportReferenceError(f"cannot inspect source file {source.name}: {exc}") from exc
-        if size > limits.max_entry_uncompressed_bytes:
-            raise ImportReferenceError(
-                f"source file exceeds {limits.max_entry_uncompressed_bytes} bytes: {source.name}"
-            )
-        if size > limits.max_total_uncompressed_bytes:
-            raise ImportReferenceError(
-                f"source files exceed total size limit {limits.max_total_uncompressed_bytes} bytes"
-            )
 
+def _inspect_source(
+    source: Path,
+    limits: archive_inspector.ArchiveLimits,
+) -> safe_input.InputSnapshot:
+    try:
+        return safe_input.inspect(source, limits)
+    except safe_input.InputInspectionError as exc:
+        raise _inspection_failure(exc, limits) from exc
+
+
+def collect_source(
+    source: Path | safe_input.InputSnapshot,
+    *,
+    limits: archive_inspector.ArchiveLimits | None = None,
+) -> list[tuple[PurePosixPath, str]]:
+    active_limits = archive_inspector.default_limits() if limits is None else limits
+    snapshot = (
+        source
+        if isinstance(source, safe_input.InputSnapshot)
+        else _inspect_source(source, active_limits)
+    )
     collected: list[tuple[PurePosixPath, str]] = []
     targets: set[str] = set()
     output_bytes = 0
-    for path in sorted(paths, key=lambda item: item.relative_to(root).as_posix()):
-        relative = _safe_relative(path, root)
-        output_name, content = _text_content(
-            path,
-            max_bytes=limits.max_entry_uncompressed_bytes,
-        )
-        target = relative.with_name(output_name)
-        _check_path_limits(target, limits)
-        content_bytes = len(content.encode("utf-8"))
-        if content_bytes > limits.max_entry_uncompressed_bytes:
+    for directory in snapshot.directories:
+        relative = PurePosixPath(directory)
+        if any(part in FORBIDDEN_PARTS for part in relative.parts):
             raise ImportReferenceError(
-                f"converted source exceeds {limits.max_entry_uncompressed_bytes} bytes: "
+                f"source contains forbidden directory: {relative.as_posix()}"
+            )
+    for item in snapshot.files:
+        relative = PurePosixPath(item.relative_path)
+        if any(part in IGNORED_NAMES for part in relative.parts):
+            continue
+        if any(part in FORBIDDEN_PARTS for part in relative.parts):
+            raise ImportReferenceError(f"unsafe source path: {relative.as_posix()}")
+        output_name, content = _text_content(relative, item.content)
+        target = relative.with_name(output_name)
+        _check_path_limits(target, active_limits)
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > active_limits.max_entry_uncompressed_bytes:
+            raise ImportReferenceError(
+                "converted source exceeds "
+                f"{active_limits.max_entry_uncompressed_bytes} bytes: "
                 f"{target.as_posix()}"
             )
         output_bytes += content_bytes
-        if output_bytes > limits.max_total_uncompressed_bytes:
+        if output_bytes > active_limits.max_total_uncompressed_bytes:
             raise ImportReferenceError(
                 "converted sources exceed total size limit "
-                f"{limits.max_total_uncompressed_bytes} bytes"
+                f"{active_limits.max_total_uncompressed_bytes} bytes"
             )
         key = target.as_posix()
         if key in targets:
@@ -426,7 +375,10 @@ def import_reference(
         raise ImportReferenceError("--description must explain when the Reference is used")
     package_dir = execution_context.canonical_path(package_dir)
     source = source.expanduser().absolute()
-    if execution_context.is_within(source.resolve(strict=False), package_dir):
+    resolved_source = source.resolve(strict=False)
+    source_limits = archive_inspector.default_limits()
+    source_snapshot = _inspect_source(source, source_limits)
+    if execution_context.is_within(resolved_source, package_dir):
         raise ImportReferenceError("source must remain outside the target expert package")
     validation = validate_expert.validate_package(package_dir)
     if not validation.ok:
@@ -434,7 +386,7 @@ def import_reference(
             "target expert package is invalid: " + "; ".join(validation.errors[:8])
         )
     initial_revision = create_expert.calculate_package_revision(package_dir)
-    collected = collect_source(source)
+    collected = collect_source(source_snapshot, limits=source_limits)
 
     with tempfile.TemporaryDirectory(prefix="mobilework-reference-import-") as temp:
         temp_package = Path(temp) / package_dir.name
@@ -536,7 +488,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
     try:
         result = import_reference(
@@ -551,13 +503,23 @@ def main() -> int:
             confirmed=args.confirm,
         )
     except (ImportReferenceError, package_contract.ContractError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {output_sanitizer.sanitize_exception(exc)}", file=sys.stderr)
         return 2
     except Exception as exc:
-        print(f"error: internal manager failure: {exc}", file=sys.stderr)
+        print(
+            "error: internal manager failure: "
+            + output_sanitizer.sanitize_exception(exc),
+            file=sys.stderr,
+        )
         return 3
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(output_sanitizer.json_dumps(result, indent=2))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "import-reference", _legacy_main, argv=argv
+    )
 
 
 if __name__ == "__main__":

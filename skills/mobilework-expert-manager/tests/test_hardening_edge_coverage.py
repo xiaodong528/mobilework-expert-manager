@@ -172,6 +172,8 @@ class DiagnosticEnvironmentAndConfigEdges(unittest.TestCase):
             root = Path(temp)
             missing = diagnose_expert.diagnose(root / "missing.zip")
             self.assertEqual(missing.findings[0].code, "DIAGNOSTIC_SOURCE_MISSING")
+            self.assertEqual(missing.gates["install"], "blocked")
+            self.assertEqual(missing.gates["configLoad"], "blocked")
             text = root / "expert.txt"
             text.write_text("fixture", encoding="utf-8")
             unsupported = diagnose_expert.diagnose(text)
@@ -181,6 +183,8 @@ class DiagnosticEnvironmentAndConfigEdges(unittest.TestCase):
             damaged = diagnose_expert.diagnose(corrupt)
             self.assertFalse(damaged.ok)
             self.assertIn(damaged.gates["contract"], {"blocked", "failed"})
+            self.assertEqual(damaged.gates["install"], "blocked")
+            self.assertEqual(damaged.gates["configLoad"], "blocked")
 
     def test_diagnose_main_reports_contract_error_and_runtime_block(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -269,7 +273,10 @@ class DiagnosticEnvironmentAndConfigEdges(unittest.TestCase):
             io.StringIO()
         ) as output:
             self.assertEqual(check_environment.main(), 0)
-        self.assertEqual(json.loads(output.getvalue())["features"], ["core"])
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["schemaVersion"], 2)
+        self.assertEqual(payload["operation"], "check-environment")
+        self.assertEqual(payload["data"]["features"], ["core"])
 
     def test_config_loader_rejects_unsafe_sidecars_and_invocation_failures(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -303,7 +310,7 @@ class DiagnosticEnvironmentAndConfigEdges(unittest.TestCase):
             sidecar.chmod(0o700)
             target = manager_contract.resolve_target(cli_version="unknown", env={})
             with self.assertRaisesRegex(config_loader.ConfigLoadError, "config is missing"):
-                config_loader.verify(workspace, sidecar, target=target)
+                config_loader._verify_sidecar(workspace, sidecar, target=target)
 
             runtime = workspace / ".opencode"
             runtime.mkdir()
@@ -311,18 +318,18 @@ class DiagnosticEnvironmentAndConfigEdges(unittest.TestCase):
             no_version = SimpleNamespace(returncode=0, stdout="no version", stderr="")
             with patch.object(config_loader, "_run", return_value=no_version):
                 with self.assertRaisesRegex(config_loader.ConfigLoadError, "parseable version"):
-                    config_loader.verify(workspace, sidecar, target=target)
+                    config_loader._verify_sidecar(workspace, sidecar, target=target)
 
             version = SimpleNamespace(returncode=0, stdout="1.2.3", stderr="")
             bad_json = SimpleNamespace(returncode=0, stdout="not-json", stderr="")
             with patch.object(config_loader, "_run", side_effect=[version, bad_json]):
                 with self.assertRaisesRegex(config_loader.ConfigLoadError, "non-JSON"):
-                    config_loader.verify(workspace, sidecar, target=target)
+                    config_loader._verify_sidecar(workspace, sidecar, target=target)
 
             list_json = SimpleNamespace(returncode=0, stdout="[]", stderr="")
             with patch.object(config_loader, "_run", side_effect=[version, list_json]):
                 with self.assertRaisesRegex(config_loader.ConfigLoadError, "JSON object"):
-                    config_loader.verify(workspace, sidecar, target=target)
+                    config_loader._verify_sidecar(workspace, sidecar, target=target)
 
 
 class MigrationPortableAndValidatorEdges(unittest.TestCase):

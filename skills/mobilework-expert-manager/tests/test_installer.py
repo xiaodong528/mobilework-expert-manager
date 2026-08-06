@@ -141,19 +141,111 @@ class InstallerTests(unittest.TestCase):
             command.append("--force")
         return subprocess.run(command, text=True, capture_output=True, check=False)
 
-    def test_copy_sources_keeps_package_files_streamable(self) -> None:
-        runtime = self.root / ".opencode"
+    @staticmethod
+    def file_bytes(root: Path) -> dict[str, bytes]:
+        return {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in sorted(root.rglob("*"))
+            if path.is_file() and not path.is_symlink()
+        }
+
+    def test_copy_sources_uses_snapshot_bytes_without_reopening_source(self) -> None:
+        package = self.root / "snapshot-package"
+        runtime = package / ".opencode"
         reference = runtime / "references/example/material/package.json"
         reference.parent.mkdir(parents=True)
-        reference.write_text('{"kind":"reference"}\n', encoding="utf-8")
+        original = b'{"kind":"reference"}\n'
+        reference.write_bytes(original)
         (runtime / "package.json").write_text('{"dependencies":{}}\n', encoding="utf-8")
+        snapshot = INSTALLER.safe_input.inspect(package)
+        reference.write_bytes(b'{"kind":"changed"}\n')
 
-        with patch.object(Path, "read_bytes", side_effect=AssertionError("must stream")):
-            sources = INSTALLER.copy_sources(runtime)
+        with patch.object(
+            Path,
+            "read_bytes",
+            side_effect=AssertionError("must not reopen source"),
+        ):
+            sources = INSTALLER.copy_sources(snapshot)
 
         self.assertEqual(
             sources,
-            {"references/example/material/package.json": reference},
+            {"references/example/material/package.json": original},
+        )
+
+    def test_cli_parse_and_environment_errors_use_stable_contract(self) -> None:
+        missing = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--format",
+                "human",
+                "--schema-version",
+                "1",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(missing.returncode, 2)
+        self.assertTrue(missing.stdout.startswith("install-expert: argument-error"))
+        self.assertNotIn('"schemaVersion"', missing.stdout)
+
+        invalid_combination = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "demo-expert",
+                "--force",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(invalid_combination.returncode, 2)
+        self.assertEqual(
+            json.loads(invalid_combination.stdout)["operation"],
+            "uninstall-expert",
+        )
+
+        missing_workspace = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--package-dir",
+                str(self.root / "missing-package"),
+                "--workspace-dir",
+                str(self.root / "missing-workspace"),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(missing_workspace.returncode, 2)
+        self.assertEqual(
+            json.loads(missing_workspace.stdout)["findings"][0]["code"],
+            "INSTALL_ENVIRONMENT_ERROR",
+        )
+
+        missing_package = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--package-dir",
+                str(self.root / "missing-package"),
+                "--workspace-dir",
+                str(self.workspace),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(missing_package.returncode, 2)
+        self.assertEqual(
+            json.loads(missing_package.stdout)["findings"][0]["code"],
+            "INSTALL_ENVIRONMENT_ERROR",
         )
 
     def test_installs_into_opencode_and_rebases_paths(self) -> None:
@@ -181,7 +273,16 @@ class InstallerTests(unittest.TestCase):
         receipt = json.loads(
             (runtime / ".expert-installs/contract-review-expert.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(receipt["contract"], 2)
+        self.assertEqual(receipt["contract"], 3)
+        for field in (
+            "packageTreeSha256",
+            "manifestSha256",
+            "managerContractSha256",
+            "targetCapabilitiesSha256",
+            "projectionSha256",
+        ):
+            self.assertRegex(receipt[field], r"^[0-9a-f]{64}$")
+        self.assertEqual(receipt["targetOpenCodeVersion"], "test-runtime")
         self.assertIn("agents/contract-reviewer.md", receipt["files"])
         self.assertEqual(receipt["config_values"]["references"], config["references"])
         self.assertEqual(
@@ -195,8 +296,8 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(installed.returncode, 0, installed.stderr)
         payload = json.loads(installed.stdout)
         fallback = "contract-review-expert-reference-playbook"
-        self.assertEqual(payload["references"], [])
-        self.assertEqual(payload["reference_fallbacks"], [fallback])
+        self.assertEqual(payload["data"]["references"], [])
+        self.assertEqual(payload["data"]["reference_fallbacks"], [fallback])
 
         runtime = self.workspace / ".opencode"
         config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
@@ -315,7 +416,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(installed.returncode, 0, installed.stderr)
         install_result = json.loads(installed.stdout)
         self.assertEqual(
-            install_result["references"],
+            install_result["data"]["references"],
             ["reference-expert-playbook", "reference-expert-upstream"],
         )
 
@@ -404,7 +505,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(installed.returncode, 0, installed.stderr)
         install_result = json.loads(installed.stdout)
         self.assertEqual(
-            install_result["required_environment"],
+            install_result["data"]["required_environment"],
             ["OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET"],
         )
 
@@ -509,6 +610,219 @@ class InstallerTests(unittest.TestCase):
         upgraded = self.run_install(package, force=True)
         self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
 
+    def test_force_refuses_owned_drift_with_stable_zero_write_preview(self) -> None:
+        manifest = self.write_manifest()
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["runtime_extensions"].setdefault("plugins", {})["package_json"] = {
+            "dependencies": {"owned-dependency": "1.2.3"}
+        }
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        output = self.root / "drift-packages"
+        generated = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(output),
+            ],
+            env=managed_generator_env(output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        package = output / "contract-review-expert"
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+
+        runtime = self.workspace / ".opencode"
+        receipt = json.loads(
+            (runtime / ".expert-installs/contract-review-expert.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        owned_file = runtime / next(iter(receipt["files"]))
+        owned_file.write_text("user-owned-file-drift\n", encoding="utf-8")
+        config_path = runtime / "opencode.jsonc"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["references"]["contract-review-expert-playbook"]["description"] = (
+            "user config drift"
+        )
+        config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        package_json_path = runtime / "package.json"
+        package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+        package_json["dependencies"]["owned-dependency"] = "9.9.9"
+        package_json_path.write_text(
+            json.dumps(package_json, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        before = self.file_bytes(self.workspace)
+
+        first = self.run_install(package, force=True)
+        self.assertEqual(first.returncode, 1, first.stderr)
+        first_payload = json.loads(first.stdout)
+        self.assertEqual(first_payload["schemaVersion"], 2)
+        self.assertEqual(first_payload["status"], "drift-detected")
+        self.assertEqual(
+            first_payload["findings"][0]["code"],
+            "INSTALL_OWNED_STATE_DRIFT",
+        )
+        self.assertEqual(
+            {item["kind"] for item in first_payload["data"]["driftPreview"]},
+            {"config-mapping", "dependency", "file"},
+        )
+        self.assertRegex(first_payload["data"]["previewSha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(self.file_bytes(self.workspace), before)
+        self.assertFalse((runtime / ".expert-drift-backups").exists())
+
+        second = self.run_install(package, force=True)
+        self.assertEqual(second.returncode, 1, second.stderr)
+        second_payload = json.loads(second.stdout)
+        self.assertEqual(
+            second_payload["data"]["previewSha256"],
+            first_payload["data"]["previewSha256"],
+        )
+        self.assertEqual(self.file_bytes(self.workspace), before)
+
+    def test_force_refuses_concurrent_unowned_config_without_overwriting_it(self) -> None:
+        package = self.generate()
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        runtime = self.workspace / ".opencode"
+        config_path = runtime / "opencode.jsonc"
+        receipt_path = runtime / ".expert-installs/contract-review-expert.json"
+        receipt_before = receipt_path.read_bytes()
+        original_capture = INSTALLER.install_state.capture_runtime_inputs
+        capture_calls = 0
+        concurrent_config = b""
+
+        def capture(runtime_dir, *, target_paths=()):
+            nonlocal capture_calls, concurrent_config
+            capture_calls += 1
+            if capture_calls == 2:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                config["userConcurrentAddition"] = {"keep": True}
+                config_path.write_text(
+                    json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                concurrent_config = config_path.read_bytes()
+            return original_capture(runtime_dir, target_paths=target_paths)
+
+        target = INSTALLER.manager_contract.resolve_target(
+            host_contract=self.reference_host
+        )
+        with patch.object(
+            INSTALLER.install_state,
+            "capture_runtime_inputs",
+            side_effect=capture,
+        ), self.assertRaises(INSTALLER.install_state.InstallStateError) as raised:
+            INSTALLER.install_package(
+                package,
+                self.workspace,
+                force=True,
+                target=target,
+            )
+
+        self.assertEqual(raised.exception.code, "INSTALL_INPUT_STATE_CHANGED")
+        self.assertEqual(config_path.read_bytes(), concurrent_config)
+        self.assertEqual(receipt_path.read_bytes(), receipt_before)
+        self.assertFalse(
+            any(
+                path.name.startswith(".contract-review-expert.install-")
+                for path in runtime.iterdir()
+            )
+        )
+
+    def test_force_refuses_concurrent_receipt_change_without_overwriting_it(self) -> None:
+        package = self.generate()
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        runtime = self.workspace / ".opencode"
+        receipt_path = runtime / ".expert-installs/contract-review-expert.json"
+        original_capture = INSTALLER.install_state.capture_runtime_inputs
+        capture_calls = 0
+        concurrent_receipt = b""
+
+        def capture(runtime_dir, *, target_paths=()):
+            nonlocal capture_calls, concurrent_receipt
+            capture_calls += 1
+            if capture_calls == 2:
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt["bindings"] = {"concurrentOwnerNote": True}
+                receipt_path.write_text(
+                    json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                concurrent_receipt = receipt_path.read_bytes()
+            return original_capture(runtime_dir, target_paths=target_paths)
+
+        target = INSTALLER.manager_contract.resolve_target(
+            host_contract=self.reference_host
+        )
+        with patch.object(
+            INSTALLER.install_state,
+            "capture_runtime_inputs",
+            side_effect=capture,
+        ), self.assertRaises(INSTALLER.install_state.InstallStateError) as raised:
+            INSTALLER.install_package(
+                package,
+                self.workspace,
+                force=True,
+                target=target,
+            )
+
+        self.assertEqual(raised.exception.code, "INSTALL_INPUT_STATE_CHANGED")
+        self.assertEqual(receipt_path.read_bytes(), concurrent_receipt)
+        self.assertFalse(
+            any(
+                path.name.startswith(".contract-review-expert.install-")
+                for path in runtime.iterdir()
+            )
+        )
+
+    def test_clean_contract_1_and_2_upgrade_rewrites_contract_3_evidence(self) -> None:
+        package = self.generate()
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        receipt_path = (
+            self.workspace
+            / ".opencode/.expert-installs/contract-review-expert.json"
+        )
+        evidence_fields = (
+            "packageTreeSha256",
+            "manifestSha256",
+            "managerContractSha256",
+            "targetCapabilitiesSha256",
+            "projectionSha256",
+            "targetOpenCodeVersion",
+        )
+        for contract_version in (1, 2):
+            with self.subTest(contract=contract_version):
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt["contract"] = contract_version
+                for field in evidence_fields:
+                    receipt.pop(field, None)
+                receipt_path.write_text(
+                    json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                upgraded = self.run_install(package, force=True)
+                self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+                rewritten = json.loads(receipt_path.read_text(encoding="utf-8"))
+                self.assertEqual(rewritten["contract"], 3)
+                self.assertEqual(rewritten["targetOpenCodeVersion"], "test-runtime")
+                for field in evidence_fields[:-1]:
+                    self.assertRegex(rewritten[field], r"^[0-9a-f]{64}$")
+
     def test_legacy_receipt_without_bindings_remains_upgradable(self) -> None:
         package = self.generate()
         first = self.run_install(package)
@@ -578,6 +892,94 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((runtime / "instructions/upgrade-expert/evidence.md").exists())
         package_json = json.loads((runtime / "package.json").read_text(encoding="utf-8"))
         self.assertNotIn("owned-dependency", package_json.get("dependencies", {}))
+
+    def test_force_preserves_stale_owned_file_changed_during_final_capture(self) -> None:
+        manifest = self.write_manifest(slug="capture-upgrade", agent_id="capture-agent")
+        packages = self.root / "packages"
+        generated = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(packages),
+            ],
+            env=managed_generator_env(packages),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        package = packages / "capture-upgrade"
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data.pop("runtime_extensions")
+        data["agent"]["references"] = []
+        data["agent"].pop("instructions", None)
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        regenerated = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(packages),
+                "--force",
+            ],
+            env=managed_generator_env(packages),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(regenerated.returncode, 0, regenerated.stderr)
+
+        runtime = self.workspace / ".opencode"
+        receipt = json.loads(
+            (runtime / ".expert-installs/capture-upgrade.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        stale_relative = next(
+            relative
+            for relative in receipt["files"]
+            if relative.startswith("references/capture-upgrade/")
+        )
+        stale_path = runtime / stale_relative
+        original_capture = INSTALLER.install_state.capture_runtime_inputs
+        capture_calls = 0
+        concurrent_bytes = b"changed during final capture\n"
+
+        def capture(runtime_dir, *, target_paths=()):
+            nonlocal capture_calls
+            capture_calls += 1
+            if capture_calls == 2:
+                stale_path.write_bytes(concurrent_bytes)
+            return original_capture(runtime_dir, target_paths=target_paths)
+
+        target = INSTALLER.manager_contract.resolve_target(
+            host_contract=self.reference_host
+        )
+        with patch.object(
+            INSTALLER.install_state,
+            "capture_runtime_inputs",
+            side_effect=capture,
+        ), self.assertRaises(INSTALLER.install_state.InstallStateError) as raised:
+            INSTALLER.install_package(
+                package,
+                self.workspace,
+                force=True,
+                target=target,
+            )
+
+        self.assertEqual(raised.exception.code, "INSTALL_INPUT_STATE_CHANGED")
+        self.assertEqual(stale_path.read_bytes(), concurrent_bytes)
 
     def test_same_slug_force_removes_declared_agent_runtime_options(self) -> None:
         manifest = self.write_manifest(slug="runtime-options", agent_id="runtime-agent")
@@ -874,6 +1276,170 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((runtime / "agents/first-uninstall-agent.md").exists())
         self.assertTrue((runtime / "agents/second-uninstall-agent.md").is_file())
 
+    def test_uninstall_refuses_concurrent_unowned_config_without_overwriting_it(self) -> None:
+        package = self.generate()
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        runtime = self.workspace / ".opencode"
+        config_path = runtime / "opencode.jsonc"
+        receipt_path = runtime / ".expert-installs/contract-review-expert.json"
+        owned_file = runtime / next(
+            iter(json.loads(receipt_path.read_text(encoding="utf-8"))["files"])
+        )
+        original_capture = INSTALLER.install_state.capture_runtime_inputs
+        capture_calls = 0
+        concurrent_config = b""
+
+        def capture(runtime_dir, *, target_paths=()):
+            nonlocal capture_calls, concurrent_config
+            capture_calls += 1
+            if capture_calls == 2:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                config["userConcurrentAddition"] = ["keep"]
+                config_path.write_text(
+                    json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                concurrent_config = config_path.read_bytes()
+            return original_capture(runtime_dir, target_paths=target_paths)
+
+        with patch.object(
+            INSTALLER.install_state,
+            "capture_runtime_inputs",
+            side_effect=capture,
+        ), self.assertRaises(INSTALLER.install_state.InstallStateError) as raised:
+            INSTALLER.uninstall_package(self.workspace, "contract-review-expert")
+
+        self.assertEqual(raised.exception.code, "INSTALL_INPUT_STATE_CHANGED")
+        self.assertEqual(config_path.read_bytes(), concurrent_config)
+        self.assertTrue(receipt_path.is_file())
+        self.assertTrue(owned_file.is_file())
+        self.assertFalse(
+            any(
+                path.name.startswith(".contract-review-expert.uninstall-")
+                for path in runtime.iterdir()
+            )
+        )
+
+    def test_uninstall_preserves_owned_file_changed_during_final_capture(self) -> None:
+        package = self.generate()
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        runtime = self.workspace / ".opencode"
+        receipt_path = runtime / ".expert-installs/contract-review-expert.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        owned_path = runtime / next(iter(receipt["files"]))
+        original_capture = INSTALLER.install_state.capture_runtime_inputs
+        capture_calls = 0
+        concurrent_bytes = b"changed during uninstall final capture\n"
+
+        def capture(runtime_dir, *, target_paths=()):
+            nonlocal capture_calls
+            capture_calls += 1
+            if capture_calls == 2:
+                owned_path.write_bytes(concurrent_bytes)
+            return original_capture(runtime_dir, target_paths=target_paths)
+
+        with patch.object(
+            INSTALLER.install_state,
+            "capture_runtime_inputs",
+            side_effect=capture,
+        ), self.assertRaises(INSTALLER.install_state.InstallStateError) as raised:
+            INSTALLER.uninstall_package(self.workspace, "contract-review-expert")
+
+        self.assertEqual(raised.exception.code, "INSTALL_INPUT_STATE_CHANGED")
+        self.assertEqual(owned_path.read_bytes(), concurrent_bytes)
+        self.assertTrue(receipt_path.is_file())
+
+    def test_clean_shared_uninstall_reports_only_deleted_files(self) -> None:
+        first = self.generate(slug="first-shared-clean", agent_id="first-shared-agent")
+        second = self.generate(slug="second-shared-clean", agent_id="second-shared-agent")
+        self.assertEqual(self.run_install(first).returncode, 0)
+        self.assertEqual(self.run_install(second).returncode, 0)
+        runtime = self.workspace / ".opencode"
+        first_receipt_path = runtime / ".expert-installs/first-shared-clean.json"
+        second_receipt_path = runtime / ".expert-installs/second-shared-clean.json"
+        first_receipt = json.loads(first_receipt_path.read_text(encoding="utf-8"))
+        second_receipt = json.loads(second_receipt_path.read_text(encoding="utf-8"))
+        shared_relative = next(iter(first_receipt["files"]))
+        second_receipt["files"][shared_relative] = first_receipt["files"][
+            shared_relative
+        ]
+        second_receipt_path.write_text(
+            json.dumps(second_receipt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        removed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--workspace-dir",
+                str(self.workspace),
+                "--uninstall",
+                "first-shared-clean",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        payload = json.loads(removed.stdout)
+        self.assertNotIn(shared_relative, payload["data"]["removed_files"])
+        self.assertTrue((runtime / shared_relative).is_file())
+
+    def test_uninstall_refuses_shared_owned_file_drift_without_writes(self) -> None:
+        first = self.generate(slug="first-shared-remove", agent_id="first-shared-agent")
+        second = self.generate(slug="second-shared-remove", agent_id="second-shared-agent")
+        self.assertEqual(self.run_install(first).returncode, 0)
+        self.assertEqual(self.run_install(second).returncode, 0)
+        runtime = self.workspace / ".opencode"
+        first_receipt_path = runtime / ".expert-installs/first-shared-remove.json"
+        second_receipt_path = runtime / ".expert-installs/second-shared-remove.json"
+        first_receipt = json.loads(first_receipt_path.read_text(encoding="utf-8"))
+        second_receipt = json.loads(second_receipt_path.read_text(encoding="utf-8"))
+        shared_relative = next(iter(first_receipt["files"]))
+        second_receipt["files"][shared_relative] = first_receipt["files"][
+            shared_relative
+        ]
+        second_receipt_path.write_text(
+            json.dumps(second_receipt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        shared_path = runtime / shared_relative
+        original = shared_path.read_bytes()
+
+        for mode in ("changed", "missing"):
+            with self.subTest(mode=mode):
+                if mode == "changed":
+                    shared_path.write_text("shared drift\n", encoding="utf-8")
+                else:
+                    shared_path.unlink()
+                before = self.file_bytes(self.workspace)
+                rejected = subprocess.run(
+                    [
+                        sys.executable,
+                        str(INSTALL),
+                        "--workspace-dir",
+                        str(self.workspace),
+                        "--uninstall",
+                        "first-shared-remove",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(rejected.returncode, 1, rejected.stderr)
+                payload = json.loads(rejected.stdout)
+                self.assertEqual(payload["operation"], "uninstall-expert")
+                self.assertEqual(
+                    payload["findings"][0]["code"],
+                    "INSTALL_OWNED_STATE_DRIFT",
+                )
+                self.assertEqual(self.file_bytes(self.workspace), before)
+                shared_path.write_bytes(original)
+
     def test_uninstall_accepts_legacy_receipt_without_bindings(self) -> None:
         package = self.generate()
         self.assertEqual(self.run_install(package).returncode, 0)
@@ -882,6 +1448,15 @@ class InstallerTests(unittest.TestCase):
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         receipt["contract"] = 1
         receipt.pop("bindings", None)
+        for field in (
+            "packageTreeSha256",
+            "manifestSha256",
+            "managerContractSha256",
+            "targetOpenCodeVersion",
+            "targetCapabilitiesSha256",
+            "projectionSha256",
+        ):
+            receipt.pop(field)
         receipt_path.write_text(
             json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -993,7 +1568,15 @@ class InstallerTests(unittest.TestCase):
             check=False,
         )
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("changed owned file", rejected.stderr)
+        payload = json.loads(rejected.stdout)
+        self.assertEqual(payload["findings"][0]["code"], "INSTALL_OWNED_STATE_DRIFT")
+        self.assertIn(
+            ("OWNED_FILE_CHANGED", "file"),
+            {
+                (item["code"], item["kind"])
+                for item in payload["data"]["driftPreview"]
+            },
+        )
         self.assertEqual(agent.read_text(encoding="utf-8"), "user change\n")
         self.assertTrue(
             (runtime / ".expert-installs/contract-review-expert.json").is_file()
@@ -1025,7 +1608,14 @@ class InstallerTests(unittest.TestCase):
             check=False,
         )
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("missing owned config instructions", rejected.stderr)
+        payload = json.loads(rejected.stdout)
+        self.assertIn(
+            ("OWNED_CONFIG_MISSING", "config-list"),
+            {
+                (item["code"], item["kind"])
+                for item in payload["data"]["driftPreview"]
+            },
+        )
         self.assertTrue((runtime / "agents/contract-reviewer.md").is_file())
         self.assertTrue(
             (runtime / ".expert-installs/contract-review-expert.json").is_file()
@@ -1057,9 +1647,13 @@ class InstallerTests(unittest.TestCase):
             check=False,
         )
         self.assertNotEqual(rejected.returncode, 0)
+        payload = json.loads(rejected.stdout)
         self.assertIn(
-            "missing owned config references.contract-review-expert-playbook",
-            rejected.stderr,
+            ("OWNED_CONFIG_MISSING", "config-mapping"),
+            {
+                (item["code"], item["kind"])
+                for item in payload["data"]["driftPreview"]
+            },
         )
         self.assertTrue((runtime / "agents/contract-reviewer.md").is_file())
         self.assertTrue(
@@ -1117,9 +1711,13 @@ class InstallerTests(unittest.TestCase):
             check=False,
         )
         self.assertNotEqual(rejected.returncode, 0)
+        payload = json.loads(rejected.stdout)
         self.assertIn(
-            "missing owned dependency dependencies.owned-dependency",
-            rejected.stderr,
+            ("OWNED_DEPENDENCY_MISSING", "dependency"),
+            {
+                (item["code"], item["kind"])
+                for item in payload["data"]["driftPreview"]
+            },
         )
         self.assertTrue((runtime / "agents/contract-reviewer.md").is_file())
         self.assertTrue(
@@ -1130,7 +1728,7 @@ class InstallerTests(unittest.TestCase):
         manifest = self.write_manifest()
         data = json.loads(manifest.read_text(encoding="utf-8"))
         data["runtime_extensions"].setdefault("plugins", {})["npm"] = [
-            "preexisting-plugin"
+            "preexisting-plugin@1.0.0"
         ]
         manifest.write_text(
             json.dumps(data, ensure_ascii=False, indent=2) + "\n",
@@ -1155,7 +1753,7 @@ class InstallerTests(unittest.TestCase):
         runtime = self.workspace / ".opencode"
         runtime.mkdir()
         (runtime / "opencode.jsonc").write_text(
-            json.dumps({"plugin": ["preexisting-plugin"]}) + "\n",
+            json.dumps({"plugin": ["preexisting-plugin@1.0.0"]}) + "\n",
             encoding="utf-8",
         )
         package = output / "contract-review-expert"
@@ -1182,7 +1780,7 @@ class InstallerTests(unittest.TestCase):
         )
         self.assertEqual(removed.returncode, 0, removed.stderr)
         config = json.loads((runtime / "opencode.jsonc").read_text(encoding="utf-8"))
-        self.assertEqual(config["plugin"], ["preexisting-plugin"])
+        self.assertEqual(config["plugin"], ["preexisting-plugin@1.0.0"])
 
     def test_install_does_not_claim_preexisting_unowned_dependency(self) -> None:
         manifest = self.write_manifest()
@@ -1407,6 +2005,81 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "simulated install failure"):
                 INSTALLER.install_package(package, self.workspace, force=False)
         self.assertFalse((self.workspace / ".opencode").exists())
+
+    def test_install_recovery_error_preserves_reported_staging_source(self) -> None:
+        package = self.generate()
+        recovery_paths: list[Path] = []
+
+        def fail_with_recovery(
+            runtime_dir: Path,
+            staged: dict[str, Path],
+            stale: list[str],
+            required_directories: list[str] | None = None,
+            pre_commit_guard=None,
+            *,
+            secure: bool = False,
+        ) -> None:
+            del runtime_dir, stale, required_directories, pre_commit_guard, secure
+            recovery_path = next(iter(staged.values()))
+            recovery_paths.append(recovery_path)
+            raise INSTALLER.InstallRecoveryError(
+                "simulated recovery failure",
+                [str(recovery_path)],
+                committed=None,
+                rollback_verified=False,
+            )
+
+        with patch.object(
+            INSTALLER,
+            "commit_transaction",
+            side_effect=fail_with_recovery,
+        ):
+            with self.assertRaises(INSTALLER.cli_contract.CliInternalError) as raised:
+                INSTALLER.install_package(package, self.workspace, force=False)
+
+        self.assertTrue(raised.exception.attempted)
+        self.assertEqual(len(recovery_paths), 1)
+        self.assertTrue(recovery_paths[0].is_file())
+
+    def test_uninstall_recovery_error_preserves_reported_staging_source(self) -> None:
+        package = self.generate()
+        installed = self.run_install(package)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        recovery_paths: list[Path] = []
+
+        def fail_with_recovery(
+            runtime_dir: Path,
+            staged: dict[str, Path],
+            stale: list[str],
+            required_directories: list[str] | None = None,
+            pre_commit_guard=None,
+            *,
+            secure: bool = False,
+        ) -> None:
+            del runtime_dir, stale, required_directories, pre_commit_guard, secure
+            recovery_path = next(iter(staged.values()))
+            recovery_paths.append(recovery_path)
+            raise INSTALLER.InstallRecoveryError(
+                "simulated recovery failure",
+                [str(recovery_path)],
+                committed=None,
+                rollback_verified=False,
+            )
+
+        with patch.object(
+            INSTALLER,
+            "commit_transaction",
+            side_effect=fail_with_recovery,
+        ):
+            with self.assertRaises(INSTALLER.cli_contract.CliInternalError) as raised:
+                INSTALLER.uninstall_package(
+                    self.workspace,
+                    "contract-review-expert",
+                )
+
+        self.assertTrue(raised.exception.attempted)
+        self.assertEqual(len(recovery_paths), 1)
+        self.assertTrue(recovery_paths[0].is_file())
 
     def test_installer_rejects_runtime_symlink_before_writing(self) -> None:
         if not hasattr(os, "symlink"):

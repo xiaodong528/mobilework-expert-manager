@@ -12,6 +12,11 @@
 `plan_legacy_migration.py <directory-or-zip>` 永久只读，输出机械迁移项、候选 JSON Patch、资源移动
 表、权限变化、业务确认项和需要重生成的派生物。它不提供 `--apply`，不修改源包，不从旧派生物
 覆盖 `expert.json`，不执行 package code。ZIP 先走 metadata preflight、CRC 和受限解压。
+面向用户的迁移规划必须包含 planner 返回的实际 RFC 6902 `candidateJsonPatch` 数组和机械 action
+清单，不得用“将会归一化”等自然语言摘要替代机器可读候选，也不得自行应用候选 patch。
+没有真实输入时必须拒绝编造并请求目录与 ZIP；同时明确说明真实规划将映射 Skills、
+`maxTurns`→`steps` 和 references，列出实际权限变化与全部需重生成派生物，根规则作用域与 Bash
+收窄要求继续作为业务确认项；静态检查不 import 或执行包内 modules、commands、Plugins、MCP 或 lifecycle scripts。
 
 旧包声明 Reference 但没有角色使用关系时，迁移预览逐项询问使用角色；已有 workspace
 Instruction 则逐项确认继续全局生效，还是改成角色规则。预览不得静默选择作用范围。

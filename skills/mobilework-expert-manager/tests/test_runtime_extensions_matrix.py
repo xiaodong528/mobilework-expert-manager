@@ -92,7 +92,7 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
             ),
             (
                 "npm-plugin",
-                {"plugins": {"npm": ["opencode-example-plugin"]}},
+                {"plugins": {"npm": ["opencode-example-plugin@1.0.0"]}},
                 None,
                 None,
                 "plugin",
@@ -256,7 +256,7 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
             "commands": [{"name": "review-scope", "template": "Review scope."}],
             "custom_tools": [{"path": "score.ts", "content": "export default {}\n"}],
             "plugins": {
-                "npm": ["opencode-example-plugin"],
+                "npm": ["opencode-example-plugin@1.0.0"],
                 "local": [{"path": "notify.ts", "content": "export const plugin = {}\n"}],
                 "package_json": {"dependencies": {"shescape": "^2.1.0"}},
             },
@@ -335,7 +335,7 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
             set(package_config),
             {"$schema", "agent", "mcp", "plugin", "references", "instructions", "lsp"},
         )
-        self.assertEqual(package_config["plugin"], ["opencode-example-plugin"])
+        self.assertEqual(package_config["plugin"], ["opencode-example-plugin@1.0.0"])
         self.assertEqual(package_config["mcp"], {
             "local-canary": {
                 "type": "local",

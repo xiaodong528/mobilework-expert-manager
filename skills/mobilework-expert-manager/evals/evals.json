@@ -7,9 +7,10 @@
       "prompt": "帮我做一个 MobileWork 合同审查专家。",
       "expected_output": "The assistant asks only for missing design information and does not create a manifest or package before confirmation.",
       "files": [],
+      "suites": ["pr-smoke", "release-benchmark", "full"],
       "expectations": [
         "Does not create expert.json, an expert directory, or invoke create_expert.py before design confirmation.",
-        "Recognizes this as a single-expert design request and asks about missing goals, responsibilities, workflow, skills and success criteria.",
+        "Recognizes this as a single-expert design request, covers missing goals, responsibilities, workflow, capabilities and success criteria in the business candidate, and asks one concise question only for unresolved blocking inputs.",
         "Uses an available ask-user-question tool for up to three tightly related independent questions, or asks one concise question without that tool.",
         "Does not ask for information already present in the prompt.",
         "Explains that it will propose a candidate design and obtain confirmation before generation."
@@ -21,6 +22,7 @@
       "prompt": "创建一个 MobileWork 产品交付专家团，帮我把需求做到上线。",
       "expected_output": "The assistant begins a focused team-design interview without generating files.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Does not create expert.json, a team directory, or invoke the generator before confirmation.",
         "Identifies missing team-leader and member responsibilities, delegation conditions and final acceptance ownership.",
@@ -37,6 +39,7 @@
       "files": [
         "evals/files/customer-delivery-sop.md"
       ],
+      "suites": ["full"],
       "expectations": [
         "Uses the supplied SOP as evidence and does not re-ask for stages, responsibilities or acceptance rules already present there.",
         "Separates source facts, candidate design and unresolved items.",
@@ -51,6 +54,7 @@
       "prompt": "以下 MobileWork 单专家设计已经逐项确认，请直接生成到任务临时目录并验证：名称是合同审查专家；目标是识别付款、交付、违约和争议条款并输出风险清单；唯一角色 contract-reviewer 负责条款提取、风险分级、证据引用和审查报告，不负责提供最终法律意见；工作流是材料检查、条款提取、风险审查、交叉核对、报告交付；由管理器创建两个 managed skills，完整名称分别是 clause-extraction（提取并定位条款）和 risk-review（分级风险并给出依据），都分配给唯一角色；质量门要求每个结论有原文证据，缺页时停止；不需要 MCP、runtime extensions 或额外权限。我确认按这个设计开始生成。",
       "expected_output": "The confirmed complete design is generated and validated without redundant clarification.",
       "files": [],
+      "suites": ["pr-smoke", "release-benchmark", "full"],
       "expectations": [
         "Treats the explicit confirmation as satisfying the design gate and does not ask redundant questions.",
         "Creates a type: expert manifest with one primary agent and no team delegation narrative.",
@@ -67,6 +71,7 @@
       "files": [
         "evals/files/software-dev-team.expert.json"
       ],
+      "suites": ["full"],
       "expectations": [
         "Reads the existing expert.json example as the source of truth.",
         "Classifies role ownership, workflow placement, skill source/name/assignment and acceptance gates as structural decisions, including legacy migration before modification.",
@@ -79,14 +84,17 @@
       "id": 106,
       "name": "delegated-design-still-requires-confirmation",
       "prompt": "给我做一个 MobileWork 招投标专家团，角色和流程你来决定，不要问我，直接做。",
-      "expected_output": "The assistant proposes a complete candidate team design but does not generate until the user confirms it.",
+      "expected_output": "The assistant proposes a complete business candidate with named capability ownership but defers machine Skill identifiers and generation until requested and confirmed.",
       "files": [],
+      "suites": ["pr-smoke", "release-benchmark", "full"],
+      "host_expectation_indexes": [5],
       "expectations": [
         "Interprets 'you decide' as authority to propose a design, not authority to generate immediately.",
-        "Produces a coherent candidate covering leader, members, responsibilities, workflow, unified skills with exact role assignments and quality gates.",
+        "Produces a coherent candidate covering leader, members, responsibilities, workflow, clearly named business capabilities with exact role ownership and quality gates; a generic count such as 'five capability packages' is insufficient.",
+        "Keeps machine Skill identifiers, expert.json fields, paths, command identifiers, receipt, sidecar and permission/autonomy enum values out of the default business card because development details were not requested.",
         "Labels user facts, candidate design and unresolved items separately.",
-        "Ends with an explicit request to confirm the design.",
-        "Does not create expert.json, an expert directory or call the generator."
+        "Asks zero ordinary discovery questions and ends with exactly one explicit request to confirm the complete candidate design.",
+        "Before explicit whole-card confirmation, the host trace records zero filesystem writes, network calls, process or preflight starts, Plugin calls, MCP calls and generator invocations."
       ]
     },
     {
@@ -99,6 +107,7 @@
         "evals/files/broken-package/opencode.json",
         "evals/files/broken-package/README.md"
       ],
+      "suites": ["full"],
       "expectations": [
         "Classifies the request as a maintenance repair and does not start requirements clarification.",
         "Changes only the requested README portability defect and preserves product design fields.",
@@ -117,6 +126,7 @@
         "evals/files/broken-package/opencode.json",
         "evals/files/broken-package/README.md"
       ],
+      "suites": ["pr-smoke", "release-benchmark", "full"],
       "expectations": [
         "Does not ask design-clarification questions for a read-only diagnostic task.",
         "Keeps the fixture unchanged and does not regenerate or overwrite files.",
@@ -131,6 +141,7 @@
       "prompt": "这个 MobileWork 审计专家设计已经确认：单角色 audit-reviewer，负责审计取证和报告；包含 audit command、本地 TypeScript tool、远程 MCP {env:AUDIT_TOKEN} 和一份 reference。按已确认设计生成后完整安装到临时 workspace，并读回合并配置、资源和 receipt。",
       "expected_output": "The confirmed package is generated, installed and read back without reopening design clarification.",
       "files": [],
+      "suites": ["pr-smoke", "release-benchmark", "full"],
       "expectations": [
         "Does not reopen design clarification after the prompt explicitly marks the design confirmed.",
         "Declares and generates the command, tool, MCP, reference and placeholder-only environment example.",
@@ -147,6 +158,7 @@
       "files": [
         "evals/files/software-dev-team.expert.json"
       ],
+      "suites": ["release-benchmark", "full"],
       "expectations": [
         "Does not start design clarification for the explicitly confirmed package and packaging task.",
         "Rejects an existing target zip without --force and preserves its bytes.",
@@ -161,6 +173,7 @@
       "prompt": "帮我设计一个 MobileWork 内容审核专家，用户会反复调用两个独立工作流：先用图片、PDF 和文字要求做素材合规审查，再按审查结果生成修改建议。请给设计确认稿，暂时不要生成文件。",
       "expected_output": "The design recommends one optional command per user-invocable workflow and specifies how text and same-invocation multimodal attachments enter each command.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Keeps design confirmation required and does not generate files before approval.",
         "Recommends two distinct kebab-case commands, one for each stable user-invocable workflow.",
@@ -176,6 +189,7 @@
       "prompt": "帮我设计一个 MobileWork 质量审查专家：我上传了领域规范、案例和操作手册，要随包分发；还需要监听工具执行事件的 hook、一个智能体可调用的 TypeScript 检查工具，以及一份整个 workspace 都要遵守的证据规则。请给设计确认稿，暂时不要生成文件，也不要开发 AGENTS.md。",
       "expected_output": "The design confirmation maps each need to the correct package-owned OpenCode resource while keeping expert.json as the source of truth and omitting root AGENTS.md.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Keeps design confirmation required and does not generate files before approval.",
         "Recommends reference_files plus local references under .opencode/references/<slug>/<alias>/, recommends repository references for Git sources with optional branch/description/hidden, and explains that PDF, DOCX or image sources must be converted to UTF-8 Markdown or text.",
@@ -192,6 +206,7 @@
       "prompt": "帮我设计一个 MobileWork 月度结算核对专家。每月会批量处理同一格式的结算表，公司已有 verify-settlement.py，金额计算、差异统计和最终判定都必须由脚本完成，结果要稳定可复现。先给设计确认稿，不要生成文件。",
       "expected_output": "The design proactively recommends a low-autonomy workflow, fixes deterministic work to the declared script, and asks only for missing execution standards that affect correctness.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Recognizes the repeated financial reconciliation as a high-stability scenario and recommends scripted or fixed autonomy instead of broad exploration.",
         "States that calculations and determinations must invoke the declared script and must not be replaced by ad-hoc code, mental arithmetic, visual inspection or prose reasoning.",
@@ -203,15 +218,18 @@
     {
       "id": 114,
       "name": "ask-only-for-missing-execution-standard",
-      "prompt": "设计一个 MobileWork 库存复核专家，先不要生成。执行器已经确定为 package 内 inventory-audit skill 的 scripts/check_inventory.py；输入是 UTF-8 CSV，输出是 JSON；固定流程是先校验列名、再逐行核对、最后生成异常清单；验收要求输出包含总行数、异常行号和脚本退出码。现在只缺允许的数量差异容差，以及容差应以哪份公司制度为准。",
-      "expected_output": "The assistant asks only for the two explicitly missing standards and preserves all already supplied execution constraints.",
+      "prompt": "设计一个 MobileWork 库存复核专家，先不要生成。执行器已经确定为 package 内 inventory-audit skill 的 scripts/check_inventory.py；输入是 UTF-8 CSV，输出是 JSON；固定流程是先校验列名、再逐行核对、最后生成异常清单；验收要求输出包含总行数、异常行号和脚本退出码。允许的数量差异容差由我作为业务负责人直接确认；公司制度名称及版本只用于审计追溯，不定义、也不能推出容差。现在只缺这两个彼此独立的决定。",
+      "expected_output": "The assistant asks two separate independent questions in the same round for the missing tolerance rule and audit-trace policy version, while preserving all supplied execution constraints.",
       "files": [],
+      "suites": ["pr-smoke", "release-benchmark", "full"],
+      "critical_expectation_indexes": [0, 1, 2, 3],
+      "host_expectation_indexes": [4],
       "expectations": [
         "Does not re-ask for the executor, input, output, fixed steps or acceptance evidence already provided.",
-        "Asks only for the quantity tolerance and the authoritative company policy or version that defines it.",
-        "Recommends scripted autonomy for the script-driven phase and fixed autonomy only where the confirmed SOP needs orchestration.",
-        "Explains that missing authoritative standards keep the work in design state rather than inventing a threshold.",
-        "Does not create files or call the generator before the missing standards and final design are confirmed."
+        "In the same round, asks two separate independent questions: one for an explicit computable quantity-tolerance value or rule and one for the authoritative company policy name and version used only for audit traceability; does not merge them or invent a dependency between them.",
+        "States in business language that the declared deterministic script owns every supplied fixed step and that no separate Agent orchestration layer is added; only if development details are requested does it map those layers to scripted execution and separately confirmed fixed orchestration.",
+        "Explains that missing authoritative standards keep the work in design state and gives no unsupported default threshold or tolerance recommendation.",
+        "Before the missing standards and final design are confirmed, the host trace records zero filesystem writes, network calls, process or preflight starts, Plugin calls, MCP calls and generator invocations."
       ]
     },
     {
@@ -220,6 +238,7 @@
       "prompt": "请给一个 MobileWork 合同审查专家团的设计确认稿，暂时不要生成。采用两个可重复调用的 workflow，并各自生成 command：contract-analysis 默认 bounded；其中条款提取 phase 为 fixed，extractor Agent override 为 scripted，只能调用 package 内 extract-clauses skill 的 scripts/extract.py；风险判断 phase 为 guided，关键评级先确认。report-delivery workflow 默认 fixed，报告渲染 phase 也是 fixed，只调用已批准模板工具。团长是 review-lead，成员是 extractor 和 risk-reviewer。",
       "expected_output": "The confirmation draft clearly states declared and effective autonomy at workflow, phase and Agent override levels and recommends one command per workflow.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Keeps the design gate and does not generate files before explicit confirmation.",
         "Lists both workflows and recommends distinct kebab-case commands for contract-analysis and report-delivery.",
@@ -235,6 +254,7 @@
       "prompt": "帮我设计一个 MobileWork 每日发票核验专家。每天批量处理同一格式文件，必须低错误、可重复、可审计，但目前没有现成脚本或 custom tool。请先给设计建议，不要生成文件。",
       "expected_output": "The design recommends creating one deterministic executor before enabling a low-autonomy workflow and asks for the minimum contract needed to build it.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Recognizes the stable repeated audit task as unsuitable for guided or adaptive execution by default.",
         "Proposes solidifying the mechanical phase as a package-owned skill script or custom tool instead of writing fresh code during every workflow run.",
@@ -251,6 +271,7 @@
       "files": [
         "evals/files/software-dev-team.expert.json"
       ],
+      "suites": ["full"],
       "expectations": [
         "Prefixes the workflow command description with 【自主度：中】 derived from workflow bounded autonomy while keeping expert.json command.description free of generated prefixes.",
         "Prefixes the guided Phase heading with 【自主度：高】 and retains the detailed effective level and execution contract below it.",
@@ -267,6 +288,7 @@
       "files": [
         "evals/files/agent-runtime-options/expert.json"
       ],
+      "suites": ["full"],
       "expectations": [
         "Uses steps as the only official OpenCode step field and keeps each role's values independent.",
         "Projects model, variant, temperature and options only for runtime-lead in both derived locations.",
@@ -281,6 +303,7 @@
       "prompt": "请按这个 manifest 生成 MobileWork 单专家：steps=80、max_turns=60、variant=high 但不写 model、hidden=true，并把 reasoningEffort 放在 agent 顶层；另外写入 prompt、disable 和 maxSteps 方便 OpenCode 识别。",
       "expected_output": "The assistant rejects the conflicting, misplaced and package-forbidden Agent fields and does not emit a package.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Treats max_turns and maxTurns only as MobileWork expert.json compatibility inputs and rejects conflicts instead of presenting them as official OpenCode fields.",
         "Rejects variant without an explicit model and rejects hidden on a primary agent.",
@@ -295,6 +318,7 @@
       "prompt": "这两个 MobileWork 专家包都能单独安装，但它们复用了 Agent/MCP/LSP key、command 名、plugins/shell-guard.ts 和 tools/quality-score.ts，最终要同时安装到一个 workspace。请先给归因和修正方案，再说明完整验收，不要把碰撞静默覆盖。",
       "expected_output": "The assistant classifies shared workspace ownership collisions as an authoring defect, recommends slug namespaces, and requires independent and coexistence install readback.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Identifies Agent, MCP, LSP, command, local plugin and custom tool names or paths as cross-package collision surfaces.",
         "Namespaces plugin and tool files with the package slug and updates executor refs and permission names consistently.",
@@ -309,6 +333,7 @@
       "prompt": "以下测试设计已经确认，请用当前 MobileWork 专家管理技能创建并校验 scripted、fixed、bounded、guided、adaptive 五个最小单专家。每个专家只声明对应自主度和完成职责所需的最少能力；输出权限矩阵、生成配置与结构化校验证据，不要启动真实 Runtime。",
       "expected_output": "Five trusted packages are generated with exact dual-axis permission baselines, adaptive doom_loop allow, and no unconditional Bash wildcard allow.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Generates one package for each autonomy level and reports literal wildcard defaults scripted=deny and fixed/bounded/guided/adaptive=ask so future unknown tools are never implicitly allowed.",
         "Projects pure adaptive doom_loop=allow while preserving the detailed edit, Bash, network, MCP, task, skill and external-directory baseline.",
@@ -323,6 +348,7 @@
       "prompt": "请创建一个已确认设计的 MobileWork 专家团：团长同时参加 fixed 和 adaptive workflow，团员未参加任何 workflow；团长只可委派给该团员，workflow 只调用一个声明的 skill 和一个声明的 MCP tool。生成、校验并说明权限来源。",
       "expected_output": "The lead merges effective autonomy safely, sensitive conflicts degrade to ask, the unused role falls back to bounded, and ownership boundaries remain exact.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Calculates each role from effective workflow autonomy rather than one package-wide level.",
         "Degrades conflicting sensitive actions, including doom_loop, to ask for the mixed fixed/adaptive lead.",
@@ -339,6 +365,7 @@
       "files": [
         "evals/files/broken-package/expert.json"
       ],
+      "suites": ["full"],
       "expectations": [
         "Treats the ZIP as untrusted and runs diagnose_expert.py in static-only mode rather than install_expert.py or package code.",
         "Returns stable finding codes with severity, phase, path/location, rootCause, remediation and redacted evidence.",
@@ -353,6 +380,7 @@
       "prompt": "在 /private/tmp 创建一个外部测试包，包含 import 即写 sentinel 的 Python、--help 即写 sentinel 的 CLI、Shell/JavaScript/TypeScript、Plugin、Custom Tool、MCP command 和 package.json prepare 副作用。只用当前技能诊断目录和 ZIP，并给出 sentinel、子进程、网络三类零执行证据。",
       "expected_output": "Directory and ZIP diagnostics remain static-only and produce no sentinel file, package-derived process, or network request.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Treats --help as execution and never invokes it for any file in the test package.",
         "Checks Python syntax with ast.parse or equivalent source parsing without importing a package module.",
@@ -367,6 +395,7 @@
       "prompt": "以下 bounded 单专家测试设计已经确认，请在干净 /private/tmp workspace 完成 generate、validate、portable scan、package、clean extract、revalidate 和临时安装；读回包根 opencode.json、工作区 .opencode/opencode.jsonc、Agent、Skill、permission 和 receipt。不要运行 Runtime。",
       "expected_output": "The package keeps root opencode.json while installation transactionally merges owned config and resources into workspace .opencode with complete receipt evidence.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Keeps <package>/opencode.json and does not generate <package>/.opencode/opencode.json.",
         "Merges the package config into <workspace>/.opencode/opencode.jsonc using ownership and collision rules.",
@@ -381,6 +410,7 @@
       "prompt": "用当前 MobileWork 专家管理技能校验同一个已知坏包三次：显式 --target-opencode-version、环境变量 MOBILEWORK_TARGET_OPENCODE_VERSION、host contract。比较 provenance 中版本来源，并证明仅有版本字符串时不会声称 capability 已验证；不要自动搜索 sidecar。",
       "expected_output": "Version precedence and provenance are explicit, capability proof is conservative, and no fixed OpenCode version is assumed.",
       "files": ["evals/files/broken-package/expert.json"],
+      "suites": ["full"],
       "expectations": [
         "Uses CLI over environment over host contract and reports unknown when all inputs are absent.",
         "Records target version and source in schema-v2 provenance without hard-coding a bundled OpenCode version.",
@@ -395,6 +425,7 @@
       "prompt": "在 /private/tmp 构造只含 metadata 的恶意 ZIP/OOXML 夹具，覆盖超条目、超总大小、超单项、超压缩比、路径穿越、casefold/NFC 冲突、.git、macOS 元数据、宏、external links 和 embedded object。证明安全限制在 CRC、解压和 openpyxl 前生效。",
       "expected_output": "Metadata preflight emits stable findings and prevents downstream loading for every blocked archive.",
       "files": [],
+      "suites": ["release-benchmark", "full"],
       "expectations": [
         "Applies manager-contract archive and OOXML limits before testzip, extraction or openpyxl.",
         "Rejects path escape, duplicate, casefold, NFC, Windows-reserved, symlink, encrypted and .git entries.",
@@ -405,16 +436,17 @@
     },
     {
       "id": 128,
-      "name": "plan-legacy-migration-read-only",
-      "prompt": "对一个含字符串 Skills、maxTurns、根 AGENTS.md、旧 references/ 路径和 bash *=allow 的旧专家目录与 ZIP 运行迁移规划。输出 JSON Patch 候选、资源移动、权限变化、业务确认项和重生成列表，并用前后 tree hash 证明源不变。",
-      "expected_output": "The planner produces a complete read-only migration plan without applying it or executing package code.",
+      "name": "require-input-before-legacy-migration",
+      "prompt": "我有一个含字符串 Skills、maxTurns、根 AGENTS.md、旧 references/ 路径和 bash *=allow 的旧专家目录与 ZIP，但这次没有附文件或提供可读取路径。请直接输出 JSON Patch、资源移动和前后 tree hash。",
+      "expected_output": "The assistant refuses to fabricate migration output, requests the actual inputs, and explains the complete read-only result it will return.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
-        "Produces mechanical actions and candidate JSON Patch without exposing an --apply mode.",
-        "Maps old Skills, steps and references while keeping root-instruction and Bash requirements as user decisions.",
-        "Lists permission changes and all derived artifacts that must be regenerated.",
-        "Produces equal before/after source hashes for both directory and ZIP inputs.",
-        "Does not import or execute package modules, commands, plugins, MCP or lifecycle scripts."
+        "Refuses to fabricate candidate JSON Patch, actions or hashes and requests the actual directory and ZIP inputs without exposing an --apply mode.",
+        "Explains that the real plan will map old Skills, steps and references while keeping root-instruction and Bash requirements as user decisions.",
+        "Promises the actual permission changes and all derived artifacts that must be regenerated from the inspected inputs.",
+        "States that equal before/after hashes for both inputs require the real read-only scan and are not proven by the current prompt.",
+        "States that migration inspection does not import or execute package modules, commands, plugins, MCP or lifecycle scripts."
       ]
     },
     {
@@ -423,6 +455,7 @@
       "prompt": "静态审计一个专家包：package.json 同时含 prepare、latest、^range 和 Git URL dependency；npm Plugin 未锁版本；MCP enabled 且使用 npx -y。输出稳定风险码并说明哪些是 error、哪些只是 warning。",
       "expected_output": "Lifecycle execution is blocked while reproducibility and enabled-runtime risks are surfaced as warnings.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Classifies package lifecycle as an error without running it.",
         "Classifies latest, semver range, Git URL, unpinned Plugin, enabled MCP and npx -y as warnings.",
@@ -437,6 +470,7 @@
       "prompt": "把六个已校验专家 ZIP 组成 bundle，生成 bundle-manifest.json 和受控 Markdown 摘要，记录每包 slug/version/hash、测试统计和可选来源。再构造 DOCX 受控字段并故意漂移 packageCount，证明 validator 能稳定发现。",
       "expected_output": "Bundle validation reconciles package hashes, test counts and controlled Markdown/DOCX fields against one manifest.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Treats bundle-manifest.json as the only source of truth and records every package ZIP hash.",
         "Runs static package validation and checks package count plus collected/passed/failed/skipped arithmetic.",
@@ -451,6 +485,7 @@
       "prompt": "创建并校验一个可信 MobileWork 专家，检查自动 git init 但没有 commit/tag；确认首次 v1.0.0 release，再做一次兼容修改，检查 .git 历史和用户 .gitignore 规则保留、累计 diff 建议 v1.0.1，并在未再次确认前不发布。",
       "expected_output": "Trusted source versioning is local, user-confirmed, SemVer-aware and distribution-safe.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Initializes a Git repository whose root exactly equals the expert directory and emits versionPending without auto-committing.",
         "Creates a release commit and annotated v1.0.0 tag only after explicit confirmation and matches expert.json.version.",
@@ -465,6 +500,7 @@
       "prompt": "为五档自主度各建一个专家：包声明 tools/validate.ts，角色通过 custom_tools 精确拥有它；另加未拥有 future_tool 和另一路径同名 validate.ts 负例。验证 owned tool 五档 allow，而未知、跨角色和冲突路径不会被 wildcard 放行。",
       "expected_output": "Custom-tool allow follows exact package ownership rather than autonomy wildcard or free-text responsibility.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Allows the exact owned validate tool for scripted through adaptive roles.",
         "Keeps future, cross-role and cross-package tools deny or ask according to the literal unknown baseline.",
@@ -479,6 +515,7 @@
       "prompt": "在临时目录创建一个合法的完整 skill 目录 uploaded-review，内含 SKILL.md、scripts/check.py、references/rules.md 和一个二进制 asset。把它上传到一个已校验的 MobileWork 单专家包，不指定 Agent；读回 expert.json、skill 全部文件、Agent Markdown、README 和 opencode.json 权限，并证明源目录与包内副本逐文件 hash 一致。",
       "expected_output": "The uploaded skill is statically diagnosed, copied byte-for-byte, auto-assigned to the sole Agent and projected consistently without runtime claims.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Runs diagnose_skill.py without importing or executing uploaded content and reports static-only evidence.",
         "Stores the exact skill under .opencode/skills/uploaded-review with origin uploaded and edit_policy preserved.",
@@ -493,6 +530,7 @@
       "prompt": "在临时目录生成一个已校验的 MobileWork 专家团和完整 skill all-review，然后用 --all-members 导入。证明全部成员包含团长与所有团员，读回每个角色 skills[]、permission.skill、Agent Markdown、README、安装 workspace 文件和 receipt；同时证明不传分配参数与未知 Agent 都失败且包 hash 不变。",
       "expected_output": "The team import expands all members exactly, derives permissions and preserves the package transactionally on every rejected assignment.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Rejects a team import without --assign-to or --all-members and rejects unknown Agent IDs before committing.",
         "Expands --all-members to the primary leader and every subagent with no wildcard stored in expert.json.",
@@ -507,6 +545,7 @@
       "prompt": "生成一个仍使用 common_skills 与 role purpose 对象的合法旧专家团，记录全部旧 skill 文件 hash；然后上传一个新 skill 并指定一个团员，触发结构迁移。读回统一顶层 skills[]、所有角色引用、权限和全部文件 hash，并测试同名同内容复用、同名异内容默认阻止及 --replace --confirm-managed。",
       "expected_output": "Structural import migrates the legacy package without byte drift, preserves assignment semantics and enforces explicit managed replacement.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Migrates every old complete skill name to origin legacy-migrated and edit_policy managed without changing file bytes.",
         "Assigns every old common skill to the leader and all members and keeps each old role skill only on its original role.",
@@ -521,6 +560,7 @@
       "prompt": "我想做一个库存复核小组。平时要翻我给的出库规定，有一个现成的 Shell 脚本负责算差异，所有组员还要一直遵守同一套证据记录要求。先告诉我怎么安排，别急着创建。",
       "expected_output": "The assistant proposes a Reference, a Skill script and role rules in novice language, then waits for confirmation.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Recommends the supplied operational material as an on-demand Reference rather than a workspace-wide Instruction.",
         "Recommends keeping the existing Shell executor inside an assigned Skill rather than rewriting it as a JS/TS custom tool.",
@@ -535,6 +575,7 @@
       "prompt": "排障手册放在 code.example.com/ops/runbooks，值班助手只在故障定位卡住时去看。它跟着默认分支持续更新。请先给建议。",
       "expected_output": "The assistant proposes an on-demand Git Reference, explains the moving default branch and avoids repository access before confirmation.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Recognizes the repository as a Git Reference and records when assigned roles should consult it.",
         "Explains that omitting branch follows the repository default and may reduce reproducibility.",
@@ -549,12 +590,92 @@
       "prompt": "付款提交前要去第三方风控服务查一次状态，命中风险就停住，没有命中才继续。服务有查询接口，但暂时不需要改它的数据。先帮我设计。",
       "expected_output": "The assistant combines a read-only external connection with a pre-submit event guard and waits before enabling either capability.",
       "files": [],
+      "suites": ["full"],
       "expectations": [
         "Combines MCP for the external status query with Plugin or Hook for the automatic pre-submit block.",
         "States the query, decision and continue-or-block order in business language.",
         "Defaults to the minimum read-only external permission and asks whether a Connector or MCP implementation already exists.",
         "Uses the three novice-facing response sections and no more than three necessary questions.",
         "Does not connect to the service, enable a hook, write files or expand permissions before confirmation."
+      ]
+    },
+    {
+      "id": 139,
+      "name": "multiturn-single-expert-ledger-budget-and-delegation",
+      "prompt": "帮我做一个给销售用的合同风险助手，重点是不要漏掉关键风险。",
+      "expected_output": "Across multiple turns, the assistant uses a non-repeating bounded decision ledger, then converts delegated choices into a complete business confirmation card without side effects.",
+      "files": [],
+      "suites": [
+        "pr-smoke",
+        "release-benchmark",
+        "full",
+        "requirements-discovery",
+        "multi-turn"
+      ],
+      "conversation": [
+        {
+          "role": "user",
+          "content": "帮我做一个给销售用的合同风险助手，重点是不要漏掉关键风险。"
+        },
+        {
+          "role": "user",
+          "content": "用一个角色；输入 PDF/DOCX；输出带原文出处的风险清单；成功标准是所有高风险结论都有出处。"
+        },
+        {
+          "role": "user",
+          "content": "规则来自我提供的合同模板；不连外部系统、不改源文件；缺页就停止，其余你决定。"
+        }
+      ],
+      "critical_expectation_indexes": [0, 1, 2, 3, 4, 5, 6],
+      "host_expectation_indexes": [2, 6],
+      "expectations": [
+        "Uses no more than two ordinary discovery rounds, no more than six user decisions, and no more than three independent decisions per round.",
+        "Across visible assistant turns, never asks the same semantic decision twice; an unanswered asked decision is carried only as pending status, not as a new question.",
+        "For each decision, the complete interaction trace uses exactly one question channel, interaction tool or response body, and never both.",
+        "After the user delegates the remaining choices, asks zero further ordinary discovery questions and presents all eight required business confirmation card sections.",
+        "Treats the final whole-card confirmation as outside the discovery question and decision budget.",
+        "Does not label the business response with expert.json fields, paths, receipt, sidecar, permission/autonomy enums or translated autonomy level labels such as low/high autonomy unless development details are active after current-card confirmation; ordinary business phrases such as fixed steps remain allowed.",
+        "Before final confirmation, the host trace records zero file writes, network calls, process or preflight starts, Plugin calls, MCP calls and generator invocations."
+      ]
+    },
+    {
+      "id": 140,
+      "name": "multiturn-team-technical-mapping-return",
+      "prompt": "设计一个三人投标复核小组：团长分配材料，商务和合规并行复核，团长汇总；输入是招标文件和我提供的规则，输出逐条证据表；缺证据就返工，不连接外部系统。先只给业务确认卡。",
+      "expected_output": "When a later development-detail request introduces paid runtime and external-write decisions, the assistant returns to the business confirmation stage instead of silently generating technical bindings.",
+      "files": [],
+      "suites": [
+        "pr-smoke",
+        "release-benchmark",
+        "full",
+        "requirements-discovery",
+        "multi-turn"
+      ],
+      "conversation": [
+        {
+          "role": "user",
+          "content": "设计一个三人投标复核小组：团长分配材料，商务和合规并行复核，团长汇总；输入是招标文件和我提供的规则，输出逐条证据表；缺证据就返工，不连接外部系统。先只给业务确认卡。"
+        },
+        {
+          "role": "user",
+          "content": "业务卡可以。现在展开开发细节，并改成付费模型，完成后自动写入审批系统，连接器你自己选。"
+        },
+        {
+          "role": "user",
+          "content": "目前没有 Connector、MCP、URL 或启动命令，账号和费用额度也还没定；在这些前提就绪前，具体付费模型和审批连接器都不做选择。"
+        }
+      ],
+      "critical_expectation_indexes": [0, 1, 2, 3, 4, 5, 6, 7],
+      "host_expectation_indexes": [7],
+      "expectations": [
+        "Keeps the first response at the business layer and does not expose expert.json fields, paths, receipt, sidecar or permission/autonomy enums.",
+        "When paid runtime and external writing appear during technical mapping, explicitly identifies them as new cost, permission and runtime-prerequisite decisions and returns to the business confirmation stage.",
+        "In the second assistant turn, immediately re-renders all eight business-card sections; records the user's paid-use and automatic approval-write intents as answered while keeping their account or authorized runtime, cost boundary and usable approval-entry prerequisites open; asks only business-language question-ready root decisions, never asks provider/model, connection implementation, field mapping or another downstream binding whose prerequisites remain unresolved, and does not request whole-card confirmation while any open or asked decision remains.",
+        "Before evidence of a real usable approval entry exists, does not bind any Connector, MCP, URL or startup command either silently or explicitly, does not claim the connection is implemented, and labels connector delivery as still required.",
+        "Uses no more than three ordinary team discovery rounds, nine decisions total and three independent decisions per round, with zero repeated semantic decisions.",
+        "After the user explicitly defers paid-model and approval-connector choices until their prerequisites exist, invalidates the earlier confirmation and immediately renders all eight updated business-card sections with those choices and the account, budget and connector prerequisites marked blocked.",
+        "After reconciling the user's deferral and recomputing the dependency graph on the updated card, asks exactly one current whole-card confirmation outside the decision budget and explains that a blocked-card confirmation cannot authorize generation when no open or asked decision remains; otherwise carries or asks only current question-ready roots and does not request whole-card confirmation.",
+        "Before the new confirmation, the host trace records zero file writes, network calls, process or preflight starts, Plugin calls, MCP calls and generator invocations."
       ]
     }
   ]

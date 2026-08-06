@@ -12,7 +12,7 @@
 |---|---|
 | 插件名 | `mobilework-expert-manager` |
 | Marketplace | `mobilework-tools` |
-| 当前版本 | `0.5.0` |
+| 当前版本 | `0.6.0` |
 | Skill | `mobilework-expert-manager` |
 | Claude Code 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
 | Codex 调用 | `$mobilework-expert-manager:mobilework-expert-manager` |
@@ -142,8 +142,13 @@ Codex 团队市场可以在 `.agents/plugins/marketplace.json` 的 `plugins` 数
 - 支持 Skills、MCP、custom tools、commands、plugins、references、instructions 与 LSP。
 - 支持外部 ZIP、附件和未知目录的无执行静态诊断。
 - 支持结构化 findings、root cause、证据 gate、可信 sidecar 和 OpenCode pure config 验证。
+- 对未知目录和 ZIP 使用单次安全快照，限制条目数、大小、深度与路径长度，并拒绝链接、设备和
+  扫描期间发生变化的输入。
+- 所有 CLI 共享 schema v2、稳定退出码和双层输出脱敏；Plugin 依赖共用 npm spec 解析合同。
 - 支持旧包迁移规划、供应链审计、Bundle manifest 和 Bundle 校验。
-- 支持生成、校验、可移植性扫描、打包、安装、回滚和 receipt 读回。
+- 支持生成、校验、可移植性扫描、打包、安装、漂移预览、受确认的漂移丢弃、备份恢复和
+  contract 3 receipt 读回。
+- Python 与 Desktop Runtime 共用带 owner token、心跳和 quarantine 竞争规则的锁协议。
 - 支持专家包本地 Git 初始化、SemVer 建议及用户确认后的本地版本发布。
 
 ## 可以创建什么

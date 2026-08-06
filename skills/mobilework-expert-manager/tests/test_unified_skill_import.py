@@ -392,6 +392,120 @@ class UnifiedSkillImportTests(unittest.TestCase):
             (replacement / "SKILL.md").read_bytes(),
         )
 
+    def test_import_consumes_captured_skill_snapshot_after_source_changes(
+        self,
+    ) -> None:
+        package = self.create_package()
+        source = self.create_skill("captured-skill")
+        skill_md = source / "SKILL.md"
+        captured = skill_md.read_bytes()
+        original_inspect = import_skill.safe_input.inspect
+        source_inspections = 0
+
+        def inspect_then_change(path, *args, **kwargs):
+            nonlocal source_inspections
+            snapshot = original_inspect(path, *args, **kwargs)
+            if Path(path).absolute() == source.absolute():
+                source_inspections += 1
+                skill_md.write_text(
+                    "---\n"
+                    "name: captured-skill\n"
+                    "description: Changed after snapshot.\n"
+                    "---\n\n"
+                    "# Changed after snapshot\n",
+                    encoding="utf-8",
+                )
+            return snapshot
+
+        with patch.object(
+            import_skill.safe_input,
+            "inspect",
+            side_effect=inspect_then_change,
+        ):
+            result = self.import_into(package, source)
+
+        self.assertEqual(source_inspections, 1)
+        self.assertEqual(result["action"], "imported")
+        imported = package / ".opencode/skills/captured-skill/SKILL.md"
+        self.assertEqual(imported.read_bytes(), captured)
+        self.assertNotEqual(skill_md.read_bytes(), captured)
+
+    def test_zip_import_consumes_captured_bytes_after_archive_changes(self) -> None:
+        package = self.create_package()
+        source = self.create_skill("captured-zip-skill")
+        archive = self.root / "captured-zip-skill.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            for path in source.rglob("*"):
+                if path.is_file():
+                    output.write(path, path.relative_to(source.parent).as_posix())
+        original_inspect = import_skill.safe_input.inspect
+
+        def inspect_then_change(path, *args, **kwargs):
+            snapshot = original_inspect(path, *args, **kwargs)
+            if Path(path).absolute() == archive.absolute():
+                archive.write_bytes(b"changed after snapshot")
+            return snapshot
+
+        with patch.object(
+            import_skill.safe_input,
+            "inspect",
+            side_effect=inspect_then_change,
+        ):
+            result = self.import_into(package, archive)
+
+        self.assertEqual(result["action"], "imported")
+        self.assertEqual(result["skill"], "captured-zip-skill")
+        self.assertEqual(archive.read_bytes(), b"changed after snapshot")
+        self.assertTrue(
+            (package / ".opencode/skills/captured-zip-skill/SKILL.md").is_file()
+        )
+
+    def test_input_change_during_skill_scan_fails_without_package_write(self) -> None:
+        package = self.create_package()
+        source = self.create_skill("changing-skill")
+        before = package_digest(package)
+        failure = import_skill.safe_input.InputInspectionError(
+            "INPUT_CHANGED_DURING_SCAN",
+            "input changed while it was read",
+            "SKILL.md",
+        )
+
+        with patch.object(
+            import_skill.safe_input,
+            "inspect",
+            side_effect=failure,
+        ):
+            with self.assertRaisesRegex(
+                import_skill.ImportSkillError,
+                "INPUT_CHANGED_DURING_SCAN",
+            ):
+                self.import_into(package, source)
+
+        self.assertEqual(package_digest(package), before)
+
+    def test_nested_skill_symlink_is_rejected_before_materialization(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink is unavailable")
+        package = self.create_package()
+        source = self.create_skill("symlinked-skill")
+        outside = self.root / "outside.md"
+        outside.write_text("outside\n", encoding="utf-8")
+        (source / "references" / "linked.md").symlink_to(outside)
+        before = package_digest(package)
+
+        with patch.object(
+            import_skill.diagnose_skill,
+            "materialize_skill",
+            side_effect=AssertionError("unsafe source reached materialization"),
+        ):
+            with self.assertRaisesRegex(
+                import_skill.ImportSkillError,
+                "INPUT_SYMLINK_FORBIDDEN",
+            ):
+                self.import_into(package, source)
+
+        self.assertEqual(package_digest(package), before)
+
     def test_single_expert_rejects_explicit_assignment_flags(self) -> None:
         package = self.create_package()
         source = self.create_skill()
@@ -471,7 +585,7 @@ class UnifiedSkillImportTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("permission.skill is derived", completed.stderr)
 
-    def test_diagnosis_blocks_cache_secret_symlink_and_never_executes_script(
+    def test_diagnosis_blocks_cache_and_secret_without_executing_script(
         self,
     ) -> None:
         root = self.create_skill("unsafe-skill")
@@ -487,7 +601,6 @@ class UnifiedSkillImportTests(unittest.TestCase):
             "api_key=sk-abcdefghijklmnopqrstuvwxyz123456\n",
             encoding="utf-8",
         )
-        os.symlink(root / "SKILL.md", root / "linked.md")
         with patch(
             "subprocess.run",
             side_effect=AssertionError("uploaded skill subprocess started"),
@@ -498,7 +611,31 @@ class UnifiedSkillImportTests(unittest.TestCase):
         errors = "\n".join(result.errors)
         self.assertIn("non-distributable directory", errors)
         self.assertIn("possible secret-like value", errors)
-        self.assertIn("symlink is not allowed", errors)
+        self.assertFalse(result.execution["attempted"])
+
+    def test_symlinked_skill_input_is_rejected_before_archive_or_content_read(
+        self,
+    ) -> None:
+        source = self.create_skill("linked-skill-source")
+        archive = self.root / "linked-skill.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            for path in source.rglob("*"):
+                if path.is_file():
+                    output.write(path, path.relative_to(self.root).as_posix())
+        symlink = self.root / "linked-input.zip"
+        symlink.symlink_to(archive)
+
+        with patch.object(
+            diagnose_skill.archive_inspector,
+            "inspect_archive",
+            side_effect=AssertionError("archive was opened"),
+        ):
+            result = diagnose_skill.diagnose(symlink)
+
+        self.assertEqual(
+            [finding.code for finding in result.findings],
+            ["INPUT_SYMLINK_FORBIDDEN"],
+        )
         self.assertFalse(result.execution["attempted"])
 
     def test_zip_path_escape_is_blocked_before_extraction(self) -> None:

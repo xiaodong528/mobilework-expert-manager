@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 import tempfile
 import zipfile
@@ -15,7 +16,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import archive_inspector
+import cli_contract
 import manager_contract
+import package_snapshot
+import safe_input
 import validate_expert
 from validation_result import ValidationResult
 
@@ -26,20 +30,39 @@ def diagnose(
     target: manager_contract.TargetContract | None = None,
 ) -> ValidationResult:
     source = source.expanduser().absolute()
-    if source.is_dir():
-        result = validate_expert.validate_package(source, target=target)
-        result.execution["reason"] = "untrusted-directory"
-        return result
-    result = ValidationResult(execution_reason="untrusted-zip", input_path=source, target=target)
-    if not source.is_file():
-        result.error(
-            f"diagnostic source does not exist: {source}",
-            code="DIAGNOSTIC_SOURCE_MISSING",
-            phase="diagnostic",
-            root_cause="missing-diagnostic-source",
-            evidence=str(source),
+    try:
+        snapshot = safe_input.inspect_package(source)
+    except safe_input.InputInspectionError as error:
+        result = ValidationResult(
+            execution_reason="untrusted-diagnostic-input",
+            input_error=error,
+            target=target,
         )
-        return result
+        if error.code == "INPUT_NOT_FOUND":
+            result.error(
+                f"diagnostic source does not exist: {source}",
+                code="DIAGNOSTIC_SOURCE_MISSING",
+                phase="diagnostic",
+                root_cause="missing-diagnostic-source",
+                evidence=source.name,
+            )
+            result.block_downstream_gates()
+            return result
+        return result.block_input_preflight()
+    if snapshot.kind == "directory":
+        validated = package_snapshot.validate_snapshot(snapshot, target=target)
+        validated.provenance["validatedPackageInputSha256"] = (
+            validated.provenance["inputSha256"]
+        )
+        validated.provenance["inputSha256"] = snapshot.sha256
+        validated.execution["reason"] = "untrusted-directory"
+        return validated
+    result = ValidationResult(
+        execution_reason="untrusted-diagnostic-input",
+        input_snapshot=snapshot,
+        target=target,
+    )
+    result.execution["reason"] = "untrusted-zip"
     if source.suffix.lower() != ".zip":
         result.error(
             f"unsupported diagnostic source: {source.name}",
@@ -48,9 +71,15 @@ def diagnose(
             root_cause="unsupported-diagnostic-source",
             evidence=source.name,
         )
+        result.block_downstream_gates()
         return result
+    archive_bytes = snapshot.read_bytes()
     try:
-        inspection = archive_inspector.inspect_archive(source)
+        inspection = archive_inspector.inspect_archive(
+            archive_bytes,
+            display_path=source,
+        )
+        result.provenance["inputLimits"] = result.provenance.get("limits", {})
         result.provenance["limits"] = inspection.limits.as_dict()
         for issue in inspection.issues:
             result.add(
@@ -64,10 +93,10 @@ def diagnose(
             )
         if inspection.errors:
             result.set_gate("contract", "blocked")
-            result.set_gate("portability", "blocked")
+            result.block_downstream_gates()
             return result
         result.set_gate("archive", "passed")
-        with zipfile.ZipFile(source) as archive:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
             bad = archive.testzip()
             if bad is not None:
                 result.error(
@@ -78,17 +107,30 @@ def diagnose(
                     evidence=bad,
                 )
                 result.set_gate("contract", "blocked")
-                result.set_gate("portability", "blocked")
+                result.block_downstream_gates()
                 return result
             with tempfile.TemporaryDirectory(prefix="mobilework-static-diagnosis-") as temp:
                 extraction_root = Path(temp)
-                archive_inspector.safe_extract(source, extraction_root, inspection)
+                archive_inspector.safe_extract(
+                    archive_bytes,
+                    extraction_root,
+                    inspection,
+                )
                 validated = validate_expert.validate_package(
                     extraction_root / inspection.roots[0], target=target
                 )
                 validated.findings = [*result.findings, *validated.findings]
                 validated.gates["archive"] = "passed"
+                validated.provenance["validatedPackageInputSha256"] = (
+                    validated.provenance["inputSha256"]
+                )
                 validated.provenance["inputSha256"] = result.provenance["inputSha256"]
+                validated.provenance["inputInspection"] = result.provenance[
+                    "inputInspection"
+                ]
+                validated.provenance["inputLimits"] = result.provenance[
+                    "inputLimits"
+                ]
                 validated.provenance["limits"] = result.provenance["limits"]
                 validated.execution["reason"] = "untrusted-zip"
                 return validated
@@ -101,7 +143,7 @@ def diagnose(
             evidence=source.name,
         )
         result.set_gate("contract", "blocked")
-        result.set_gate("portability", "blocked")
+        result.block_downstream_gates()
         return result
 
 
@@ -116,7 +158,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _legacy_main() -> int:
     args = parse_args()
     try:
         target = manager_contract.resolve_target(
@@ -127,7 +169,6 @@ def main() -> int:
     except manager_contract.ManagerContractError as exc:
         result = ValidationResult(
             execution_reason="version-contract-error",
-            input_path=args.source,
             target=manager_contract.TargetContract(
                 version="unknown",
                 source="version-contract-error",
@@ -147,7 +188,6 @@ def main() -> int:
     except Exception as exc:
         result = ValidationResult(
             execution_reason="manager-internal-error",
-            input_path=args.source,
             target=manager_contract.TargetContract(
                 version="unknown",
                 source="manager-internal-error",
@@ -170,6 +210,16 @@ def main() -> int:
         return 4
     result.print_summary(output_format=args.format, schema_version=args.schema_version)
     return 0 if result.ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    return cli_contract.run_legacy_entrypoint(
+        "diagnose-expert",
+        _legacy_main,
+        argv=argv,
+        default_format="human",
+        delegated_output_flags=("format", "schema-version"),
+    )
 
 
 if __name__ == "__main__":

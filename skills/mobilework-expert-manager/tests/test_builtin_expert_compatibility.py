@@ -83,7 +83,10 @@ class BuiltinExpertCompatibilityTests(unittest.TestCase):
                     )
                     self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
                     self.assertEqual(payload["status"], "installable")
-                    self.assertEqual(payload["runtime_status"], "runtime-not-tested")
+                    self.assertEqual(
+                        payload["data"]["runtime_status"],
+                        "runtime-not-tested",
+                    )
                     runtime = workspace / ".opencode"
                     self.assertTrue((runtime / "opencode.jsonc").is_file())
                     self.assertTrue((runtime / f".expert-installs/{slug}.json").is_file())

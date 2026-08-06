@@ -1,11 +1,710 @@
 {
   "schemaVersion": 1,
-  "contractVersion": "2.1.0",
+  "contractVersion": "2.14.0",
   "findingCatalogVersion": 2,
+  "findingCatalog": {
+    "fallbackBySeverity": {
+      "warning": {
+        "code": "LEGACY_VALIDATION_WARNING",
+        "phase": "validation",
+        "rootCause": "legacy-unclassified-validation",
+        "remediation": "Migrate this validation site to a native finding code."
+      },
+      "error": {
+        "code": "LEGACY_VALIDATION_ERROR",
+        "phase": "validation",
+        "rootCause": "legacy-unclassified-validation",
+        "remediation": "Migrate this validation site to a native finding code."
+      }
+    },
+    "rules": [
+      {
+        "pattern": "package directory does not exist",
+        "code": "PACKAGE_DIRECTORY_MISSING",
+        "phase": "package",
+        "rootCause": "missing-package",
+        "remediation": "Provide an existing expert package directory."
+      },
+      {
+        "pattern": "missing (?:expert\\.json|opencode\\.json)",
+        "code": "PACKAGE_REQUIRED_FILE_MISSING",
+        "phase": "package",
+        "rootCause": "missing-required-file",
+        "remediation": "Regenerate the package from expert.json."
+      },
+      {
+        "pattern": "(?:AGENTS\\.md|root AGENTS)",
+        "code": "PACKAGE_ROOT_AGENTS_FORBIDDEN",
+        "phase": "package",
+        "rootCause": "unowned-root-file",
+        "remediation": "Move workspace-wide rules into declared instruction files."
+      },
+      {
+        "pattern": "undeclared package file",
+        "code": "PACKAGE_UNDECLARED_FILE",
+        "phase": "package",
+        "rootCause": "undeclared-resource",
+        "remediation": "Declare the resource in expert.json or remove it."
+      },
+      {
+        "pattern": "path is outside the package allowlist",
+        "code": "PACKAGE_PATH_NOT_OWNED",
+        "phase": "package",
+        "rootCause": "undeclared-resource",
+        "remediation": "Move the file into an owned package path."
+      },
+      {
+        "pattern": "non-distributable (?:directory|file|file suffix)",
+        "code": "PACKAGE_NON_DISTRIBUTABLE_CONTENT",
+        "phase": "package",
+        "rootCause": "non-distributable-content",
+        "remediation": "Remove transient or forbidden distribution content."
+      },
+      {
+        "pattern": "package\\.json.*(?:scripts|only dependencies|lifecycle)",
+        "code": "PACKAGE_MANAGER_LIFECYCLE_FORBIDDEN",
+        "phase": "security",
+        "rootCause": "package-lifecycle-script",
+        "remediation": "Remove package-manager scripts and lifecycle hooks."
+      },
+      {
+        "pattern": "Python syntax",
+        "code": "PYTHON_STATIC_SYNTAX_INVALID",
+        "phase": "static-syntax",
+        "rootCause": "invalid-python-syntax",
+        "remediation": "Fix Python syntax; static diagnosis never imports the module."
+      },
+      {
+        "pattern": "non-portable",
+        "code": "PACKAGE_NON_PORTABLE_CONTENT",
+        "phase": "portability",
+        "rootCause": "non-portable-content",
+        "remediation": "Replace machine-specific content with portable values."
+      },
+      {
+        "pattern": "secret-like|secret detected|contains secret",
+        "code": "PACKAGE_SECRET_DETECTED",
+        "phase": "security",
+        "rootCause": "secret-content",
+        "remediation": "Remove the secret and reference an environment variable."
+      },
+      {
+        "pattern": "common_skills.*(?:string|purpose)|skills.*legacy",
+        "code": "MANIFEST_SKILL_LEGACY_FORMAT",
+        "phase": "manifest",
+        "rootCause": "legacy-manifest-contract",
+        "remediation": "Migrate the package to the unified skills catalog before structural modification."
+      },
+      {
+        "pattern": "maxTurns|max_turns|maxSteps",
+        "code": "AGENT_LEGACY_STEP_FIELD",
+        "phase": "manifest",
+        "rootCause": "legacy-runtime-field",
+        "remediation": "Use steps in new manifests and regenerate."
+      },
+      {
+        "pattern": "permission_reason is required",
+        "code": "PERMISSION_REASON_REQUIRED",
+        "phase": "permission",
+        "rootCause": "unjustified-permission-escalation",
+        "remediation": "Add permission_reason or keep the calculated action."
+      },
+      {
+        "pattern": "permission\\.bash.*(?:unconditional|wildcard)|generated permission\\.bash",
+        "code": "PERMISSION_BASH_WILDCARD_ALLOW",
+        "phase": "permission",
+        "rootCause": "unsafe-bash-permission",
+        "remediation": "Use ask or deny for Bash wildcard and exact required patterns."
+      },
+      {
+        "pattern": "permission\\.external_directory.*wildcard",
+        "code": "PERMISSION_EXTERNAL_WILDCARD_ALLOW",
+        "phase": "permission",
+        "rootCause": "unsafe-external-directory",
+        "remediation": "Keep wildcard external access at ask or deny."
+      },
+      {
+        "pattern": "permission.*(?:match|mismatch|policy)",
+        "code": "PERMISSION_PROJECTION_MISMATCH",
+        "phase": "permission",
+        "rootCause": "permission-projection-drift",
+        "remediation": "Regenerate permissions from autonomy and ownership."
+      },
+      {
+        "pattern": "legacy-permission-baseline",
+        "code": "LEGACY_PERMISSION_BASELINE",
+        "phase": "permission",
+        "rootCause": "legacy-permission-contract",
+        "remediation": "Migrate to the unified skill schema during the next structural modification; add Workflow autonomy only when a formal Workflow is declared."
+      },
+      {
+        "pattern": "unused-role-bounded-fallback",
+        "code": "UNUSED_ROLE_BOUNDED_FALLBACK",
+        "phase": "permission",
+        "rootCause": "unassigned-role",
+        "remediation": "Assign the role to a workflow or accept bounded fallback."
+      },
+      {
+        "pattern": "workflow|autonomy|execution|executor",
+        "code": "WORKFLOW_CONTRACT_INVALID",
+        "phase": "workflow",
+        "rootCause": "workflow-contract",
+        "remediation": "Correct the workflow autonomy or execution contract."
+      },
+      {
+        "pattern": "README\\.md: missing",
+        "code": "README_SECTION_MISSING",
+        "phase": "documentation",
+        "rootCause": "stale-derived-documentation",
+        "remediation": "Regenerate README.md from expert.json."
+      },
+      {
+        "pattern": "README\\.md",
+        "code": "README_PROJECTION_MISMATCH",
+        "phase": "documentation",
+        "rootCause": "stale-derived-documentation",
+        "remediation": "Regenerate README.md from expert.json."
+      },
+      {
+        "pattern": "frontmatter",
+        "code": "MARKDOWN_FRONTMATTER_INVALID",
+        "phase": "derived",
+        "rootCause": "invalid-frontmatter",
+        "remediation": "Regenerate the derived Markdown file."
+      },
+      {
+        "pattern": "\\$schema",
+        "code": "RUNTIME_SCHEMA_MISSING",
+        "phase": "runtime-config",
+        "rootCause": "runtime-config-contract",
+        "remediation": "Regenerate root opencode.json."
+      },
+      {
+        "pattern": "opencode\\.json|runtime config",
+        "code": "RUNTIME_CONFIG_INVALID",
+        "phase": "runtime-config",
+        "rootCause": "runtime-config-contract",
+        "remediation": "Regenerate root opencode.json from expert.json."
+      },
+      {
+        "pattern": "avatar",
+        "code": "AVATAR_CONTRACT_INVALID",
+        "phase": "resource",
+        "rootCause": "avatar-contract",
+        "remediation": "Declare a valid portable avatar and regenerate."
+      },
+      {
+        "pattern": "symlink",
+        "code": "PACKAGE_SYMLINK_FORBIDDEN",
+        "phase": "security",
+        "rootCause": "unsafe-path",
+        "remediation": "Replace the symlink with an owned regular file."
+      },
+      {
+        "pattern": "\\.name: is required|description is required",
+        "code": "MANIFEST_REQUIRED_FIELD_MISSING",
+        "phase": "manifest",
+        "rootCause": "missing-manifest-field",
+        "remediation": "Add the required manifest field."
+      },
+      {
+        "pattern": "subagents must contain at least one",
+        "code": "MANIFEST_TEAM_SUBAGENTS_MISSING",
+        "phase": "manifest",
+        "rootCause": "missing-team-role",
+        "remediation": "Declare at least one subagent."
+      },
+      {
+        "pattern": "missing agent definitions directory",
+        "code": "DERIVED_AGENT_DIRECTORY_MISSING",
+        "phase": "derived",
+        "rootCause": "missing-derived-agent",
+        "remediation": "Regenerate Agent Markdown files."
+      },
+      {
+        "pattern": "missing skill directory",
+        "code": "DERIVED_SKILL_DIRECTORY_MISSING",
+        "phase": "derived",
+        "rootCause": "missing-derived-skill",
+        "remediation": "Regenerate supplemental Skill files."
+      },
+      {
+        "pattern": "missing (?:primary |sub)?agent file",
+        "code": "DERIVED_AGENT_FILE_MISSING",
+        "phase": "derived",
+        "rootCause": "missing-derived-agent",
+        "remediation": "Regenerate Agent Markdown files."
+      },
+      {
+        "pattern": "missing skill file",
+        "code": "DERIVED_SKILL_FILE_MISSING",
+        "phase": "derived",
+        "rootCause": "missing-derived-skill",
+        "remediation": "Regenerate supplemental Skill files."
+      },
+      {
+        "pattern": "recommended count is",
+        "code": "MANIFEST_RECOMMENDED_COUNT",
+        "phase": "manifest",
+        "rootCause": "manifest-recommendation",
+        "remediation": "Use the recommended number of user-facing examples where practical."
+      }
+    ]
+  },
   "evidenceSchemaVersion": 2,
+  "cli": {
+    "defaultSchemaVersion": 2,
+    "supportedSchemaVersions": [1, 2],
+    "formats": ["human", "json"],
+    "v2Fields": [
+      "schemaVersion",
+      "operation",
+      "ok",
+      "status",
+      "evidenceLevel",
+      "gates",
+      "runtime",
+      "execution",
+      "provenance",
+      "findings",
+      "data"
+    ],
+    "exitCodes": {
+      "success": 0,
+      "contractOrSafety": 1,
+      "argumentEnvironmentOrVersion": 2,
+      "internal": 3,
+      "runtimePolicyBlocked": 4
+    }
+  },
+  "gates": {
+    "names": ["archive", "contract", "portability", "install", "configLoad"],
+    "values": ["passed", "failed", "blocked", "not-run"]
+  },
+  "evidenceLevels": ["invalid", "valid", "installable", "config-loadable"],
+  "runtimeStatuses": ["not-tested", "blocked", "verified"],
+  "receiptContract": {
+    "writeVersion": 3,
+    "readVersions": [1, 2, 3],
+    "extendedOwnershipVersions": [2, 3],
+    "configLoadableVersions": [3],
+    "v3Sha256Fields": [
+      "packageTreeSha256",
+      "manifestSha256",
+      "managerContractSha256",
+      "targetCapabilitiesSha256",
+      "projectionSha256"
+    ],
+    "v3StringFields": ["targetOpenCodeVersion"],
+    "projectionSchemaVersion": 1,
+    "driftPreviewSchemaVersion": 1
+  },
+  "driftRecovery": {
+    "schemaVersion": 1,
+    "rootName": ".expert-drift-backups",
+    "manifestName": "manifest.json",
+    "payloadDirectory": "payload",
+    "publishProtocol": "posix-exclusive-directory-v1",
+    "backupIdPattern": "^[0-9]{8}T[0-9]{6}\\.[0-9]{6}Z(?:-[0-9]{3})?$",
+    "dirMode": 448,
+    "fileMode": 384
+  },
+  "workspaceLock": {
+    "fileName": ".mobilework-expert-manager.lock",
+    "protocolVersion": 2,
+    "fields": ["ownerToken", "pid", "createdAt", "heartbeatAt", "protocolVersion"],
+    "fileMode": 384,
+    "platformBackends": {
+      "posix": "implemented",
+      "windows": "implemented"
+    },
+    "windowsProtocol": {
+      "directoryAnchor": "reparse-free-held-handle-chain",
+      "ownerIdentity": "volume-serial-and-128-bit-file-id",
+      "release": "source-handle-no-replace-quarantine-then-delete-on-close",
+      "targetTransactionSecurity": "partial"
+    },
+    "staleReclaim": "not-implemented"
+  },
+  "reservedCommands": {
+    "source": "validated-host-capabilities",
+    "fallbackPolicy": "deny-known-server-builtins",
+    "names": ["init", "review"]
+  },
+  "trustedConversionAdapter": {
+    "schemaVersion": 1,
+    "implementationStatus": "defined",
+    "invocationAuthority": "desktop-host-only",
+    "managerDirectExecution": "forbidden",
+    "forbiddenDirectExecutables": [
+      "parse-document",
+      "uv",
+      "package-script",
+      "arbitrary-libreoffice-path"
+    ],
+    "inputFields": ["sourceSha256", "sourceType"],
+    "outputFields": ["artifactSha256", "anchors", "provider"],
+    "anchorTypes": ["page", "table", "slide"],
+    "providerFields": ["id", "version", "sha256"],
+    "unavailableAction": "conversion-required",
+    "runtimeEvidenceRequired": true
+  },
+  "requirementsDiscovery": {
+    "schemaVersion": 11,
+    "ledgerPersistence": "session-only",
+    "ledgerFields": [
+      "decision_id",
+      "source",
+      "status",
+      "dependencies",
+      "asked_via",
+      "blocked_by",
+      "resume_status"
+    ],
+    "sources": ["user", "trusted-material", "candidate", "technical-mapping"],
+    "statuses": [
+      "open",
+      "asked",
+      "answered",
+      "proposed",
+      "confirmed",
+      "blocked",
+      "superseded"
+    ],
+    "askedVia": [null, "tool", "body"],
+    "questionChannelsMutuallyExclusive": true,
+    "questionChannelLimits": {
+      "toolAvailable": "up-to-three-independent-question-ready-decisions",
+      "toolUnavailable": "one-concise-composite-business-question",
+      "bodyQuestionCount": 1,
+      "bodyQuestionMustNotUseNumberedSubquestions": true
+    },
+    "questionChannelEvidence": {
+      "askedViaSemantics": "agent-session-bookkeeping",
+      "hostAssertionRequires": "complete-host-question-channel-ledger",
+      "missingHostEvidenceStatus": "not-verified",
+      "skillTextCountsAsHostEvidence": false,
+      "assistantSelfReportCountsAsHostEvidence": false
+    },
+    "decisionIdentity": {
+      "scope": "session",
+      "basis": "semantic-material-choice",
+      "paraphraseCreatesNewDecision": false,
+      "newEvidenceAction": "update-existing-decision",
+      "unansweredAskedAction": "carry-forward-without-reasking"
+    },
+    "decisionIntroduction": {
+      "scope": "material-decisions-not-already-established-by-user-or-trusted-current-design",
+      "admissionPrecedes": [
+        "dependency-reconciliation",
+        "question-frontier-selection"
+      ],
+      "requiresAtLeastOne": [
+        "explicit-user-current-choice",
+        "trusted-concrete-current-candidate-or-execution-path"
+      ],
+      "genericIntentInsufficient": [
+        "paid-inference-alone",
+        "user-supplied-technical-term-alone",
+        "hypothetical-future-provider-or-connector"
+      ],
+      "deferredOrBlockedBindingAction": "project-no-execution-guard-onto-existing-blocker-without-new-open-or-asked-decision",
+      "outboundData": {
+        "questionReadyRequires": "explicit-user-current-boundary-or-trusted-concrete-external-data-path",
+        "noConcretePathAction": "forbid-network-and-data-egress-and-carry-guard-with-existing-blocker",
+        "explicitUserBoundaryAction": "record-or-update-material-decision",
+        "laterConcretePathAction": "introduce-or-update-decision-with-provenance-without-treating-guard-as-authorization",
+        "guard": {
+          "scope": ["network", "data-egress"],
+          "questionState": null,
+          "consumesDecisionBudget": false,
+          "blocksWholeCardDesignConfirmation": false,
+          "releaseCondition": "concrete-path-classified-and-explicitly-authorized-or-proven-no-egress"
+        }
+      }
+    },
+    "materialImpacts": [
+      "behavior",
+      "permission",
+      "cost",
+      "runtime-prerequisite"
+    ],
+    "dependencySemantics": {
+      "scope": "selection-resolution-only",
+      "edgeRequires": [
+        "explicit-user-deferral",
+        "trusted-evidence-that-prerequisite-changes-candidate-set-or-comparison"
+      ],
+      "sharedExecutionGuardCreatesEdge": false,
+      "executionOnlyNeedAction": "keep-admitted-and-applicable-material-decision-as-independent",
+      "unresolvedExecutionNeedAction": "block-generation-and-execution-without-suppressing-independent-question-frontier",
+      "answeredPrerequisiteWithoutCrossResolution": "preserve-dependent-open-or-asked-and-recompute-frontier",
+      "relationUpdate": "same-decision-id-with-provenance-without-budget-reset"
+    },
+    "stateTransitionSemantics": {
+      "negativePrerequisiteAnswer": "answer-prerequisite-and-preserve-unsolved-dependent-open-or-asked",
+      "conditionalDeferralRequires": "explicit-future-resolution-condition",
+      "conditionalDeferralAction": "preserve-original-pending-decision-and-resume-when-explicit-condition-resolves",
+      "explicitFinalRejectionAction": "block-or-supersede-rejected-path-and-do-not-reask-without-user-revision",
+      "newCandidateEvidenceReopensExplicitRejection": false,
+      "authorizationChange": "explicit-user-evidence-only-with-same-decision-id-and-budget-history",
+      "targetChange": "forbidden-without-user-decision"
+    },
+    "materialDecisionExecutionGate": {
+      "blockingStates": ["open", "asked", "blocked"],
+      "requiresCurrentWholeCardConfirmation": true,
+      "questionFrontierCoupling": "none"
+    },
+    "technicalMappingReturn": {
+      "trigger": "any-material-impact-decision-or-change",
+      "requiredSequence": [
+        "record-or-update-material-decision",
+        "invalidate-prior-confirmation",
+        "reconcile-current-decision-states",
+        "merge-current-decision-states-into-card",
+        "render-complete-updated-business-card"
+      ],
+      "responseGate": {
+        "name": "full-card-first",
+        "sameAssistantTurn": true,
+        "sequenceMustBeFirst": true,
+        "beforeSequenceForbidden": [
+          "development-details",
+          "development-confirmation-card",
+          "architecture-or-technical-binding",
+          "blocked-summary",
+          "implementation-options"
+        ],
+        "developmentDetails": "defer-until-current-whole-card-confirmation"
+      },
+      "stateReconciliation": {
+        "trigger": "explicit-unavailable-or-not-established-prerequisite-before-tail-selection",
+        "unavailablePrerequisiteState": "blocked",
+        "dependentDecisionStates": ["open", "asked"],
+        "dependencyFieldMeaning": "decision-lists-direct-prerequisite-decision-ids",
+        "propagationDirection": "prerequisite-to-dependent",
+        "dependencyTraversal": "transitive-reachable-closure",
+        "recomputeMode": "full-graph-before-every-tail-selection",
+        "graphValidationScope": "all-ledger-records-regardless-of-status",
+        "blockingCondition": "any-reachable-prerequisite-blocked-or-unavailable",
+        "independenceCondition": "no-reachable-blocking-prerequisite",
+        "blockerAggregation": "sorted-unique-root-decision-ids",
+        "explicitRootBlockerRepresentation": "blocked-by-contains-own-decision-id",
+        "resumeStatusValues": ["open", "asked"],
+        "resumeStatusCapture": "once-on-first-block-from-open-or-asked",
+        "unknownDependency": {
+          "code": "REQUIREMENTS_UNKNOWN_DEPENDENCY",
+          "affectedScope": "owner-and-reachable-pending-dependents"
+        },
+        "dependencyCycle": {
+          "code": "REQUIREMENTS_DEPENDENCY_CYCLE",
+          "selfLoopIsCycle": true,
+          "affectedScope": "cycle-members-and-reachable-pending-dependents"
+        },
+        "dependentDecisionAction": "mark-transitive-reachable-pending-dependents-blocked",
+        "independentDecisionAction": "remain-pending",
+        "historyAction": "preserve-prior-pending-state-decision-id-asked-via-and-budget-charge",
+        "explicitRootReopenCondition": "new-user-or-trusted-evidence-resolves-original-decision",
+        "derivedReopenCondition": "blocked-by-empty-and-dependency-graph-valid",
+        "reopenAction": "restore-prior-pending-state-without-new-id-budget-or-reasking",
+        "invalidGraphConfirmation": "forbidden",
+        "invalidGraphGeneration": "forbidden",
+        "invalidGraphTailAction": "after-card-report-stable-diagnostic-only",
+        "tailSelectionBasis": "reconciled-current-card-states-and-question-ready-frontier"
+      },
+      "questionSelection": {
+        "basis": "reconciled-valid-full-graph",
+        "candidateStates": ["open"],
+        "resolvedPrerequisiteStates": ["answered", "proposed", "confirmed"],
+        "questionReadyCondition": "all-transitive-prerequisites-resolved",
+        "selection": "current-question-ready-roots-only",
+        "limitSource": "requirementsDiscovery.limits.perRoundDecisions",
+        "askedRootAction": "carry-without-reasking",
+        "readyBatchAction": "process-all-mutually-independent-question-ready-open-decisions-up-to-per-round-limit",
+        "unrelatedAskedAction": "carry-waiting-state-without-suppressing-other-question-ready-roots",
+        "descendantAction": "defer-without-question-or-budget-charge",
+        "noReadyButPendingAction": "carry-pending-and-forbid-whole-card-confirmation",
+        "frontierPrecedence": {
+          "recomputeAfterBlockerRecovery": true,
+          "questionReadyOpenAction": "ask-after-card-in-same-assistant-turn",
+          "cannotBeDeferredBy": [
+            "whole-card-confirmation",
+            "development-details-boundary"
+          ],
+          "technicalChoiceSurface": "trusted-candidate-selection-in-business-language-only"
+        },
+        "businessCandidateAction": "route-question-ready-choice-after-card-before-whole-card-confirmation",
+        "implementationBindingAction": "defer-identifiers-configuration-credentials-and-field-mapping-until-business-choice-and-current-card-confirmed",
+        "candidateEvidence": {
+          "required": [
+            "stable-business-label",
+            "decision-relevant-differences",
+            "trusted-provenance"
+          ],
+          "insufficientAction": "keep-selection-pending-and-request-only-missing-comparison-evidence",
+          "runtimeClaim": "forbidden-without-runtime-evidence"
+        },
+        "resolutionRouting": {
+          "explicitUserChoice": "ask-question-ready-business-choice",
+          "explicitDelegation": "propose-from-sufficient-trusted-candidate-evidence",
+          "trustedDerivation": "derive-with-provenance-without-reasking",
+          "preserveAcrossBlocking": "decision-id-source-user-authorization-and-budget",
+          "insufficientEvidence": "keep-open-and-request-only-missing-evidence"
+        }
+      },
+      "cardDecisionStates": ["open", "asked", "answered", "proposed", "confirmed", "blocked"],
+      "pendingDecisionStates": ["open", "asked"],
+      "questionEligibleStates": ["open"],
+      "askedViaWriteOnce": true,
+      "pendingDecisionAction": "after-card-ask-only-question-ready-open-decisions",
+      "noPendingDecisionAction": "after-card-request-single-whole-card-confirmation",
+      "wholeCardConfirmationCondition": "no-pending-decisions-and-dependency-graph-valid-after-state-reconciliation",
+      "blockedConfirmationScope": "design-only",
+      "generation": "forbidden-until-unblocked-and-reconfirmed"
+    },
+    "businessStandards": {
+      "authority": "user-or-trusted-material",
+      "threshold": "explicit-and-computable",
+      "unsupportedDefaults": "forbidden",
+      "unresolvedDecisionState": "open",
+      "unavailableDecisionState": "blocked",
+      "executionWhileUnresolved": "blocked",
+      "decisionPairing": {
+        "components": ["authority-source", "executable-rule-value"],
+        "separateDecisionIds": true,
+        "sameRoundWhen": "both-question-ready-and-independent",
+        "orderedWhen": "executable-rule-value-depends-on-authority-source",
+        "crossResolution": "explicit-evidence-only",
+        "unsupportedInference": "forbidden"
+      },
+      "authorityAnswerWithoutComputableRule": {
+        "authoritySourceState": "answered",
+        "executableRuleValueState": "preserve-open-or-asked",
+        "crossResolution": "none-without-explicit-computable-evidence",
+        "frontierAction": "recompute-and-route-original-rule-decision",
+        "questionAction": "ask-only-for-authorized-explicit-computable-rule-without-changing-target"
+      }
+    },
+    "presentationBoundary": {
+      "defaultSurface": "business-card",
+      "scope": [
+        "business-card",
+        "information-sources-appendix",
+        "discovery-tail-before-current-card-confirmation"
+      ],
+      "developmentDetailsActivation": "explicit-request-after-current-whole-card-confirmation",
+      "forbiddenDefaultCategories": [
+        "manifest-fields",
+        "paths",
+        "hashes",
+        "receipt",
+        "sidecar",
+        "permission-enums",
+        "autonomy-enums",
+        "translated-permission-or-autonomy-level-labels",
+        "machine-skill-identifiers",
+        "technical-binding-syntax",
+        "external-entry-implementation-channel-types"
+      ],
+      "requiredBusinessEffects": [
+        "who-decides",
+        "fixed-vs-discretionary-steps",
+        "confirmation-points",
+        "allowed-side-effects",
+        "stop-rework-escalation"
+      ],
+      "enumTranslation": "describe-observable-behavior-without-level-label-or-enum-token",
+      "userSuppliedTechnicalTerms": "preserve-only-as-provenance-fact-without-expansion",
+      "questionReadyBusinessCandidates": "trusted-business-labels-and-observable-differences-allowed-before-current-card-confirmation",
+      "implementationBindingDetails": "defer-until-business-choice-and-current-card-confirmed",
+      "externalEntryDiscovery": {
+        "businessQuestion": "ask-whether-a-real-usable-verified-business-entry-exists",
+        "preConfirmationChannelEnumeration": "forbidden-in-assistant-authored-questions",
+        "implementationChannelTypes": [
+          "connector",
+          "mcp",
+          "url",
+          "startup-command"
+        ],
+        "requiredPrerequisite": "trusted-evidence-of-real-usable-entry",
+        "missingEntryAction": "label-external-entry-integration-delivery-required-and-block-binding-and-execution",
+        "bindingAction": "defer-channel-selection-and-details-until-prerequisite-and-current-card-confirmed",
+        "runtimeClaim": "forbidden-without-runtime-evidence"
+      }
+    },
+    "capabilityDisclosure": {
+      "businessCard": [
+        "business-capability-name",
+        "role-ownership"
+      ],
+      "machineSkillIdentifiers": "development-details-after-current-whole-card-confirmation"
+    },
+    "executionLayerMapping": {
+      "scriptOwnsAllConfirmedSteps": "scripted-only",
+      "separateFixedLayerRequires": "confirmed-agent-sop-or-branch-rules",
+      "businessDisclosure": "plain-language",
+      "enumDisclosure": "development-details-after-current-whole-card-confirmation"
+    },
+    "businessCardSections": [
+      "goal-and-success",
+      "roles-and-responsibilities",
+      "inputs-and-outputs",
+      "stable-flow",
+      "resources-and-capabilities",
+      "external-connections",
+      "side-effect-and-cost-boundaries",
+      "quality-and-exceptions"
+    ],
+    "businessCardAppendices": ["information-sources"],
+    "limits": {
+      "perRoundDecisions": 3,
+      "expert": {"rounds": 2, "decisions": 6},
+      "team": {"rounds": 3, "decisions": 9}
+    },
+    "extension": {
+      "rounds": 1,
+      "reasons": ["safety", "permission", "connector"],
+      "explanationRequired": true
+    },
+    "preConfirmationForbiddenEffects": [
+      "filesystem-write",
+      "network",
+      "process",
+      "plugin",
+      "mcp"
+    ],
+    "finalConfirmationConsumesBudget": false,
+    "environmentTaskFeatures": {
+      "consultation": [],
+      "design-confirmation": [],
+      "generate": ["core", "git"],
+      "validate": ["core"],
+      "import": ["core"],
+      "import-reference-excel": ["core", "excel"],
+      "package": ["core", "package"],
+      "bundle-docx": ["core", "bundle-docx"],
+      "trusted-config": ["core", "config-load"],
+      "evaluation": ["core", "coverage"]
+    }
+  },
   "packageConfigFile": "opencode.json",
   "workspaceConfigFile": ".opencode/opencode.jsonc",
   "receiptDirectory": ".opencode/.expert-installs",
+  "inputLimits": {
+    "maxEntries": 5000,
+    "maxTotalBytes": 67108864,
+    "maxFileBytes": 16777216,
+    "maxPathCharacters": 512,
+    "maxPathDepth": 32
+  },
+  "packageSnapshotExclusions": {
+    "rootDirectoryNames": [
+      ".git"
+    ],
+    "directoryNames": [],
+    "fileNames": [],
+    "fileSuffixes": []
+  },
   "archiveLimits": {
     "maxEntries": 5000,
     "maxTotalUncompressedBytes": 536870912,

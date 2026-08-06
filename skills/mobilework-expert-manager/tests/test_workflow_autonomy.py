@@ -716,8 +716,8 @@ class WorkflowAutonomyTests(unittest.TestCase):
 
     def test_server_command_registry_is_shared_by_both_command_sources(self) -> None:
         self.assertEqual(
-            workflow_autonomy.OPENCODE_SERVER_COMMAND_REGISTRY_VERSION,
-            "v1.16.2",
+            workflow_autonomy.OPENCODE_SERVER_COMMAND_REGISTRY_SOURCE,
+            "validated-host-capabilities",
         )
         self.assertEqual(
             workflow_autonomy.OPENCODE_SERVER_BUILTIN_COMMANDS,

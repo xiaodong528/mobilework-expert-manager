@@ -182,9 +182,17 @@ packager 在目标目录内创建 sibling temporary zip，依次运行 Python CR
 slug、contract、文件相对路径和 SHA-256 先整体校验；缺少 receipt、hash 变化、路径逃逸或配置
 漂移时先停止，不猜测归属。安装前已经存在且没有 receipt owner 的同值列表项或依赖不会被新包
 认领，卸载时必须保留。
-新安装写 receipt contract 2。contract 1 继续可读，但旧版可能错误认领同值列表项或依赖，因此
-升级与卸载只信任它的文件、mapping 和 scalar ownership；旧版 `plugin`、`instructions` 与依赖
-一律保守保留。缺少 `bindings` 的旧 receipt 仍然有效。
+新安装及成功升级写 receipt contract 3，并绑定 package tree、manifest、manager contract、安装时
+resolved target（允许 `unknown`）、target capabilities 与包拥有的 projection。只有 receipt target
+与 trusted-config 显式输入的 exact target 一致时才能继续 `config-loadable` 证据链。contract 1/2
+继续可读；contract 1 可能错误
+认领同值列表项或依赖，因此升级与卸载只信任它的文件、mapping 和 scalar ownership，旧版
+`plugin`、`instructions` 与依赖一律保守保留。缺少 `bindings` 的旧 receipt 仍然有效。
+
+同 slug `--force` 只允许无漂移升级。安装器在升级或卸载的任何 staging 或 workspace 写入前验证
+全部 receipt-owned 文件（包括共享文件）、配置与依赖，并在提交前重检；发现漂移时返回脱敏
+preview 和 state-bound SHA-256，exit 1，且目标字节不变。经显式四重确认的 POSIX 高危丢弃与
+exact backup 恢复合同统一见 `manager-contract.md`；普通 `--force` 永不丢弃漂移。
 
 旧 `.mobilework-engine` 只作为迁移检测和禁止的业务产物目录保留；安装器不读取、不写入、
 不双写也不自动删除它。重新安装专家是迁移到 `.opencode` 的支持路径。
