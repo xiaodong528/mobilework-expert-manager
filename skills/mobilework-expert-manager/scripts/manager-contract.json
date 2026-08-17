@@ -1,6 +1,38 @@
 {
   "schemaVersion": 1,
-  "contractVersion": "2.14.0",
+  "contractVersion": "2.20.0",
+  "agentSkillsSpecification": {
+    "page": "https://agentskills.io/specification",
+    "repository": "https://github.com/agentskills/agentskills",
+    "repositorySnapshot": {
+      "commit": "69ef37e9424c0a7ea9dd2293b559e43ec8176379",
+      "url": "https://github.com/agentskills/agentskills/tree/69ef37e9424c0a7ea9dd2293b559e43ec8176379"
+    },
+    "authority": "official-page",
+    "validatorRole": "cross-check-oracle",
+    "officialHardRuleFailure": "block",
+    "officialRecommendationFinding": "warning"
+  },
+  "expertRuntimeProjection": {
+    "command": {
+      "agentMode": "all",
+      "subtask": true
+    },
+    "agent": {
+      "canonicalStepField": "steps",
+      "legacyStepInputFields": [
+        "max_turns",
+        "maxTurns"
+      ],
+      "deprecatedStepFields": [
+        "maxSteps"
+      ],
+      "forbiddenSamplingFields": [
+        "temperature",
+        "top_p"
+      ]
+    }
+  },
   "findingCatalogVersion": 2,
   "findingCatalog": {
     "fallbackBySeverity": {
@@ -103,11 +135,39 @@
         "remediation": "Use steps in new manifests and regenerate."
       },
       {
-        "pattern": "permission_reason is required",
-        "code": "PERMISSION_REASON_REQUIRED",
+        "pattern": "ROLE_AUTONOMY_REQUIRED|autonomy is required",
+        "code": "ROLE_AUTONOMY_REQUIRED",
         "phase": "permission",
-        "rootCause": "unjustified-permission-escalation",
-        "remediation": "Add permission_reason or keep the calculated action."
+        "rootCause": "missing-role-autonomy",
+        "remediation": "Choose an explicit autonomy for every role before structural modification."
+      },
+      {
+        "pattern": "ROLE_AUTONOMY_INVALID|autonomy.*must be one of|unsupported role autonomy",
+        "code": "ROLE_AUTONOMY_INVALID",
+        "phase": "permission",
+        "rootCause": "invalid-role-autonomy",
+        "remediation": "Use scripted, fixed, bounded, guided, or adaptive."
+      },
+      {
+        "pattern": "cannot raise role autonomy baseline",
+        "code": "PERMISSION_AUTONOMY_ESCALATION_FORBIDDEN",
+        "phase": "permission",
+        "rootCause": "permission-exceeds-role-autonomy",
+        "remediation": "Remove the escalation or choose a higher role autonomy explicitly."
+      },
+      {
+        "pattern": "legacy role autonomy|LEGACY_ROLE_AUTONOMY_DEFAULTED",
+        "code": "LEGACY_ROLE_AUTONOMY_DEFAULTED",
+        "phase": "permission",
+        "rootCause": "legacy-role-autonomy-missing",
+        "remediation": "Persist an explicit role autonomy before structural modification."
+      },
+      {
+        "pattern": "legacy primary|LEGACY_PRIMARY_AGENT_MODE",
+        "code": "LEGACY_PRIMARY_AGENT_MODE",
+        "phase": "manifest",
+        "rootCause": "legacy-primary-agent-mode",
+        "remediation": "Migrate the main Agent mode to all during structural modification."
       },
       {
         "pattern": "permission\\.bash.*(?:unconditional|wildcard)|generated permission\\.bash",
@@ -256,6 +316,7 @@
     "defaultSchemaVersion": 2,
     "supportedSchemaVersions": [1, 2],
     "formats": ["human", "json"],
+    "streamEncoding": "utf-8",
     "v2Fields": [
       "schemaVersion",
       "operation",
@@ -350,7 +411,7 @@
     "runtimeEvidenceRequired": true
   },
   "requirementsDiscovery": {
-    "schemaVersion": 11,
+    "schemaVersion": 14,
     "ledgerPersistence": "session-only",
     "ledgerFields": [
       "decision_id",
@@ -385,6 +446,275 @@
       "missingHostEvidenceStatus": "not-verified",
       "skillTextCountsAsHostEvidence": false,
       "assistantSelfReportCountsAsHostEvidence": false
+    },
+    "creationTargetSelection": {
+      "schemaVersion": 1,
+      "appliesTo": [
+        "create-expert",
+        "create-team",
+        "convert-material-to-new-expert"
+      ],
+      "excludedOperations": [
+        "modify-existing",
+        "install",
+        "validate",
+        "package"
+      ],
+      "binding": {
+        "scope": "current-whole-card-confirmation-version",
+        "invalidatedByDesignChange": true,
+        "reselectionRequiredAfterInvalidation": true
+      },
+      "question": {
+        "toolPreference": {
+          "recognizedNames": [
+            "AskUserQuestion",
+            "question"
+          ],
+          "equivalentCapability": "single-select-with-custom-input",
+          "whenAvailable": "must-use"
+        },
+        "request": {
+          "header": "安装位置",
+          "question": "确认后，将新专家创建到哪里？",
+          "multiple": false,
+          "custom": true,
+          "options": [
+            {
+              "label": "我的专家（MobileWork 个人专家目录）",
+              "description": "由 MobileWork 宿主解析；独立运行默认使用 ~/.mobilework/experts/personal。"
+            },
+            {
+              "label": "当前工作空间",
+              "description": "创建到当前工作空间根目录。"
+            }
+          ]
+        },
+        "replyMapping": {
+          "event": "question.replied",
+          "eventAnswerPath": "properties.answers[0][0]",
+          "requiredQuestionAnswerCount": 1,
+          "requiredSelectedLabelCount": 1,
+          "fixedLabels": [
+            {
+              "label": "我的专家（MobileWork 个人专家目录）",
+              "creationTarget": "my-experts"
+            },
+            {
+              "label": "当前工作空间",
+              "creationTarget": "workspace"
+            }
+          ],
+          "unmatchedSingleAnswer": "custom"
+        },
+        "fallback": {
+          "when": "no-equivalent-ask-user-tool-available",
+          "channel": "assistant-body",
+          "question": "确认后，将新专家创建到哪里？",
+          "choices": [
+            "我的专家（MobileWork 个人专家目录）",
+            "当前工作空间"
+          ],
+          "customInstruction": "也可以回复其他已存在的绝对父目录。",
+          "mustAwaitReply": true
+        }
+      },
+      "budget": {
+        "consumesDiscoveryRound": false,
+        "consumesDecisionBudget": false,
+        "invalidatesConfirmedBusinessCard": false
+      },
+      "executionGate": {
+        "position": "after-current-whole-card-confirmation-before-execution",
+        "preAnswerForbidden": [
+          "environment-preflight",
+          "process",
+          "filesystem-write",
+          "network",
+          "data-egress",
+          "plugin",
+          "mcp",
+          "permission-expansion",
+          "generator",
+          "validation"
+        ],
+        "validAnswerCount": 1,
+        "toolUnavailableAction": "ask-in-conversation",
+        "bodyFallbackAllowed": true
+      },
+      "errors": {
+        "ambiguousAnswer": "CREATION_TARGET_ANSWER_AMBIGUOUS",
+        "invalidPath": "CREATION_TARGET_PATH_INVALID",
+        "targetOutsideRoot": "TARGET_OUTSIDE_ROOT"
+      },
+      "customPath": {
+        "meaning": "parent-directory",
+        "finalPath": "<parent>/<slug>",
+        "mustExist": true,
+        "mustBeAbsolute": true,
+        "forbidden": [
+          "filesystem-root",
+          "symlink",
+          "windows-reparse-point",
+          "special-file",
+          "path-escape"
+        ],
+        "overwriteAction": "separate-force-confirmation"
+      }
+    },
+    "roleAutonomySelection": {
+      "schemaVersion": 1,
+      "appliesTo": [
+        "create-expert",
+        "create-team",
+        "structural-modification"
+      ],
+      "excludedOperations": [
+        "read-only-diagnostics",
+        "validate",
+        "install",
+        "package"
+      ],
+      "roles": {
+        "expert": ["agent"],
+        "team": ["primary_agent", "each-subagent"]
+      },
+      "values": [
+        {"value": "scripted", "label": "低", "externalSkill": "deny"},
+        {"value": "fixed", "label": "较低", "externalSkill": "deny"},
+        {"value": "bounded", "label": "中", "externalSkill": "deny"},
+        {"value": "guided", "label": "较高", "externalSkill": "ask"},
+        {"value": "adaptive", "label": "高", "externalSkill": "allow"}
+      ],
+      "selectionRule": "one-explicit-value-per-role",
+      "permissionBaseline": "role-autonomy-only",
+      "workflowPhaseAffectsPermission": false,
+      "legacyReadInstallDefault": "bounded",
+      "legacyWarning": "LEGACY_ROLE_AUTONOMY_DEFAULTED",
+      "structuralModificationRequiresExplicit": true
+    },
+    "capabilityImplementationMapping": {
+      "defaultMode": "manager-selects-minimal-fit",
+      "rolePresenceCreatesResource": false,
+      "responsibilityTextDirectProjection": "forbidden",
+      "candidateResourceTypes": [
+        "none",
+        "skill",
+        "custom-tool",
+        "opencode-plugin"
+      ],
+      "candidateEvidenceSources": [
+        "user-goal",
+        "role-responsibility",
+        "workflow",
+        "quality-requirement",
+        "trusted-material",
+        "explicit-request",
+        "uploaded-resource"
+      ],
+      "candidateOnlyEvidenceSources": [
+        "role-responsibility",
+        "workflow",
+        "quality-requirement"
+      ],
+      "resourceSemantics": {
+        "none": "no-capability-resource-generated",
+        "skill": "reusable-method-checklist-sop-guidance-or-python-shell-script-bundle",
+        "custom-tool": "agent-invoked-deterministic-javascript-or-typescript-capability",
+        "opencode-plugin": "event-listener-tool-interceptor-or-runtime-behavior-modifier"
+      },
+      "selectionConstraints": {
+        "externalSystemAccessUsesMcpNotPlugin": true,
+        "existingPythonOrShellStaysInSkillExecutor": true,
+        "preferLeastRuntimePower": true,
+        "oneResourcePerRuntimeResponsibility": true,
+        "multiResourceCombinationRequiresDistinctConfirmedRuntimeResponsibilities": true,
+        "sharedCapabilityUsesOneResourceWithMultipleRoleReferences": true,
+        "localPluginOwnership": "package-wide-not-role-owned",
+        "generatedExpertRuntimeMutation": "forbidden"
+      },
+      "businessTruthBoundary": {
+        "managerMayInferTechnicalMapping": true,
+        "managerMayProposeBusinessCapability": true,
+        "managerMayInventBusinessCapabilityOrRule": false,
+        "candidateRequires": [
+          "stable-business-label",
+          "observable-runtime-behavior",
+          "trusted-provenance"
+        ],
+        "missingBusinessRuleAction": "keep-material-decision-open-and-ask-authorized-source"
+      },
+      "authorization": {
+        "requiresCurrentWholeCardConfirmation": true,
+        "cardMustConfirm": [
+          "business-capability-name",
+          "usage-scope",
+          "trigger-or-invocation",
+          "inputs-and-outputs",
+          "visible-side-effects",
+          "permissions-cost-and-runtime-prerequisites",
+          "quality-gates",
+          "implementation-status"
+        ],
+        "technicalCarrierChoiceDelegatedToManager": true,
+        "extraTechnicalConfirmation": "not-required-for-behavior-preserving-mapping-within-confirmed-boundaries",
+        "materialMappingImpacts": [
+          "automatic-trigger",
+          "external-write",
+          "network",
+          "permission",
+          "dependency",
+          "cost",
+          "runtime-prerequisite"
+        ],
+        "materialMappingChangeAction": "invalidate-prior-confirmation-and-run-full-card-first",
+        "preReconfirmationWriteAction": "forbidden",
+        "generationAuthorizationScope": "current-expert-package-resources-only",
+        "generationDoesNotAuthorize": [
+          "install",
+          "enable",
+          "network-download",
+          "external-connection",
+          "permission-expansion",
+          "execute-generated-code",
+          "release"
+        ]
+      },
+      "naming": {
+        "skill": {
+          "format": "full-semantic-kebab-case",
+          "expertOrRolePrefixRequired": false,
+          "userMayModifySuggestedName": true
+        },
+        "customTool": {
+          "namespace": "<slug>-<name>-or-<slug>/<name>",
+          "workspaceCollisionNamespaceRequired": true
+        },
+        "localPlugin": {
+          "namespace": "<slug>-<name>-or-<slug>/<name>",
+          "workspaceCollisionNamespaceRequired": true
+        },
+        "legacyPurposePrefix": "preserved",
+        "internalReferenceFallback": "<slug>-reference-<alias>"
+      },
+      "zeroResourceProjection": {
+        "condition": "no-fit-confirmed-capability",
+        "topLevelSkills": "empty-or-omitted",
+        "roleSkills": "empty-or-omitted",
+        "skillsDirectory": "present-and-empty",
+        "toolsDirectory": "omitted",
+        "pluginsDirectory": "omitted",
+        "skillMarkdownCount": 0,
+        "customToolCount": 0,
+        "pluginCount": 0,
+        "opencodePluginConfig": "omitted"
+      },
+      "npmPlugin": {
+        "requiresTrustedExistingPackage": true,
+        "requiresExactVersion": true,
+        "versionFormat": "exact-semver-no-range",
+        "inventedPackageOrVersion": "forbidden"
+      }
     },
     "decisionIdentity": {
       "scope": "session",
@@ -592,6 +922,9 @@
         "information-sources-appendix",
         "discovery-tail-before-current-card-confirmation"
       ],
+      "allowedDefaultExceptions": [
+        "role-autonomy-selection-labels"
+      ],
       "developmentDetailsActivation": "explicit-request-after-current-whole-card-confirmation",
       "forbiddenDefaultCategories": [
         "manifest-fields",
@@ -603,6 +936,9 @@
         "autonomy-enums",
         "translated-permission-or-autonomy-level-labels",
         "machine-skill-identifiers",
+        "machine-custom-tool-identifiers",
+        "machine-plugin-identifiers",
+        "technical-carrier-types",
         "technical-binding-syntax",
         "external-entry-implementation-channel-types"
       ],
@@ -635,9 +971,16 @@
     "capabilityDisclosure": {
       "businessCard": [
         "business-capability-name",
-        "role-ownership"
+        "usage-scope",
+        "trigger-or-invocation",
+        "inputs-and-outputs",
+        "visible-side-effects",
+        "permissions-cost-and-runtime-prerequisites",
+        "quality-gates",
+        "implementation-status"
       ],
-      "machineSkillIdentifiers": "development-details-after-current-whole-card-confirmation"
+      "machineResourceIdentifiers": "development-details-after-current-whole-card-confirmation",
+      "technicalCarrierType": "manager-selected-after-current-whole-card-confirmation-without-extra-confirmation-when-boundaries-are-unchanged"
     },
     "executionLayerMapping": {
       "scriptOwnsAllConfirmedSteps": "scripted-only",

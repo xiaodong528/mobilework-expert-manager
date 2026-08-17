@@ -20,6 +20,8 @@ OpenCode 官方实时 JSON Schema 位于 `https://opencode.ai/config.json`，它
 
 - `expert.json` 是结构、运行能力和资源所有权的唯一真相源。
 - `opencode.json` 是生成器输出；不要直接编辑它来增加模型、provider、权限或运行能力。
+- 能力载体由管理器在已确认业务边界内选择；generator 只投影 manifest，不根据角色、职责、
+  附件名或目录名新增 Skill、custom tool 或 Plugin。
 - 生成器输出严格 JSON。官方解析器允许 comments 与 trailing commas，不改变专家包的严格 JSON 合同。
 - 核心 validator 使用本地 allowlist 和 manifest 投影做离线校验，不下载或内置完整官方 schema。
 - 官方 schema 只用于设计时核对和可选的联网兼容性 smoke；网络不可用不得影响核心校验。
@@ -90,28 +92,30 @@ description
 steps
 model
 variant
-temperature
-top_p
 hidden
 options
 permission
 ```
 
-- `mode` 从专家类型与角色位置派生，单专家和团长为 `primary`，团员为 `subagent`。
+- `mode` 从专家类型与角色位置派生，新建单专家和团长为 `all`，团员为 `subagent`。旧主 Agent
+  的 `primary` 只在未结构性修改时兼容校验和安装。
 - `description` 组合角色能力与触发条件，并与 agent Markdown frontmatter 一致。
 - `steps` 从 `expert.json` 的正式输入 `steps`，或仅限 MobileWork 的历史输入 `max_turns`、
   `maxTurns` 归一化得到；输出键始终只有 `steps`。
-- `model`、`variant`、`temperature`、`top_p`、`hidden`、`options` 只在对应角色显式声明时原样投影。
-- `permission` 从角色权限、skills、MCP 和团队委派关系派生，并与 agent Markdown 一致。
+- `model`、`variant`、`hidden`、`options` 只在对应角色显式声明时原样投影。
+- `permission` 只从角色 autonomy、skills、MCP、custom tool 和团队委派关系派生，并与 Agent
+  Markdown 一致；Workflow/Phase 不参与计算。
 
 `title` 只作为旧 MobileWork manifest 缺少 `name` 时的输入回退；新 manifest 使用 `name`。
 兼容读取后只派生标准 `displayName`/`description` 等字段，Agent Markdown 和
 `opencode.json.agent.<id>` 都不得生成 `title`。
 
-`variant` 要求同一角色声明 `model`；`hidden` 只允许团员。采样参数必须是 `0.0–1.0` 的有限数字。
-未声明字段必须省略，不能由 generator 猜测默认值。provider-specific 参数统一放入非空
-`options` 对象；角色顶层 `prompt`、`disable`、已弃用的 `maxSteps` 和未知字段拒绝。旧 manifest 的 `tools`
-只转换到 `permission`，不得出现在派生配置。
+`variant` 要求同一角色声明 `model`；`hidden` 只允许团员。未声明字段必须省略，不能由 generator
+猜测默认值。provider-specific 参数统一放入非空 `options` 对象，但不得用它重新引入
+`temperature` 或 `top_p`。角色顶层 `prompt`、`disable`、`temperature`、`top_p`、已弃用的
+`maxSteps` 和未知字段拒绝。旧包中的顶层采样字段只在未结构性修改时兼容读取并报告
+`LEGACY_AGENT_SAMPLING_FIELD`；重新生成前必须移除。旧 manifest 的 `tools` 只转换到
+`permission`，不得出现在派生配置。
 
 ## 4. 文件型扩展与根配置的关系
 
@@ -148,6 +152,17 @@ materialize。
 这些文件安装后与其他包共享 workspace 目录；可共存包的 plugin/tool 路径必须使用 slug
 命名空间，Agent、MCP、LSP 和 command key 也必须经过跨包冲突审计。独立安装与同 workspace
 顺序安装是两个不同验收项，不能用前者替代后者。
+
+Custom Tool 的语义以 [OpenCode Custom Tools](https://opencode.ai/docs/custom-tools/) 为依据：它是
+Agent 主动调用的确定性 JavaScript/TypeScript 能力，并通过角色 `custom_tools[]` 建立所有权。
+Plugin 的语义以 [OpenCode Plugins](https://opencode.ai/docs/plugins/) 为依据：它监听事件、拦截
+工具前后过程或修改运行时行为，是 package-wide 资源，不投影成角色私有能力。实际字段与发现
+行为仍必须满足目标 OpenCode capability contract。外部系统访问使用 MCP，不以 Plugin 代替连接器。
+本地 tool/Plugin 路径使用 `<slug>-<name>` 或 `<slug>/<name>` 命名空间；npm Plugin 只接受可信、
+真实存在且精确锁定版本的包。零资源映射省略 `plugin`，且不生成 tool/Plugin 文件或占位配置。
+
+生成后的业务 Agent 普通运行只消费这些派生配置，不得编辑 `opencode.json`、`expert.json` 或
+包内资源来改变能力映射。
 
 ## 5. Workspace 或用户级字段
 

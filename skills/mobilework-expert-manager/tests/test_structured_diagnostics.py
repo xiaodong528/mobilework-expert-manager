@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -262,7 +263,11 @@ class StructuredDiagnosticsTests(unittest.TestCase):
 
         self.assertEqual(
             [finding.code for finding in result.findings],
-            ["INPUT_SYMLINK_FORBIDDEN"],
+            [
+                "INPUT_REPARSE_POINT_FORBIDDEN"
+                if os.name == "nt"
+                else "INPUT_SYMLINK_FORBIDDEN"
+            ],
         )
         self.assertEqual(result.gates["contract"], "failed")
 

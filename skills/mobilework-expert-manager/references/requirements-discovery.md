@@ -111,6 +111,12 @@ Plugin 和 MCP 调用数必须都是 0。受控修改、只读诊断、校验、
 | 已有实现 | 本地文件、Git 仓库、现有 Python/Shell 脚本、JS/TS、Connector、MCP，或尚待开发。 |
 | 推荐结果 | 推荐模块、理由、置信度，以及唯一必要的确认问题。 |
 
+角色数量和职责文本不直接创建资源。管理器可以从用户目标、角色职责、流程、质量要求或可信资料
+提出能力候选，但每项候选都必须有稳定业务名称、可观察的运行行为和可信 provenance；不得把
+“一条职责”机械翻译成“一项 Skill”，也不得补写材料中不存在的业务规则、阈值、外部读写或运行
+副作用。候选完成业务确认后，管理器按最小运行权限自主映射为 `none`、`skill`、`custom-tool` 或
+`opencode-plugin`，用户不需要再为保持在已确认边界内的技术载体单独确认。
+
 首次三层回复中的每项推荐都必须写出：白话模块名、使用时机、使用角色或作用范围、推荐理由、
 副作用与现有实现状态。不能把这些内容留到后续“业务确认卡”才补，也不能用一句“是否同意
 以上方案”替代尚未确认的实现前提。
@@ -130,6 +136,10 @@ Plugin 和 MCP 调用数必须都是 0。受控修改、只读诊断、校验、
 | 主动查询或修改外部软件、服务、数据库 | 外部连接（MCP）。 |
 | 一项可被用户独立询问的专业职责 | 独立 Agent；需要多种职责协作时组成专家团（Team）。 |
 
+没有适合固化的能力时选择“无资源”，不为了角色、职责、流程、输出格式或质量门的存在生成占位
+Skill、custom tool 或 Plugin。同一运行职责只选择一种载体；只有多个互不相同且均已确认的运行
+职责才组合多种资源。同一能力只创建一份，多角色通过完整名称或所有权引用。
+
 允许组合模块。“发布前查询外部审批状态，未通过就阻止发布”需要 `MCP + Plugin`：MCP 查询
 审批系统，Plugin 在发布事件发生前执行拦截。不要把连接外部系统本身归给 Plugin。
 
@@ -139,6 +149,8 @@ Plugin 和 MCP 调用数必须都是 0。受控修改、只读诊断、校验、
 - Plugin 在事件发生前后自动运行；MCP 由 Agent 主动调用来读写外部系统。
 - Custom tool 是 Agent 主动调用的 JS/TS 能力；现有 Python/Shell 脚本放在 Skill 中，由确定性
   executor 运行。
+- Plugin 是 package-wide 运行行为，不伪装成角色私有能力；custom tool 才通过角色
+  `custom_tools[]` 声明明确所有权。
 - Reference 的角色分配用于路由和审计，不是访问控制。需要严格隔离时改用角色专属 Skill 或
   带权限的 MCP。
 
@@ -171,6 +183,12 @@ Plugin 和 MCP 调用数必须都是 0。受控修改、只读诊断、校验、
 自动匹配只提出候选。用户确认前不得生成资源、修改 `expert.json`、拉取 Git、启用代码、连接
 外部服务或扩大权限。
 
+业务确认卡必须确认每项能力的业务名称、使用范围、触发或调用方式、输入输出、可见副作用、
+权限/成本/运行前提、质量门和当前实现状态。整卡确认只授权在当前专家包内生成这些已确认资源，
+不授权安装、启用、联网下载、外部连接、发布或运行生成代码。若技术映射发现新的自动触发、外写、
+联网、权限、依赖、成本或 Runtime 前提，旧确认立即失效，按 `full-card-first` 完整重发业务卡；
+重新确认前保持零写入。
+
 ## 4. 信息完整性
 
 以下是内部完整性检查，不是默认展示模板。先把业务影响写入业务确认卡；字段、完整技能名、路径、
@@ -184,7 +202,8 @@ Plugin 和 MCP 调用数必须都是 0。受控修改、只读诊断、校验、
 - 核心职责、明确不负责的边界；
 - 输入、输出，以及是否存在值得固化为顶层 Workflow 的稳定任务合同；没有时明确写“无”；
 - 每个可由用户直接触发的稳定 workflow 是否需要 command，以及推荐名称、入口 agent 和输入方式；
-- 每项 skill 的来源、完整名称、分配角色、触发时机和预期产物；
+- 每项候选能力的稳定业务名称、使用范围、触发或调用方式、输入输出、可见副作用、权限/成本/
+  运行前提、质量门、实现状态和 provenance；技术映射在整卡确认后由管理器选择；
 - 质量门、异常处理和交付标准；
 - 是否需要 MCP、runtime extensions、外部资料和特殊权限。
 
@@ -195,7 +214,8 @@ Plugin 和 MCP 调用数必须都是 0。受控修改、只读诊断、校验、
 - 专家团目标、目标用户、输入、最终产物和成功标准；
 - 团长的职责、调度方式、验收责任和最终集成流程；
 - 每个团员的职责边界、输入、输出和委派条件；
-- 每项 skill 的来源、完整名称、触发时机、预期产物和一个或多个使用角色；
+- 每项候选能力的稳定业务名称、一个或多个使用角色、触发或调用方式、输入输出、可见副作用、
+  权限/成本/运行前提、质量门、实现状态和 provenance；技术映射在整卡确认后由管理器选择；
 - 用户上传技能是目录还是 ZIP；单专家自动分配，专家团必须确认一个、多个或全部成员；
 - 若声明 Workflow，确认串行/并行 Phase、角色依赖、handoff、返工和升级流程；parallel 同时确认
   必参与角色集合以及是否允许每个角色按输入动态创建多个实例，但不固定实例数或分片；
@@ -210,6 +230,8 @@ Plugin 和 MCP 调用数必须都是 0。受控修改、只读诊断、校验、
 
 | 用户需求 | 内部技术映射与按需开发细节 |
 |---|---|
+| 没有独立、可复用或需运行时固化的能力 | 不生成业务 Skill、custom tool 或 Plugin；顶层及角色 `skills[]` 为空或省略，保留空 `.opencode/skills/`，且不生成 `.opencode/tools/`、`.opencode/plugins/` 或 `opencode.json.plugin`。 |
+| 可复用方法、清单、SOP、指导材料或随包 Python/Shell 脚本 | 使用一个语义命名的 managed Skill；名称不强制专家或角色前缀，多角色引用同一完整名称。 |
 | 随包分发的领域资料、规范、案例、知识库或操作手册 | 本地资料使用 `reference_files[]` 与 local `references`；Git 资料使用 `references.<alias>.repository`。同时确认使用角色、`description`、可选 `branch` 和 `hidden`。 |
 | 角色或专家团内部始终遵守的规则 | 使用 `role_instructions` 声明包内 Markdown，并由角色 `instructions[]` 显式分配。 |
 | 类似 hook 的事件监听、工具拦截或运行时行为修改 | 使用 `plugins.local[]` 生成 `.opencode/plugins/`；需要第三方依赖时同时确认 `.opencode/package.json`。 |
@@ -230,14 +252,36 @@ plugins 写入 `opencode.json.plugin`。专家包不开发 `AGENTS.md`。角色�
 Agent Markdown，不进入 workspace 全局 `opencode.json.instructions`。上述能力的业务影响必须出现在业务确认卡中，技术绑定按需进入开发细节；不要让 generator 或 validator
 根据附件、描述或目录名自动补建。
 
+custom tool 和本地 Plugin 路径使用 `<slug>-<name>` 或 `<slug>/<name>` 命名空间，避免共享
+workspace 冲突。npm Plugin 只接受可信、真实存在并精确锁定版本的包；不得根据需求文字虚构包名
+或版本。Plugin 始终是 package-wide 资源，不进入角色所有权说明。
+
 ### Agent 运行参数
 
 `steps` 是 OpenCode 正式支持且新设计唯一询问、展示和写入的步数字段。不得把 MobileWork
 `expert.json` 为旧包保留的 `max_turns`、`maxTurns` 输入兼容名描述为 OpenCode 选项；读取旧 manifest
-时静默归一化为 `steps` 即可。`model`、`variant`、`temperature`、`top_p`、`hidden`、`options`
-都是可选项：只有用户提出特定模型、成本控制、输出确定性、创造性、隐藏团员或 provider-specific
-能力时才询问；普通专家设计不主动逐项盘问，也不在 generator 中猜测。给出推荐时说明未声明项
-将继承 OpenCode、模型或 provider 默认值，并建议通常只调整 `temperature` 与 `top_p` 中一个。
+时静默归一化为 `steps` 即可。`model`、`variant`、`hidden`、`options` 都是可选项：只有用户提出
+特定模型、成本控制、隐藏团员或 provider-specific 能力时才询问；普通专家设计不主动逐项盘问，
+也不在 generator 中猜测。MobileWork 专家 Agent 不收集或声明 `temperature`、`top_p`，采样行为
+继承模型或 provider，`options` 也不得绕过该边界。所有 command 的入口智能体由结构确定为唯一
+`mode: all` 角色，并固定 `subtask: true`，不作为额外业务决定询问。
+
+### 角色自主度选择
+
+角色结构确定后，逐角色要求用户选择静态权限自主度。单专家选择一次；专家团分别为团长和每位
+团员选择，不得用一个团队默认值代替。用户界面只显示以下五个标签和可观察影响：
+
+| 标签 | 可观察影响 |
+|---|---|
+| 低 | 默认拒绝修改、命令、联网和外部 Skill；只执行已明确开放的包内能力。 |
+| 较低 | 多数动作逐次确认；外部 Skill 仍拒绝。 |
+| 中 | 可编辑和读取网络资料，命令与外部目录需确认；外部 Skill 仍拒绝。 |
+| 较高 | 与“中”相同，但可在加载宿主可发现的外部 Skill 前询问。 |
+| 高 | 可直接加载外部 Skill，并允许自主返工；命令与外部目录仍受确认和安全边界约束。 |
+
+内部值 `scripted/fixed/bounded/guided/adaptive` 只在开发细节中保存。角色自主度是 permission 的
+唯一基线；角色职责、Workflow/Phase 自主度、execution 或 `permission_reason` 都不能替用户选择。
+新建缺少任一角色选择时不得生成；旧包只读校验和安装的“中”临时默认不能当作用户选择。
 
 ### 执行约束发现
 
@@ -256,9 +300,10 @@ custom tool、MCP tool 时，内部优先选择受约束的执行方式；业务
 默认值；phase 只有边界不同时才询问；Agent override 只有同一 phase 中角色边界不同时才询问。
 不声明 Workflow 时使用普通 Todo 规划，不发明正式 Phase 或 acceptance。只针对阻塞项提问。
 
-以下等级只用于内部技术映射和当前整卡确认后的开发细节，不是业务卡标签。推荐顺序：已有可靠脚本或 custom tool 用“极低（`scripted`）”；固定 SOP 用“低（`fixed`）”；
-多个批准方法用“中（`bounded`）”；需要探索但关键决定要确认时用“高（`guided`）”；开放研究
-或创意才用“极高（`adaptive`）”。能够机械化
+以下 Workflow/Phase 等级只用于流程技术映射，不替代上面的角色自主度选择。推荐顺序：已有可靠
+脚本或 custom tool 用“低（`scripted`）”；固定 SOP 用“较低（`fixed`）”；多个批准方法用
+“中（`bounded`）”；需要探索但关键决定要确认时用“较高（`guided`）”；开放研究或创意才用
+“高（`adaptive`）”。能够机械化
 的阶段原则上不得使用 `guided` 或 `adaptive`；确需提高时，业务卡只展示为何需要探索、哪些决定仍需确认等
 可观察行为，不能出现“低自主度”“高自主度”或任何相对等级标签；枚举映射只放开发细节。
 
@@ -318,9 +363,11 @@ provenance，只询问缺失的比较证据，不要求用户盲选，也不宣�
 1. 目标、目标用户和成功标准；
 2. 专家类型与角色结构；
 3. 各角色职责与边界；
-4. 输入、输出、是否声明 workflow；若声明，再确认 Phase、对应 commands、handoff 和返工；
-5. 统一 skills、来源、完整名称及角色分配；
-6. 质量门、运行能力、权限和环境依赖。
+4. 每个角色的自主度选择；
+5. 输入、输出、是否声明 workflow；若声明，再确认 Phase、对应 commands、handoff 和返工；
+6. 候选能力、运行行为、provenance 与作用范围；整卡确认后由管理器选择无资源、Skill、
+   custom tool 或 Plugin，只有按需开发细节才展示机器名称；
+7. 质量门、运行能力、权限和环境依赖。
 
 优先使用当前宿主提供的 ask-user-question 工具。工具支持批量问题时，每轮最多组织 3 个
 来自当前 question-ready 依赖前沿且互不依赖的决定；每个 question 对象只问一个决定。使用工具后，正文只解释背景和推荐，不得再次
@@ -354,7 +401,8 @@ Skill 正文和 assistant 自述都不能充当 host evidence。
 
 正文先说“资料库、能力包、共享规则、稳定流程、快捷入口、计算工具、过程控制、外部连接”等
 白话名称。技术名只在当前整卡确认且用户要求开发细节后，第一次出现时括注一次。Schema 字段、JSON 路径、哈希、receipt、sidecar、
-权限和自主度枚举统一放到“开发细节”；用户没有要求时不展开。
+权限细节和内部自主度枚举统一放到“开发细节”；逐角色选择时可以显示低、较低、中、较高、高
+五个用户标签，但不显示内部值。
 
 校验失败先写清问题、对结果的影响和建议动作，再把原始 finding 放进开发细节。不要删除合同、
 财务、医疗等业务本身需要的专业词，只降低 Agent 工程术语密度。
@@ -410,9 +458,10 @@ Connector 确实阻塞，只能按例外预算增加一轮并说明原因。这�
 - 未确认项：无 / ...
 ```
 
-“资料与能力”必须为每项能力给出清楚的业务能力名称，以及负责或使用它的角色；不能只写“若干
-能力包”或数量。机器 Skill 标识和完整文件名属于开发细节，只有用户要求时才展示。业务名称与
-角色归属用于确认职责，机器标识只用于后续投影，两者不能混成同一个确认要求。
+“资料与能力”必须为每项能力给出清楚的业务能力名称、负责或使用角色、触发或调用方式、输入
+输出、可见副作用、权限/成本/运行前提、质量门、当前实现状态和 provenance；不能只写“若干
+能力包”或数量。机器 Skill、custom tool 或 Plugin 标识属于开发细节，只有用户要求时才展示。
+业务名称与角色归属用于确认业务边界，技术载体只用于后续投影，两者不能混成同一个确认要求。
 
 ### 默认展示边界
 
@@ -420,11 +469,12 @@ Connector 确实阻塞，只能按例外预算增加一轮并说明原因。这�
 “展开开发细节”，只要同一回复因 material impact 使旧确认失效，这整个展示面仍须使用业务语言，
 直到用户明确确认当前整卡。完整卡后允许处理 question-ready 的可信业务候选，但只展示稳定业务
 标签和会影响决定的可观察差异。此时不得输出 manifest 字段、路径、hash、receipt、sidecar、机器
-Skill 标识、权限或自主度枚举、这些枚举的中文等级标签，以及 provider ID、URL、配置、凭据、字段
+Skill 标识、权限或自主度内部枚举，以及 provider ID、URL、配置、凭据、字段
 映射、Connector/MCP/启动命令等实现渠道或其他实现绑定细节。用户消息中已经出现的技术词可以在
 provenance 中原样记录为用户事实，但不能借此提前展开上述实现细节，也不能复用为 assistant 撰写的确认问题。
 
-隐藏分类不等于隐藏影响。业务卡必须写清：谁能决定；哪些步骤必须按已确认规则执行、哪些允许
+逐角色自主度问题是中文等级标签的唯一默认展示例外；它必须同时给出上表中的可观察差异，不能只让
+用户盲选标签。除此之外，隐藏分类不等于隐藏影响。业务卡必须写清：谁能决定；哪些步骤必须按已确认规则执行、哪些允许
 有限选择；哪里需要再次确认；允许哪些本地或外部副作用；何时停止、返工或升级。不要写“低自主度
 固定流程”，应写“按已确认步骤逐项执行，不自行增加规则、跳过检查或放宽验收；缺证据时返工，
 仍不足时停止并交用户处理”。“固定步骤”“稳定流程”等普通业务词可以使用，禁止的是把流程贴上
@@ -433,6 +483,9 @@ provenance 中原样记录为用户事实，但不能借此提前展开上述实
 业务卡完成后先在内部做技术映射。会改变业务设计的字段必须追溯到状态为 `answered`、`proposed`
 或 `confirmed` 的 `decision_id`；确定性的 hash、路径、receipt、schema、sidecar 和投影字段追溯到
 manager contract 或已确认的技术规则，不虚构新的用户决定。
+映射完全落在已确认边界内时直接选择最小适配载体，不追加技术类型确认；若映射引入任何新的自动
+触发、外写、联网、权限、依赖、成本或 Runtime 前提，立即触发下述 `full-card-first` 门，并在
+重新确认前保持专家目录零写入。
 
 ### `full-card-first` 响应门
 
@@ -520,6 +573,43 @@ preflight：
 直接展示业务卡，不人为增加访谈；用户已经对同一完整设计明确确认时，不重复确认或提问。此时若
 任务没有 feature 就交付并停止；只有明确的执行任务才进入确认后执行通道。
 
+### 创建位置确认门
+
+新建单专家、专家团及把资料转换为新专家时，当前业务确认卡明确确认后仍不得立即执行。任何
+preflight、进程、文件写入、manifest 创建或 generator 调用前，必须通过宿主可用的
+`AskUserQuestion`、`question` 或等价提问工具完成一次独立单选；没有这类工具时，直接在当前对话中
+给出同一问题和选项并等待回复。即使用户在更早消息中已经提过路径，也必须用这次交互绑定当前确认版本。该
+选择不属于 material decision，不写入 question ledger，不消耗发现轮次或决定预算，也不使已确认
+业务卡失效。设计变化使当前整卡确认失效时，旧位置选择同时失效；重新确认整卡后必须重新选择。
+
+固定交互内容为：标题 `安装位置`，问题 `确认后，将新专家创建到哪里？`，选项
+`我的专家（MobileWork 个人专家目录）` 与 `当前工作空间`，并允许自定义输入作为“其他路径”。
+OpenCode/MobileWork 的 `QuestionInfo` 使用 `question`、`header`、`multiple: false`、`custom: true` 和
+带 `label/description` 的 options；`question.replied.properties.answers` 必须是仅含一个问题回答的
+二维数组，且 `properties.answers[0]` 仅含一个字符串，从 `properties.answers[0][0]` 取值并按固定
+label 映射 `my-experts/workspace`，其余单值映射 `custom`。只有 `AskUserQuestion`、`question` 和任何
+等价单选+自定义输入能力全部不可用时，正文才提出这一个问题和相同选项，
+不能默认选择；多选或无法唯一解释时返回 `CREATION_TARGET_ANSWER_AMBIGUOUS`。回答前必须证明环境
+检查、进程、文件/目录/配置写入、联网/数据外发、Plugin/MCP、权限扩大、generator 和 validation 调用均为 0；工具通道缺少完整 `question.asked/replied` 事件时，
+宿主断言只能记为 `not-verified`，正文 fallback 则以实际会话轮次作为提问与回答证据。
+
+`我的专家` 在 MobileWork 使用宿主注入的 `MOBILEWORK_MY_EXPERTS_DIR`。正式版默认解析到
+`~/.mobilework/experts/personal`；当前源码开发版在没有自定义 Electron userData 时默认解析到
+`~/.mobilework/electron-dev/openwork-dev-data/home/.mobilework/experts/personal`。其他宿主使用用户
+home 下固定的 `~/.mobilework/experts/personal`。旧 `~/.mobilework/my-experts` 只供 MobileWork
+一次性迁移，不作为新建目标。`当前工作空间` 使用当前 workspace。自定义值表示父目录，最终目标是
+`<父目录>/<slug>`。父目录必须已经存在、为绝对目录且本身不是文件系统根、symlink、Windows
+reparse point 或特殊文件；最终目标必须保持在该父目录内。父目录无效返回
+`CREATION_TARGET_PATH_INVALID`；generator 的最终目标逃逸返回 `TARGET_OUTSIDE_ROOT`，且不得创建
+staging 或写入。目标 `<slug>` 已存在时仍走独立
+`--force` 确认，位置选择不能授权覆盖。
+
+执行通道使用 `--creation-target my-experts|workspace|custom`；`custom` 必须同时传
+`--output-dir <parent>`。`--my-experts` 是兼容 alias。不传 `--creation-target` 时保留宿主解析行为；
+单独的 `--output-dir` 仍只断言解析后的 output root，不能选择任意目录。`ExecutionContext` version 2
+新增 `targetMode`，并保留 `outputRoot`、`workspaceRoot` 与 `pathSource`。已有专家修改、安装、校验和
+打包不经过此门。
+
 底层 generator 不接收可信的人类确认凭证，因而本门是 Agent 行为合同，不是机器 attestation。
 模型自行产生的 `confirmed: true` 不能升级为用户确认；真正的强门需要 Desktop 绑定 user event、
 proposal/session id 与 manifest hash 的 host attestation，属于独立产品能力。
@@ -528,6 +618,9 @@ command 是可选的用户入口，不是 workflow 本体的第二份真相源�
 使用的稳定 workflow 默认推荐一个 `workflows[].command`；多个这类 workflow 分别推荐多个 command。内部
 handoff、单个 phase 和一次性流程不单独创建。用户明确不需要 command 时，在业务确认卡中写明原因，
 不要让 validator 或生成器自动补建。
+
+生成授权只覆盖当前专家包内已确认资源的确定性投影。业务 Agent 的普通运行不能增删、改写或
+重新选择专家包资源；安装、启用、联网下载、连接外部系统、发布和执行生成代码仍需各自已有门禁。
 
 ## 8. 结构性修改
 
@@ -538,7 +631,7 @@ handoff、单个 phase 和一次性流程不单独创建。用户明确不需要
 |---|---|---|---|
 ```
 
-确认后修改 `expert.json` 并整体重建派生物。用户在确认后又改变角色、workflow、skills 或权限时，
+确认后修改 `expert.json` 并整体重建派生物。用户在确认后又改变角色、workflow、能力资源或权限时，
 返回澄清阶段，并按第 7 节 `full-card-first` 门在同一回复先声明旧确认失效、重发完整业务确认卡，
 再处理待决问题或当前整卡确认；不得先展示差异表、开发细节或实现选项。
 

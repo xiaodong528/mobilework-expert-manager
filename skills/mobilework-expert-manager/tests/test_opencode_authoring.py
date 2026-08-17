@@ -99,6 +99,10 @@ class OpenCodeAuthoringTests(unittest.TestCase):
 
         agent_path = self.package / ".opencode/agents/contract-reviewer.md"
         agent_frontmatter = frontmatter(agent_path)
+        self.assertEqual(agent_frontmatter["mode"], "all")
+        self.assertNotIn("autonomy", agent_frontmatter)
+        self.assertEqual(runtime["agent"]["contract-reviewer"]["mode"], "all")
+        self.assertNotIn("autonomy", runtime["agent"]["contract-reviewer"])
         description = agent_frontmatter["description"]
         self.assertIsInstance(description, str)
         self.assertIn(self.data["agent"]["description"], description)

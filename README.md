@@ -12,7 +12,7 @@
 |---|---|
 | 插件名 | `mobilework-expert-manager` |
 | Marketplace | `mobilework-tools` |
-| 当前版本 | `0.6.0` |
+| 当前版本 | `0.7.0` |
 | Skill | `mobilework-expert-manager` |
 | Claude Code 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
 | Codex 调用 | `$mobilework-expert-manager:mobilework-expert-manager` |
@@ -135,8 +135,9 @@ Codex 团队市场可以在 `.agents/plugins/marketplace.json` 的 `plugins` 数
   不在专家包中保存凭据。
 - 支持把 Reference 和角色级 Instruction 分配给指定角色，并把绑定关系写入安装 receipt 供审计；
   这些绑定是路由信息，不冒充系统级访问控制。
-- 支持串行、并行和团长协调 Workflow，以及 `scripted`、`fixed`、`bounded`、`guided`、
-  `adaptive` 五档自主度。
+- 支持串行、并行和团长协调 Workflow，并为团长和每位团员分别确认五档角色自主度；角色自主度
+  是静态权限的唯一基线，Workflow/Phase 自主度只描述流程决定权与验收边界。
+- 根据已确认的运行职责选择无资源、Skill、custom tool 或 Plugin，不按角色或职责数量机械生成。
 - 新专家使用统一顶层 `skills[]`，角色通过完整技能名引用拥有的技能。
 - 支持把技能目录或 ZIP 原字节导入 `.opencode/skills/<name>/`，并明确分配给一个、多个或全部成员。
 - 支持 Skills、MCP、custom tools、commands、plugins、references、instructions 与 LSP。
@@ -155,8 +156,8 @@ Codex 团队市场可以在 `.agents/plugins/marketplace.json` 的 `plugins` 数
 
 | 类型 | `expert.json` 结构 | 生成结果 | 协作方式 |
 |---|---|---|---|
-| 单专家 | `type: expert`，一个 `agent` | 一个 `mode: primary` Agent | 专家独立执行职责内任务，不包含团队委派规则 |
-| 专家团 | `type: team`，一个 `primary_agent` 和至少一个 `subagents[]` 成员 | 一个 `mode: primary` 团长及多个 `mode: subagent` 团员 | 团长路由任务、验收、要求返工并集成结果；团员只完成被委派的专业任务 |
+| 单专家 | `type: expert`，一个 `agent` | 一个 `mode: all` Agent | 专家独立执行职责内任务，不包含团队委派规则 |
+| 专家团 | `type: team`，一个 `primary_agent` 和至少一个 `subagents[]` 成员 | 一个 `mode: all` 团长及多个 `mode: subagent` 团员 | 团长路由任务、验收、要求返工并集成结果；团员只完成被委派的专业任务 |
 
 专家团通过结构化 `task` 路由把任务交给指定团员。首次委派需要包含上游输入、预期产物、验收标准
 和证据要求；验收失败时，团长使用同一个 `task_id` 继续返工。团长不模拟团员的专业产出，团员
@@ -202,34 +203,37 @@ Codex 团队市场可以在 `.agents/plugins/marketplace.json` 的 `plugins` 数
 | 角色与路由 | `agent`，或 `primary_agent` + `subagents[]`；每个角色可声明职责、触发条件、质量门和交接合同 | 生成角色 Markdown、运行时 Agent 配置和专家团委派边界 |
 | Skills | 顶层 `skills[]` 与角色 `skills[]` 完整名称引用 | 只复制声明技能并从角色引用派生 `permission.skill`；不生成通用/专属前缀 |
 | Workflow | `primary`、`serial`、`parallel` phases，及可选 Workflow command | 生成可执行流程说明；可将稳定 Workflow 暴露为 `.opencode/commands/<name>.md` |
-| 自主度 | `scripted`、`fixed`、`bounded`、`guided`、`adaptive` | 按 Workflow、Phase、Agent override 的优先级计算执行边界；任何档位都不能降低安全和验收标准 |
+| 自主度 | 每个角色使用 `scripted`、`fixed`、`bounded`、`guided`、`adaptive`；Workflow/Phase 可另行声明流程自主度 | 角色自主度生成静态权限基线；Workflow/Phase 只描述流程决定权、确认点与验收边界 |
 | 执行器 | `skill-script`、`custom-tool`、`mcp-tool`、`programming-tool`、`agent` | 校验执行器引用、真实资源、参与角色和权限所有权，不从职责文本猜测能力 |
-| 运行参数 | `steps`，以及可选 `model`、`variant`、`temperature`、`top_p`、`hidden`、`options` | 精确投影到 Agent Markdown 和 `opencode.json`；未声明项继承 OpenCode、模型或 provider 默认值 |
-| 权限 | Workflow 自主度、execution、Skill/MCP/task/custom tool 所有权及显式 `permission` | 生成最小权限；禁止无条件 `bash: {"*": "allow"}`，显式提权需要 `permission_reason` |
+| 运行参数 | `steps`，以及可选 `model`、`variant`、`hidden`、`options` | 精确投影到 Agent Markdown 和 `opencode.json`；采样行为继承模型或 provider，不声明 `temperature`、`top_p` |
+| 权限 | 角色自主度、execution、Skill/MCP/task/custom tool 所有权及显式 `permission` | 生成最小权限；禁止无条件 `bash: {"*": "allow"}`，手写权限只能收紧基线 |
 | 运行时扩展 | `mcp_servers` 与 `runtime_extensions` 中的 commands、tools、plugins、Local/Git references、workspace instructions、role instructions、LSP | 生成 `.opencode/**` 资源、`opencode.json` 配置和可选 `.env.example`；角色绑定写入 Agent Markdown 与安装 receipt |
 | 安装与回滚 | 包根 `opencode.json` 和所有声明资源 | 投影到 `<workspace>/.opencode/`，按资源归属预检冲突、原子安装、失败回滚并写入 receipt |
 | 本地版本 | 包内容的累计 diff 与用户确认的 SemVer | 初始化精确包根 Git；只在用户确认后本地 commit/tag，永不自动配置 remote |
 
 `steps` 是当前 OpenCode 正式步数字段。历史输入 `max_turns`、`maxTurns` 只用于读取旧 manifest，
 不会写入 Agent Markdown、`opencode.json` 或 README；已弃用的 `maxSteps` 不属于当前合同。
-`hidden` 只允许用于专家团成员。`temperature` 和 `top_p` 可以同时声明，但通常只调整其中一个，
-以便解释行为变化。
+`hidden` 只允许用于专家团成员。新专家不声明 `temperature` 或 `top_p`，采样行为继承模型或
+provider；`options` 也不能绕过该边界。
 
 ## 创建与交付流程
 
 1. **需求澄清**：读取用户目标、资料和已有包，区分已知事实、候选设计和未确认项。
-2. **设计确认**：新建、资料转化或结构性修改时，先确认角色、Workflow、Skills、权限及运行能力。
-3. **生成或重建**：以 `expert.json` 和声明资源为输入运行 `create_expert.py`；覆盖已有包时在 sibling
+2. **设计确认**：新建、资料转化或结构性修改时，先确认角色、各角色自主度、Workflow、能力资源、
+   权限及运行前提。
+3. **创建位置确认**：新建专家在当前业务卡确认后，单独选择“我的专家”“当前工作空间”或一个
+   已存在的绝对父目录；设计变化后必须重新确认位置。
+4. **生成或重建**：以 `expert.json` 和声明资源为输入运行 `create_expert.py`；覆盖已有包时在 sibling
    staging 中完整重建，校验通过后才原子替换。
-4. **技能导入与分配**：先用 `diagnose_skill.py` 静态检查目录或 ZIP，再用 `import_skill.py` 原字节
+5. **技能导入与分配**：先用 `diagnose_skill.py` 静态检查目录或 ZIP，再用 `import_skill.py` 原字节
    导入。单专家自动分配；专家团必须指定 `--assign-to`，或用 `--all-members` 分配给团长和全部团员。
-5. **静态验证**：运行 `validate_expert.py`，检查 manifest、派生文件、角色、权限、Workflow、
+6. **静态验证**：运行 `validate_expert.py`，检查 manifest、派生文件、角色、权限、Workflow、
    runtime config 与资源归属的一致性。
-6. **可移植性扫描**：运行 `scan_portable_artifacts.py`，排查绝对路径、secret、symlink、缓存和
+7. **可移植性扫描**：运行 `scan_portable_artifacts.py`，排查绝对路径、secret、symlink、缓存和
    未声明资源。
-7. **打包与干净复验**：运行 `package_expert.py`，完成 ZIP 结构与 CRC 检查、干净解压、再次校验
+8. **打包与干净复验**：运行 `package_expert.py`，完成 ZIP 结构与 CRC 检查、干净解压、再次校验
    和可移植性扫描后才发布 ZIP。
-8. **安装与读回**：运行 `install_expert.py`，投影到 `<workspace>/.opencode/`，再读回
+9. **安装与读回**：运行 `install_expert.py`，投影到 `<workspace>/.opencode/`，再读回
    `.opencode/opencode.jsonc`、安装资源和 `.opencode/.expert-installs/<slug>.json` receipt。
 
 上传技能默认保持 `edit_policy: preserved`。同名同内容复用；同名异内容默认阻止，只有同时提供
@@ -248,7 +252,7 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 ```text
 /mobilework-expert-manager:mobilework-expert-manager 请创建一个合同审查专家：
 它需要逐条引用合同证据，区分法律风险与商业风险，并输出可执行的修订建议。
-使用 bounded 自主度；任何对外写入都需要确认。
+使用中档自主度；任何对外写入都需要确认。
 ```
 
 专家团：
@@ -259,8 +263,8 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 需求与架构可并行分析，实现与测试串行衔接；每个阶段都要声明输入、产物、证据和验收标准。
 ```
 
-插件会先展示候选结构并询问会改变职责、角色、Workflow、Skill、权限或运行能力的关键缺口。
-确认完整设计后才会生成或结构性修改专家包。
+插件会先展示候选结构，并只询问会改变职责、角色、流程、能力资源、权限或运行前提的关键缺口。
+确认完整设计并单独选择创建位置后，才会生成或结构性修改专家包。
 
 ## 插件仓库结构
 
@@ -275,7 +279,9 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 │   └── plugin.json
 ├── skills/
 │   └── mobilework-expert-manager/
+│       ├── CONTEXT.md
 │       ├── SKILL.md
+│       ├── docs/
 │       ├── scripts/
 │       ├── references/
 │       ├── evals/
@@ -283,9 +289,6 @@ pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时�
 └── .github/workflows/
     └── validate-plugin.yml
 ```
-
-`skills/mobilework-expert-manager/agents/openai.yaml` 是该 Skill 的既有资源，不是 Claude Code
-插件根目录下的 subagent。
 
 ## 安全边界
 

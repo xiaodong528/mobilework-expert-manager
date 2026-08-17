@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import hashlib
 import html
 import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -58,11 +60,18 @@ REQUIRED_GENERATED_FILES = (MANIFEST_FILE, "README.md", RUNTIME_CONFIG)
 CONTROLLED_TARGET_ENV = "MOBILEWORK_EXPERT_MANAGER_TARGET"
 PACKAGE_LOCK_SUFFIX = ".mobilework.lock"
 PACKAGE_LOCK_OWNER = "owner.json"
+PACKAGE_LOCK_UNPUBLISHED_OWNER = ".unpublished-owner"
 PACKAGE_LOCK_TIMEOUT_SECONDS = 30.0
 PACKAGE_LOCK_HEARTBEAT_SECONDS = 1.0
 PACKAGE_LOCK_STALE_SECONDS = 30.0
 PACKAGE_LOCK_POLL_SECONDS = 0.05
 PACKAGE_LOCK_PROTOCOL_VERSION = 2
+WINDOWS_LOCK_RETRYABLE_WINERRORS = frozenset({5, 32, 33})
+WINDOWS_LOCK_RETRYABLE_ERRNOS = frozenset(
+    {errno.EACCES, errno.EBUSY, errno.EPERM}
+)
+WINDOWS_LOCK_MAX_RETRIES = 249
+WINDOWS_LOCK_RETRY_DELAY_SECONDS = 0.002
 PACKAGE_LOCK_OWNER_FIELDS = frozenset(
     {"ownerToken", "pid", "createdAt", "heartbeatAt", "protocolVersion"}
 )
@@ -82,11 +91,16 @@ def fail(message: str) -> None:
     raise SystemExit(f"error: {output_sanitizer.sanitize_text(message)}")
 
 
-def normalized_output_dir(output_dir: Path | None) -> Path:
+def normalized_output_dir(
+    output_dir: Path | None,
+    *,
+    creation_target: str | None = None,
+) -> Path:
     """Resolve the only output root allowed by the current host contract."""
     try:
         return execution_context.resolve_execution_context(
             requested_output_dir=output_dir,
+            creation_target=creation_target,
         ).output_root
     except execution_context.ExecutionContextError as error:
         fail(f"{error.code}: {error}")
@@ -204,6 +218,56 @@ def read_lock_owner(lock_path: Path) -> dict[str, Any] | None:
     return normalized_lock_owner(raw)
 
 
+def run_windows_lock_operation(
+    operation: Callable[[], None],
+    *,
+    platform_name: str | None = None,
+) -> None:
+    platform = os.name if platform_name is None else platform_name
+    attempt = 0
+    while True:
+        try:
+            operation()
+            return
+        except OSError as error:
+            if (
+                platform != "nt"
+                or (
+                    getattr(error, "winerror", None)
+                    not in WINDOWS_LOCK_RETRYABLE_WINERRORS
+                    and error.errno not in WINDOWS_LOCK_RETRYABLE_ERRNOS
+                )
+                or attempt >= WINDOWS_LOCK_MAX_RETRIES
+            ):
+                raise
+            # Windows may briefly keep a lock entry open after a contender reads it.
+            attempt += 1
+            time.sleep(WINDOWS_LOCK_RETRY_DELAY_SECONDS)
+
+
+def replace_lock_entry(
+    source: Path,
+    target: Path,
+    *,
+    platform_name: str | None = None,
+) -> None:
+    run_windows_lock_operation(
+        lambda: os.replace(source, target),
+        platform_name=platform_name,
+    )
+
+
+def remove_lock_quarantine(
+    target: Path,
+    *,
+    platform_name: str | None = None,
+) -> None:
+    run_windows_lock_operation(
+        lambda: shutil.rmtree(target),
+        platform_name=platform_name,
+    )
+
+
 def write_lock_owner(lock_path: Path, owner: dict[str, Any]) -> None:
     temporary = lock_path / f".{PACKAGE_LOCK_OWNER}.{owner['ownerToken']}.{uuid.uuid4().hex}.tmp"
     descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -212,7 +276,7 @@ def write_lock_owner(lock_path: Path, owner: dict[str, Any]) -> None:
             stream.write(json.dumps(owner, separators=(",", ":")) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, lock_path / PACKAGE_LOCK_OWNER)
+        replace_lock_entry(temporary, lock_path / PACKAGE_LOCK_OWNER)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
@@ -238,51 +302,64 @@ def quarantine_token(value: str) -> str:
     return sanitized or "unknown"
 
 
+def write_unpublished_lock_owner(lock_path: Path, owner_token: str) -> None:
+    marker_path = lock_path / PACKAGE_LOCK_UNPUBLISHED_OWNER
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    for optional_flag in ("O_CLOEXEC", "O_NOFOLLOW"):
+        flags |= getattr(os, optional_flag, 0)
+    descriptor = os.open(marker_path, flags, 0o600)
+    payload = f"{owner_token}\n".encode("ascii")
+    try:
+        offset = 0
+        while offset < len(payload):
+            offset += os.write(descriptor, payload[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def unpublished_lock_owner_matches(lock_path: Path, owner_token: str) -> bool:
+    marker_path = lock_path / PACKAGE_LOCK_UNPUBLISHED_OWNER
+    flags = os.O_RDONLY
+    for optional_flag in ("O_CLOEXEC", "O_NOFOLLOW", "O_NONBLOCK"):
+        flags |= getattr(os, optional_flag, 0)
+    try:
+        descriptor = os.open(marker_path, flags)
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return False
+        expected = f"{owner_token}\n".encode("ascii")
+        return os.read(descriptor, len(expected) + 1) == expected
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+
+
 def restore_lock_quarantine(lock_path: Path, quarantine_path: Path) -> bool:
     if lock_path.exists():
         return False
     try:
-        rename_lock_directory(quarantine_path, lock_path)
+        replace_lock_entry(quarantine_path, lock_path)
     except OSError:
         return False
     return True
 
 
-def rename_lock_directory(source: Path, target: Path) -> None:
-    retryable_windows_errors = {5, 32, 33}
-    attempt = 0
-    while True:
-        try:
-            source.rename(target)
-            return
-        except OSError as error:
-            if (
-                os.name != "nt"
-                or getattr(error, "winerror", None) not in retryable_windows_errors
-                or attempt >= 249
-            ):
-                raise
-            # Windows refuses a directory rename while another contender is
-            # briefly reading owner.json. Retrying preserves ownership.
-            attempt += 1
-            time.sleep(0.002)
-
-
 def cleanup_unpublished_lock(
     lock_path: Path,
     owner_token: str,
-    created_identity: tuple[int, int],
 ) -> None:
     quarantine_path = lock_path.with_name(
         f"{lock_path.name}.unpublished-{quarantine_token(owner_token)}-{uuid.uuid4().hex}"
     )
     try:
-        rename_lock_directory(lock_path, quarantine_path)
+        replace_lock_entry(lock_path, quarantine_path)
     except FileNotFoundError:
         return
-    moved_metadata = quarantine_path.stat(follow_symlinks=False)
-    moved_identity = (moved_metadata.st_dev, moved_metadata.st_ino)
-    if moved_identity != created_identity:
+    if not unpublished_lock_owner_matches(quarantine_path, owner_token):
         restored = restore_lock_quarantine(lock_path, quarantine_path)
         location = (
             "restored replacement lock"
@@ -292,7 +369,7 @@ def cleanup_unpublished_lock(
         raise RuntimeError(
             f"expert package lock changed before owner publication; {location}"
         )
-    shutil.rmtree(quarantine_path)
+    remove_lock_quarantine(quarantine_path)
 
 
 def quarantine_owned_lock(
@@ -305,7 +382,7 @@ def quarantine_owned_lock(
         f"{lock_path.name}.{reason}-{quarantine_token(expected['ownerToken'])}-{uuid.uuid4().hex}"
     )
     try:
-        rename_lock_directory(lock_path, quarantine_path)
+        replace_lock_entry(lock_path, quarantine_path)
     except FileNotFoundError:
         return None
 
@@ -337,7 +414,7 @@ def reclaim_stale_lock(lock_path: Path, stale_seconds: float) -> bool:
         lambda moved: lock_owner_is_stale(moved, stale_seconds),
     )
     if quarantine_path is not None:
-        shutil.rmtree(quarantine_path)
+        remove_lock_quarantine(quarantine_path)
     return True
 
 
@@ -389,7 +466,7 @@ def release_owned_lock(lock_path: Path, owner: dict[str, Any]) -> None:
     )
     if quarantine_path is None:
         raise RuntimeError("expert package lock disappeared before release")
-    shutil.rmtree(quarantine_path)
+    remove_lock_quarantine(quarantine_path)
 
 
 @contextlib.contextmanager
@@ -420,11 +497,8 @@ def package_lock(
         "protocolVersion": PACKAGE_LOCK_PROTOCOL_VERSION,
     }
     while True:
-        created_identity: tuple[int, int]
         try:
             lock_path.mkdir(mode=0o700)
-            created_metadata = lock_path.stat(follow_symlinks=False)
-            created_identity = (created_metadata.st_dev, created_metadata.st_ino)
         except FileExistsError:
             if reclaim_stale_lock(lock_path, stale_seconds):
                 continue
@@ -433,9 +507,10 @@ def package_lock(
             time.sleep(poll_seconds)
             continue
         try:
+            write_unpublished_lock_owner(lock_path, owner["ownerToken"])
             write_lock_owner(lock_path, owner)
         except Exception:
-            cleanup_unpublished_lock(lock_path, owner["ownerToken"], created_identity)
+            cleanup_unpublished_lock(lock_path, owner["ownerToken"])
             raise
         break
     stopped, heartbeat_thread = start_lock_heartbeat(lock_path, owner, heartbeat_seconds)
@@ -796,12 +871,18 @@ def resource_paths(resources: list[dict[str, str]]) -> set[str]:
     return {item["path"] for item in resources}
 
 
-def normalize_commands(raw: Any, *, agent_ids: set[str]) -> list[dict[str, Any]]:
+def normalize_commands(
+    raw: Any,
+    *,
+    agent_ids: set[str],
+    execution_agent_id: str,
+) -> list[dict[str, Any]]:
     if raw is None:
         return []
     if not isinstance(raw, list):
         fail("runtime_extensions.commands must be a list")
     result: list[dict[str, Any]] = []
+    command_policy = contract.expert_runtime_projection_policy()["command"]
     seen: set[str] = set()
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
@@ -827,6 +908,8 @@ def normalize_commands(raw: Any, *, agent_ids: set[str]) -> list[dict[str, Any]]
             "name": name,
             "template": template,
             "description": optional_text(item.get("description"), f"runtime_extensions.commands[{index}].description"),
+            "agent": execution_agent_id,
+            "subtask": command_policy["subtask"],
         }
         if item.get("agent") is not None:
             command_agent = validate_slug(
@@ -838,11 +921,20 @@ def normalize_commands(raw: Any, *, agent_ids: set[str]) -> list[dict[str, Any]]
                     f"runtime_extensions.commands[{index}].agent references "
                     f"undeclared agent {command_agent}"
                 )
-            command["agent"] = command_agent
+            if command_agent != execution_agent_id:
+                fail(
+                    f"runtime_extensions.commands[{index}].agent must reference "
+                    f"the mode all Agent {execution_agent_id}"
+                )
         if item.get("subtask") is not None:
             if not isinstance(item["subtask"], bool):
                 fail(f"runtime_extensions.commands[{index}].subtask must be a boolean")
-            command["subtask"] = item["subtask"]
+            if item["subtask"] is not command_policy["subtask"]:
+                fail(
+                    f"runtime_extensions.commands[{index}].subtask must be "
+                    f"{str(command_policy['subtask']).lower()} "
+                    "for package entry commands"
+                )
         if item.get("model") is not None:
             try:
                 command["model"] = contract.normalize_provider_model(
@@ -860,6 +952,7 @@ def normalize_embedded_files(
     field: str,
     *,
     allowed_suffixes: set[str],
+    purpose_required: bool = False,
 ) -> list[dict[str, str]]:
     if raw is None:
         return []
@@ -870,7 +963,12 @@ def normalize_embedded_files(
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             fail(f"{field}[{index}] must be a mapping")
-        unknown = sorted(set(item) - {"path", "content"})
+        allowed_keys = (
+            contract.CUSTOM_TOOL_ENTRY_KEYS
+            if purpose_required
+            else frozenset({"path", "content"})
+        )
+        unknown = sorted(set(item) - allowed_keys)
         if unknown:
             fail(f"{field}[{index}] contains unsupported fields: {', '.join(unknown)}")
         path = validate_package_file_path(
@@ -884,7 +982,13 @@ def normalize_embedded_files(
         if path in seen:
             fail(f"{field}[{index}].path duplicates {path}")
         seen.add(path)
-        result.append({"path": path, "content": content})
+        normalized = {"path": path, "content": content}
+        if purpose_required:
+            purpose = optional_text(item.get("purpose"), f"{field}[{index}].purpose")
+            if not purpose.strip():
+                fail(f"{field}[{index}].purpose must be non-empty")
+            normalized["purpose"] = purpose
+        result.append(normalized)
     return result
 
 
@@ -1020,6 +1124,7 @@ def normalize_runtime_extensions(
     slug: str,
     *,
     agent_ids: set[str],
+    execution_agent_id: str,
 ) -> dict[str, Any]:
     if raw is None:
         raw = {}
@@ -1047,11 +1152,16 @@ def normalize_runtime_extensions(
     reference_file_paths = resource_paths(reference_files)
     instruction_file_paths = resource_paths(instruction_files)
     return {
-        "commands": normalize_commands(raw.get("commands"), agent_ids=agent_ids),
+        "commands": normalize_commands(
+            raw.get("commands"),
+            agent_ids=agent_ids,
+            execution_agent_id=execution_agent_id,
+        ),
         "custom_tools": normalize_embedded_files(
             raw.get("custom_tools"),
             "runtime_extensions.custom_tools",
             allowed_suffixes={".js", ".ts"},
+            purpose_required=True,
         ),
         "plugins": normalize_plugins(raw.get("plugins")),
         "reference_files": reference_files,
@@ -1141,7 +1251,7 @@ def normalize_role(
     field: str,
     *,
     expected_mode: str,
-    default_max_turns: int,
+    default_steps: int,
     skill_mode: str,
 ) -> dict[str, Any]:
     if not isinstance(raw, dict):
@@ -1150,6 +1260,12 @@ def normalize_role(
     mode = raw.get("mode", expected_mode)
     if mode != expected_mode:
         fail(f"{field}.mode must be {expected_mode}")
+    autonomy = raw.get("autonomy")
+    if autonomy not in permission_policy.AUTONOMY_ORDER:
+        fail(
+            f"{field}.autonomy is required and must be one of "
+            + ", ".join(permission_policy.AUTONOMY_ORDER)
+        )
     display_name = raw.get("name", raw.get("title", role_id.replace("-", " ").title()))
     if not isinstance(display_name, str):
         fail(f"{field}.name must be a string")
@@ -1164,7 +1280,7 @@ def normalize_role(
             raw,
             field,
             expected_mode=expected_mode,
-            default_steps=default_max_turns,
+            default_steps=default_steps,
         )
     except contract.ContractError as exc:
         fail(str(exc))
@@ -1179,6 +1295,7 @@ def normalize_role(
     role = {
         "id": role_id,
         "mode": mode,
+        "autonomy": autonomy,
         "name": display_name,
         "title": display_name,
         "display_name": role_display_name,
@@ -1336,8 +1453,8 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         agent = normalize_role(
             raw_agent,
             "agent",
-            expected_mode="primary",
-            default_max_turns=80,
+            expected_mode="all",
+            default_steps=80,
             skill_mode=skill_mode,
         )
         top_profession = optional_text(raw.get("profession"), "profession")
@@ -1360,8 +1477,8 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         primary = normalize_role(
             raw.get("primary_agent"),
             "primary_agent",
-            expected_mode="primary",
-            default_max_turns=150,
+            expected_mode="all",
+            default_steps=150,
             skill_mode=skill_mode,
         )
         subagents_raw = raw.get("subagents")
@@ -1373,7 +1490,7 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
                 item,
                 f"subagents[{index}]",
                 expected_mode="subagent",
-                default_max_turns=50,
+                default_steps=50,
                 skill_mode=skill_mode,
             )
             for index, item in enumerate(subagent_items)
@@ -1425,6 +1542,7 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
         raw.get("runtime_extensions"),
         slug,
         agent_ids=set(ids),
+        execution_agent_id=primary["id"],
     )
     validate_role_resource_bindings(
         raw,
@@ -1460,6 +1578,11 @@ def normalize_manifest(raw: dict[str, Any], *, manifest_dir: Path | None = None)
                 *[item for item in source_subagents if isinstance(item, dict)],
             ]
     for source_role, normalized_role in zip(source_roles, [primary, *subagents], strict=True):
+        source_role["mode"] = normalized_role["mode"]
+        source_role["autonomy"] = normalized_role["autonomy"]
+        for legacy_step_field in contract.AGENT_STEP_KEYS:
+            source_role.pop(legacy_step_field, None)
+        source_role["steps"] = normalized_role["steps"]
         source_role["references"] = list(normalized_role["references"])
         if runtime_extensions["role_instructions"] or "instructions" in source_role:
             source_role["instructions"] = list(normalized_role["instructions"])
@@ -1582,7 +1705,12 @@ def build_role_permission(
 
 
 def role_skill_lines(role: dict[str, Any]) -> str:
-    return "\n".join(f"- `/{skill}` and load/use skill `{skill}`" for skill in role["allowed_skills"])
+    if not role["allowed_skills"]:
+        return "- 当前角色未分配包内业务 Skill。"
+    return "\n".join(
+        f"- `/{skill}` and load/use skill `{skill}`"
+        for skill in role["allowed_skills"]
+    )
 
 
 def role_instruction_content(manifest: dict[str, Any], path: str) -> str:
@@ -1595,9 +1723,22 @@ def role_instruction_content(manifest: dict[str, Any], path: str) -> str:
 def render_role_resources(role: dict[str, Any], manifest: dict[str, Any]) -> str:
     ext = manifest["runtime_extensions"]
     lines = ["## 分配资料与规则"]
-    if not role["references"] and not role["instructions"]:
-        lines.append("\n当前角色没有分配额外资料或角色规则。")
+    if not role["custom_tools"] and not role["references"] and not role["instructions"]:
+        lines.append("\n当前角色没有分配额外工具、资料或角色规则。")
         return "\n".join(lines)
+
+    if role["custom_tools"]:
+        lines.append("\n### 主动调用的 Custom Tool")
+        lines.append("只在确认职责内主动调用；共享所有权不表示自动触发。")
+        for path in role["custom_tools"]:
+            tool_name = Path(path).stem
+            tool = next(
+                item for item in ext["custom_tools"] if item["path"] == path
+            )
+            lines.append(
+                f"- `{tool_name}`（`.opencode/tools/{path}`）："
+                f"{tool['purpose']}"
+            )
 
     if role["references"]:
         lines.append("\n### 工作资料")
@@ -1633,20 +1774,20 @@ def render_role_resources(role: dict[str, Any], manifest: dict[str, Any]) -> str
 
 
 def render_team_roster(manifest: dict[str, Any]) -> str:
-    rows = ["| Agent ID | Display name | Profession | Responsibility |", "|---|---|---|---|"]
+    rows: list[str] = []
     for role in [manifest["primary_agent"], *manifest["subagents"]]:
         responsibility = role["responsibilities"][0] if role["responsibilities"] else role["description"]
-        rows.append(f"| `{role['id']}` | {role['display_name']} | {role['profession']} | {responsibility} |")
+        rows.append(f"- `{role['id']}`（{role['display_name']}）：{responsibility}")
     return "\n".join(rows)
 
 
 def render_direct_routing_table(manifest: dict[str, Any]) -> str:
-    rows = ["| 问法 / 触发场景 | 直接调谁 | 职责边界 |", "|---|---|---|"]
+    rows: list[str] = []
     for role in manifest["subagents"]:
         trigger = role["route_triggers"][0] if role["route_triggers"] else role["description"]
-        rows.append(f"| {trigger} | `{role['id']}` | {role['profession']} |")
-    if len(rows) == 2:
-        rows.append("| 单专家任务 | 专家 agent | 直接执行专家工作流 |")
+        rows.append(f"- {trigger} → `{role['id']}`（{role['profession']}）")
+    if not rows:
+        rows.append("- 单专家任务 → 专家 agent")
     return "\n".join(rows)
 
 
@@ -1767,14 +1908,13 @@ def render_trigger_examples(
 
 def render_edge_case_guidance(manifest: dict[str, Any], *, is_primary: bool) -> str:
     lines = [
-        "- 输入不足时先指出缺口，并只询问会改变执行结果的关键信息。",
-        "- 工具、skill 或外部依赖不可用时，报告已验证事实、受影响的验收标准和可执行替代方案。",
-        "- 验证失败时不要宣称完成；先修复、返工，或明确记录阻塞和剩余风险。",
+        "- 输入、工具或依赖不足时停止，报告已验证事实、受影响验收和最少补充信息。",
+        "- 验证失败不得宣称完成；先修复、返工或记录阻塞与风险。",
     ]
     if manifest["type"] == "team" and is_primary:
-        lines.append("- 团员结果未通过验收时，使用原 `task_id` 返回失败项和补救要求，不另开无上下文任务。")
+        lines.append("- 团员未通过时用原 `task_id` 返工，不另开任务。")
     elif manifest["type"] == "team":
-        lines.append("- 任务超出本角色职责时停止扩张范围，把越界部分和建议路由对象回传团长。")
+        lines.append("- 越界时停止并把建议路由对象回传团长。")
     else:
         lines.append("- 请求超出本专家职责时明确边界，不模拟不存在的团队或专业能力。")
     return "\n".join(lines)
@@ -1993,6 +2133,9 @@ def render_generated_workflow_command(
         {
             "description": workflow_autonomy.workflow_command_description(workflow),
             "agent": manifest["primary_agent"]["id"],
+            "subtask": contract.expert_runtime_projection_policy()["command"][
+                "subtask"
+            ],
         },
         workflow_autonomy.render_workflow_command(workflow),
     )
@@ -2162,8 +2305,8 @@ def render_runtime_extensions_summary(manifest: dict[str, Any]) -> str:
 
 def render_agent_runtime_summary(manifest: dict[str, Any]) -> str:
     rows = [
-        "| Agent | steps | model | variant | temperature | top_p | hidden | options |",
-        "|---|---:|---|---|---:|---:|---|---|",
+        "| Agent | steps | model | variant | hidden | options |",
+        "|---|---:|---|---|---|---|",
     ]
     for role in [manifest["primary_agent"], *manifest["subagents"]]:
         options = role.get("options")
@@ -2178,8 +2321,6 @@ def render_agent_runtime_summary(manifest: dict[str, Any]) -> str:
             str(role["steps"]),
             f"`{role['model']}`" if "model" in role else "继承",
             f"`{role['variant']}`" if "variant" in role else "继承",
-            str(role["temperature"]) if "temperature" in role else "继承",
-            str(role["top_p"]) if "top_p" in role else "继承",
             hidden,
             option_keys,
         ]
@@ -2189,7 +2330,7 @@ def render_agent_runtime_summary(manifest: dict[str, Any]) -> str:
 
 def render_permission_summary(manifest: dict[str, Any]) -> str:
     rows = [
-        "| Agent | 来源 | 生效自主度 | 参与档位 | `*` | edit | bash | webfetch | external_directory | doom_loop | 提权理由 |",
+        "| Agent | 角色自主度 | 内部值 | 来源 | `*` | edit | bash | webfetch | external_directory | doom_loop | 外部 Skill |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for role in [manifest["primary_agent"], *manifest["subagents"]]:
@@ -2199,23 +2340,25 @@ def render_permission_summary(manifest: dict[str, Any]) -> str:
         bash_action = bash.get("*") if isinstance(bash, dict) else bash
         external = permission.get("external_directory")
         external_action = external.get("*") if isinstance(external, dict) else external
-        levels = "、".join(audit["levels"]) if audit["levels"] else "未声明"
-        reason = audit["permission_reason"] or "无"
+        skill_permission = permission.get("skill")
+        external_skill_action = (
+            skill_permission.get("*") if isinstance(skill_permission, dict) else "deny"
+        )
         rows.append(
             "| "
             + " | ".join(
                 [
                     f"`{role['id']}`",
+                    audit["label"],
+                    f"`{audit['effective']}`",
                     audit["source"],
-                    audit["effective"],
-                    levels,
                     str(permission.get("*", "legacy")),
                     str(permission.get("edit", "继承")),
                     str(bash_action or "继承"),
                     str(permission.get("webfetch", "继承")),
                     str(external_action or "继承"),
                     str(permission.get("doom_loop", "继承")),
-                    reason,
+                    str(external_skill_action),
                 ]
             )
             + " |"
@@ -2251,9 +2394,30 @@ def render_readme_runtime_extensions(manifest: dict[str, Any]) -> str:
         rows.extend(f"- `/{command['name']}`：{command['description'] or '自定义工作流命令'}" for command in ext["commands"])
     if ext["custom_tools"]:
         rows.append("\n### 自定义工具")
-        rows.extend(f"- `.opencode/tools/{item['path']}`" for item in ext["custom_tools"])
+        roles = [manifest["primary_agent"], *manifest["subagents"]]
+        for item in ext["custom_tools"]:
+            consumers = [
+                role["id"] for role in roles if item["path"] in role["custom_tools"]
+            ]
+            consumer_text = (
+                ", ".join(f"`{role_id}`" for role_id in consumers)
+                if consumers
+                else "未分配"
+            )
+            rows.append(
+                f"- `.opencode/tools/{item['path']}`：{item['purpose']}；使用角色 "
+                + consumer_text
+            )
     if ext["plugins"]["npm"] or ext["plugins"]["local"]:
         rows.append("\n### 插件")
+        rows.append(
+            "Plugin 是 package-wide 运行行为，供满足 capability contract 的目标 "
+            "Runtime 发现并加载；它不属于任何单一角色，也不得写成角色私有能力。"
+        )
+        rows.append(
+            "本包的生成与静态校验不证明 Plugin 已被真实 Runtime 加载；"
+            "没有实际加载证据时，Runtime 状态保持 `not-tested`。"
+        )
         rows.extend(f"- npm：`{item}`" for item in ext["plugins"]["npm"])
         rows.extend(f"- 本地：`.opencode/plugins/{item['path']}`" for item in ext["plugins"]["local"])
     if ext["references"]:
@@ -2297,7 +2461,7 @@ def write_text_file(base: Path, relative_path: str, content: str, *, ensure_newl
     target = base / validate_package_file_path(relative_path, "runtime extension path")
     target.parent.mkdir(parents=True, exist_ok=True)
     rendered = content if not ensure_newline or content.endswith("\n") else content + "\n"
-    target.write_text(rendered, encoding="utf-8")
+    target.write_bytes(rendered.encode("utf-8"))
 
 
 def write_runtime_extensions(project_dir: Path, manifest: dict[str, Any]) -> None:
@@ -2584,18 +2748,25 @@ def write_project(manifest: dict[str, Any], output_root: Path, *, force: bool) -
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path, help="Path to expert.json")
-    output = parser.add_mutually_exclusive_group()
-    output.add_argument(
+    parser.add_argument(
+        "--creation-target",
+        choices=execution_context.CREATION_TARGETS,
+        help=(
+            "Create under MobileWork personal experts (my-experts compatibility "
+            "target), the current workspace, or an explicit custom parent"
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         help=(
-            "Assert the host-resolved output root; arbitrary custom destinations are rejected"
+            "Assert the resolved output root, or select the parent with --creation-target custom"
         ),
     )
-    output.add_argument(
+    parser.add_argument(
         "--my-experts",
         action="store_true",
-        help="Assert that the current host is managed MobileWork",
+        help="Compatibility alias for --creation-target my-experts",
     )
     parser.add_argument("--force", action="store_true", help="Replace existing output project directory")
     parser.add_argument(
@@ -2607,6 +2778,13 @@ def parse_args() -> argparse.Namespace:
 
 def _legacy_main() -> int:
     args = parse_args()
+    if args.my_experts and args.creation_target is not None:
+        fail("CREATION_TARGET_ANSWER_AMBIGUOUS: use only one creation target selector")
+    creation_target = "my-experts" if args.my_experts else args.creation_target
+    output_dir = normalized_output_dir(
+        args.output_dir,
+        creation_target=creation_target,
+    )
     if shutil.which("git") is None:
         fail("Git is required to create or modify a version-controlled expert source")
     if args.manifest.name != MANIFEST_FILE:
@@ -2623,19 +2801,17 @@ def _legacy_main() -> int:
             if requested_identity is not None and requested_identity[1] != current_identity[1]:
                 fail("controlled target cannot change primary Agent ID")
     manifest = normalize_manifest(raw, manifest_dir=args.manifest.parent)
-    prepare_avatar_assets(manifest, args.manifest.parent)
-    if args.my_experts and os.environ.get(execution_context.HOST_ENV, "").strip() != execution_context.MOBILEWORK_HOST:
-        fail("HOST_CONTRACT_INCOMPLETE: --my-experts requires the MobileWork host contract")
-    output_dir = normalized_output_dir(args.output_dir)
     try:
         execution_context.validate_package_target(
             execution_context.resolve_execution_context(
                 requested_output_dir=args.output_dir,
+                creation_target=creation_target,
             ),
             manifest["slug"],
         )
     except execution_context.ExecutionContextError as error:
         fail(f"{error.code}: {error}")
+    prepare_avatar_assets(manifest, args.manifest.parent)
     if controlled_target_raw:
         controlled_target = execution_context.canonical_path(Path(controlled_target_raw))
         source_manifest = execution_context.canonical_path(args.manifest)

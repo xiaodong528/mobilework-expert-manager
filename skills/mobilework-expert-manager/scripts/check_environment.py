@@ -85,7 +85,49 @@ def check_environment(
     workspace_root: Path | None = None,
     sidecar: Path | None = None,
     host_contract: Path | None = None,
+    creation_target: str | None = None,
+    output_dir: Path | None = None,
 ) -> dict[str, Any]:
+    try:
+        routing = execution_context.resolve_execution_context(
+            env=os.environ if env is None else env,
+            workspace_root=workspace_root,
+            requested_output_dir=output_dir,
+            creation_target=creation_target,
+        ).as_dict()
+    except execution_context.ExecutionContextError as error:
+        routing_error = {
+            "code": error.code,
+            "message": output_sanitizer.sanitize_exception(error),
+        }
+        routing = {
+            "version": 2,
+            "ok": False,
+            "hostMode": None,
+            "workspaceRoot": str(
+                execution_context.canonical_path(workspace_root or Path.cwd())
+            ),
+            "outputRoot": None,
+            "pathSource": None,
+            "targetMode": creation_target,
+            "errors": [routing_error],
+        }
+        return output_sanitizer.sanitize_mapping(
+            {
+                "ok": False,
+                "features": features,
+                "checks": [],
+                "missing": [],
+                "executionContext": routing,
+                "hostMode": routing["hostMode"],
+                "workspaceRoot": routing["workspaceRoot"],
+                "outputRoot": routing["outputRoot"],
+                "pathSource": routing["pathSource"],
+                "targetMode": routing["targetMode"],
+                "errors": routing["errors"],
+            }
+        )
+
     checks: list[dict[str, Any]] = []
     python_ok = sys.version_info >= MINIMUM_PYTHON
     checks.append(
@@ -144,32 +186,9 @@ def check_environment(
         for check in checks
         if check.get("required", True) and not check["available"]
     ]
-    routing: dict[str, Any]
-    routing_error: dict[str, str] | None = None
-    try:
-        routing = execution_context.resolve_execution_context(
-            env=os.environ if env is None else env,
-            workspace_root=workspace_root,
-        ).as_dict()
-    except execution_context.ExecutionContextError as error:
-        routing_error = {
-            "code": error.code,
-            "message": output_sanitizer.sanitize_exception(error),
-        }
-        routing = {
-            "version": 1,
-            "ok": False,
-            "hostMode": None,
-            "workspaceRoot": str(
-                execution_context.canonical_path(workspace_root or Path.cwd())
-            ),
-            "outputRoot": None,
-            "pathSource": None,
-            "errors": [routing_error],
-        }
     return output_sanitizer.sanitize_mapping(
         {
-            "ok": not missing and routing_error is None,
+            "ok": not missing,
             "features": features,
             "checks": checks,
             "missing": missing,
@@ -178,6 +197,7 @@ def check_environment(
             "workspaceRoot": routing["workspaceRoot"],
             "outputRoot": routing["outputRoot"],
             "pathSource": routing["pathSource"],
+            "targetMode": routing["targetMode"],
             "errors": routing["errors"],
         }
     )
@@ -218,6 +238,24 @@ def build_parser(policy: dict[str, Any]) -> ManagerArgumentParser:
         help="Optional explicit read-only host contract for config-load preflight",
     )
     parser.add_argument(
+        "--creation-target",
+        choices=execution_context.CREATION_TARGETS,
+        help=(
+            "Check the selected MobileWork personal experts (my-experts compatibility "
+            "target), workspace, or custom creation root"
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Assert the resolved output root, or provide the custom parent",
+    )
+    parser.add_argument(
+        "--my-experts",
+        action="store_true",
+        help="Compatibility alias for --creation-target my-experts",
+    )
+    parser.add_argument(
         "--format",
         choices=policy["cli"]["formats"],
         default="json",
@@ -238,6 +276,15 @@ def parse_args(
     resolved_policy = manager_contract.load_policy() if policy is None else policy
     args = build_parser(resolved_policy).parse_args(argv)
     validate_feature_request(args.feature, args.sidecar)
+    if args.my_experts and args.creation_target is not None:
+        raise cli_contract.CliArgumentError(
+            "use only one creation target selector",
+            code="CREATION_TARGET_ANSWER_AMBIGUOUS",
+            status="environment-argument-error",
+            phase="environment-preflight",
+            execution_policy="read-only-environment-preflight",
+        )
+    args.creation_target = "my-experts" if args.my_experts else args.creation_target
     return args
 
 
@@ -321,6 +368,8 @@ def _execute(args: argparse.Namespace, policy: dict[str, Any]) -> cli_contract.C
             selected_features(args.feature),
             sidecar=args.sidecar,
             host_contract=args.host_contract,
+            creation_target=args.creation_target,
+            output_dir=args.output_dir,
         ),
         policy,
     )

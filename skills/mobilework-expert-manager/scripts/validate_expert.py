@@ -383,6 +383,7 @@ def validate_embedded_files(
     result: Result,
     *,
     allowed_suffixes: set[str],
+    custom_tool_purpose: bool = False,
 ) -> list[str]:
     if raw is None:
         return []
@@ -395,7 +396,12 @@ def validate_embedded_files(
         if not isinstance(item, dict):
             result.error(f"{field}[{index}]: must be a mapping")
             continue
-        unknown = sorted(set(item) - {"path", "content"})
+        allowed_keys = (
+            contract.CUSTOM_TOOL_ENTRY_KEYS
+            if custom_tool_purpose
+            else frozenset({"path", "content"})
+        )
+        unknown = sorted(set(item) - allowed_keys)
         if unknown:
             result.error(f"{field}[{index}]: unsupported fields: {', '.join(unknown)}")
         path = validate_package_file_path(
@@ -412,6 +418,30 @@ def validate_embedded_files(
         content = validate_text(item.get("content"), f"{field}[{index}].content", result, required=True)
         if not content.strip():
             result.error(f"{field}[{index}].content: must be non-empty")
+        if custom_tool_purpose:
+            if "purpose" not in item:
+                result.warn(
+                    f"{field}[{index}].purpose: legacy package omits the Custom Tool invocation purpose",
+                    code="LEGACY_CUSTOM_TOOL_PURPOSE_MISSING",
+                    phase="manifest",
+                    path=MANIFEST_FILE,
+                    location=f"/runtime_extensions/custom_tools/{index}/purpose",
+                    root_cause="legacy-custom-tool-purpose-missing",
+                    remediation=(
+                        "Add the confirmed non-empty invocation purpose before the next "
+                        "structural modification."
+                    ),
+                    evidence="missing",
+                )
+            else:
+                purpose = validate_text(
+                    item.get("purpose"),
+                    f"{field}[{index}].purpose",
+                    result,
+                    required=True,
+                )
+                if not purpose.strip():
+                    result.error(f"{field}[{index}].purpose: must be non-empty")
     return paths
 
 
@@ -439,6 +469,17 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
         for role in roles_from_manifest(manifest)
         if isinstance(role.get("id"), str)
     }
+    main_agent = (
+        manifest.get("agent")
+        if manifest.get("type") == "expert"
+        else manifest.get("primary_agent")
+        if manifest.get("type") == "team"
+        else None
+    )
+    main_agent_id = main_agent.get("id") if isinstance(main_agent, dict) else None
+    command_policy = contract.expert_runtime_projection_policy()["command"]
+    expected_subtask = command_policy["subtask"]
+    expected_subtask_text = str(expected_subtask).lower()
     if commands is not None:
         if not isinstance(commands, list):
             result.error("runtime_extensions.commands: must be a list")
@@ -464,6 +505,7 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
                 template = validate_text(item.get("template"), f"runtime_extensions.commands[{index}].template", result, required=True)
                 if not template.strip():
                     result.error(f"runtime_extensions.commands[{index}].template: must be non-empty")
+                command_agent: str | None = None
                 if item.get("agent") is not None:
                     command_agent = validate_name(
                         item.get("agent"),
@@ -475,6 +517,38 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
                             f"runtime_extensions.commands[{index}].agent: references "
                             f"undeclared agent {command_agent}"
                         )
+                routing_location = f"/runtime_extensions/commands/{index}"
+                routing_is_legacy = (
+                    command_agent != main_agent_id
+                    or item.get("subtask") is not expected_subtask
+                )
+                if (
+                    routing_is_legacy
+                    and not _has_finding(
+                        result,
+                        code="LEGACY_COMMAND_ROUTING",
+                        location=routing_location,
+                    )
+                ):
+                    result.warn(
+                        f"runtime_extensions.commands[{index}]: legacy command routing "
+                        "remains readable; structural modification must set agent to "
+                        f"the mode all Agent {main_agent_id} and subtask to "
+                        f"{expected_subtask_text}",
+                        code="LEGACY_COMMAND_ROUTING",
+                        phase="manifest",
+                        path=MANIFEST_FILE,
+                        location=routing_location,
+                        root_cause="legacy-command-routing",
+                        remediation=(
+                            "Regenerate the command so agent references the package's "
+                            f"mode all Agent and subtask is {expected_subtask_text}."
+                        ),
+                        evidence=(
+                            f"agent={item.get('agent')!r}, "
+                            f"subtask={item.get('subtask')!r}"
+                        ),
+                    )
                 if item.get("subtask") is not None and not isinstance(item.get("subtask"), bool):
                     result.error(f"runtime_extensions.commands[{index}].subtask: must be a boolean")
                 if item.get("model") is not None:
@@ -491,6 +565,7 @@ def check_runtime_extensions_manifest(manifest: dict[str, Any], result: Result) 
         "runtime_extensions.custom_tools",
         result,
         allowed_suffixes={".js", ".ts"},
+        custom_tool_purpose=True,
     )
     plugins = raw.get("plugins", {})
     plugin_files: list[str] = []
@@ -804,7 +879,52 @@ def validate_role(role: Any, field: str, result: Result, *, expected_mode: str) 
         result.error(f"{field}: must be a mapping")
         return None
     role_id = validate_name(role.get("id"), f"{field}.id", result)
-    if role.get("mode", expected_mode) != expected_mode:
+    autonomy_missing = "autonomy" not in role or role.get("autonomy") is None
+    autonomy = role.get("autonomy")
+    if autonomy_missing:
+        result.warn(
+            f"{field}.autonomy: missing legacy role autonomy; temporary projection defaults to bounded (中) without modifying the source package",
+            code="LEGACY_ROLE_AUTONOMY_DEFAULTED",
+            phase="permission",
+            path="expert.json",
+            location=f"{field}.autonomy",
+            root_cause="legacy-role-autonomy-missing",
+            remediation=(
+                "Choose and persist an explicit autonomy for every role before any "
+                "structural modification."
+            ),
+            evidence="bounded temporary projection",
+        )
+    elif autonomy not in workflow_autonomy.AUTONOMY_LEVELS:
+        result.error(
+            f"{field}.autonomy: must be one of {', '.join(workflow_autonomy.AUTONOMY_LEVELS)}",
+            code="ROLE_AUTONOMY_INVALID",
+            phase="permission",
+            path="expert.json",
+            location=f"{field}.autonomy",
+            root_cause="invalid-role-autonomy",
+            remediation="Choose one supported role autonomy value.",
+            evidence=str(autonomy),
+        )
+    runtime_expected_mode = expected_mode
+    if expected_mode == "all":
+        legacy_mode = role.get("mode", "primary" if autonomy_missing else "all")
+        if legacy_mode not in {"primary", "all"}:
+            result.error(f"{field}.mode: must be primary or all")
+        else:
+            runtime_expected_mode = legacy_mode
+            if legacy_mode == "primary":
+                result.warn(
+                    f"{field}.mode: legacy primary remains compatible for read-only validation and install; structural modification must migrate it to all",
+                    code="LEGACY_PRIMARY_AGENT_MODE",
+                    phase="manifest",
+                    path="expert.json",
+                    location=f"{field}.mode",
+                    root_cause="legacy-primary-agent-mode",
+                    remediation="Set the main Agent mode to all during the next structural modification.",
+                    evidence="primary",
+                )
+    elif role.get("mode", expected_mode) != expected_mode:
         result.error(f"{field}.mode: must be {expected_mode}")
     validate_text(role.get("name", role.get("title")), f"{field}.name", result, required=True)
     validate_text(role.get("description"), f"{field}.description", result, required=True)
@@ -814,11 +934,60 @@ def validate_role(role: Any, field: str, result: Result, *, expected_mode: str) 
         contract.normalize_agent_runtime_options(
             role,
             field,
-            expected_mode=expected_mode,
+            expected_mode=runtime_expected_mode,
             default_steps=default_steps,
+            allow_legacy_sampling=True,
         )
     except contract.ContractError as exc:
         result.error(str(exc))
+    for sampling_field in contract.LEGACY_AGENT_SAMPLING_KEYS:
+        if sampling_field not in role:
+            continue
+        location = f"{field}.{sampling_field}"
+        if _has_finding(
+            result,
+            code="LEGACY_AGENT_SAMPLING_FIELD",
+            location=location,
+        ):
+            continue
+        result.warn(
+            f"{location}: legacy sampling field remains readable; structural "
+            "modification must remove it",
+            code="LEGACY_AGENT_SAMPLING_FIELD",
+            phase="manifest",
+            path=MANIFEST_FILE,
+            location=location,
+            root_cause="legacy-agent-sampling-field",
+            remediation=(
+                "Remove temperature/top_p and inherit sampling behavior from the "
+                "selected model/provider before structural modification."
+            ),
+            evidence=sampling_field,
+        )
+    for sampling_path in contract.agent_sampling_option_paths(
+        role.get("options"),
+        f"{field}.options",
+    ):
+        if _has_finding(
+            result,
+            code="LEGACY_AGENT_SAMPLING_FIELD",
+            location=sampling_path,
+        ):
+            continue
+        result.warn(
+            f"{sampling_path}: legacy nested sampling field remains readable; "
+            "structural modification must remove it",
+            code="LEGACY_AGENT_SAMPLING_FIELD",
+            phase="manifest",
+            path=MANIFEST_FILE,
+            location=sampling_path,
+            root_cause="legacy-agent-sampling-field",
+            remediation=(
+                "Remove temperature/top_p from options and inherit sampling "
+                "behavior from the selected model/provider."
+            ),
+            evidence=sampling_path,
+        )
     role_mcp = validate_string_list(role.get("mcp"), f"{field}.mcp", result)
     duplicate_mcp = contract.first_duplicate(role_mcp)
     if duplicate_mcp is not None:
@@ -848,12 +1017,12 @@ def list_role_ids(manifest: dict[str, Any], result: Result) -> tuple[str | None,
     if expert_type == "expert":
         if "primary_agent" in manifest or "subagents" in manifest:
             result.error("expert.json: type expert must use agent and must not define primary_agent or subagents")
-        primary_id = validate_role(manifest.get("agent"), "agent", result, expected_mode="primary")
+        primary_id = validate_role(manifest.get("agent"), "agent", result, expected_mode="all")
         return primary_id, []
 
     if "agent" in manifest:
         result.error("expert.json: type team must use primary_agent and subagents, not agent")
-    primary_id = validate_role(manifest.get("primary_agent"), "primary_agent", result, expected_mode="primary")
+    primary_id = validate_role(manifest.get("primary_agent"), "primary_agent", result, expected_mode="all")
     subagents_raw = manifest.get("subagents")
     subagent_ids: list[str] = []
     if not isinstance(subagents_raw, list) or not subagents_raw:
@@ -1129,15 +1298,15 @@ def check_manifest_shape(
 
 
 def check_workflows(manifest: dict[str, Any], role_ids: set[str], result: Result) -> None:
-    roles = roles_from_manifest(manifest)
-    primary_id = next(
-        (
-            role.get("id")
-            for role in roles
-            if role.get("mode", "primary") == "primary"
-            and isinstance(role.get("id"), str)
-        ),
-        "",
+    primary_role = (
+        manifest.get("agent")
+        if manifest.get("type") == "expert"
+        else manifest.get("primary_agent")
+    )
+    primary_id = (
+        primary_role.get("id")
+        if isinstance(primary_role, dict) and isinstance(primary_role.get("id"), str)
+        else ""
     )
     try:
         workflow_autonomy.normalize_workflows(
@@ -1414,7 +1583,8 @@ def check_skill_markdown_shape(package_dir: Path, manifest: dict[str, Any], resu
                     expected_compatibility="opencode" if mode == "legacy" else None,
                 ),
                 *skill_contract.skill_markdown_recommendations(
-                    len(body.splitlines())
+                    len(body.splitlines()),
+                    body,
                 ),
             ],
             path=relative_path,
@@ -1439,7 +1609,12 @@ def expected_role_runtime_options(
     for field, candidate in manifest_contract.manifest_roles(manifest):
         if candidate is not role and candidate.get("id") != role_id:
             continue
-        expected_mode = "primary" if field in {"agent", "primary_agent"} else "subagent"
+        expected_mode = (
+            role.get("mode", "primary" if role.get("autonomy") is None else "all")
+            if field in {"agent", "primary_agent"}
+            else "all" if field in {"agent", "primary_agent"}
+            else "subagent"
+        )
         default_steps = 80 if field == "agent" else 150 if field == "primary_agent" else 50
         try:
             return contract.normalize_agent_runtime_options(
@@ -1447,6 +1622,7 @@ def expected_role_runtime_options(
                 field,
                 expected_mode=expected_mode,
                 default_steps=default_steps,
+                allow_legacy_sampling=True,
             )
         except contract.ContractError:
             return None
@@ -1496,7 +1672,7 @@ def check_agent_markdown_shape(package_dir: Path, manifest: dict[str, Any], resu
             result.error(f"{md_path}: frontmatter avatar_url must match expert.json")
         expected_runtime = expected_role_runtime_options(role, manifest)
         if expected_runtime is not None:
-            for field in ("steps", *contract.AGENT_OPTIONAL_RUNTIME_KEYS):
+            for field in ("steps", *contract.AGENT_READ_RUNTIME_KEYS):
                 if field in expected_runtime and fm.get(field) != expected_runtime[field]:
                     result.error(f"{md_path}: {field} must match expert.json")
                 elif field not in expected_runtime and field in fm:
@@ -1701,14 +1877,15 @@ def normalized_autonomy_workflows(manifest: dict[str, Any]) -> list[dict[str, An
         for role in roles
         if isinstance(role.get("id"), str)
     }
-    primary_id = next(
-        (
-            role["id"]
-            for role in roles
-            if isinstance(role.get("id"), str)
-            and role.get("mode", "primary") == "primary"
-        ),
-        "",
+    primary_role = (
+        manifest.get("agent")
+        if manifest.get("type") == "expert"
+        else manifest.get("primary_agent")
+    )
+    primary_id = (
+        primary_role.get("id")
+        if isinstance(primary_role, dict) and isinstance(primary_role.get("id"), str)
+        else ""
     )
     try:
         return workflow_autonomy.normalize_workflows(
@@ -1720,6 +1897,63 @@ def normalized_autonomy_workflows(manifest: dict[str, Any]) -> list[dict[str, An
         return []
 
 
+LEGACY_V2_AUTONOMY_LABELS = {
+    "scripted": "极低：全程照脚本执行，不能自行换方法",
+    "fixed": "低：按固定步骤执行，只能处理预设分支",
+    "bounded": "中：可在明确边界内选择方法",
+    "guided": "高：可根据目标灵活安排，但关键决定需确认",
+    "adaptive": "极高：可自主规划、调整和返工，仍受安全与验收标准约束",
+}
+LEGACY_V2_AUTONOMY_PREFIXES = {
+    "scripted": "【自主度：极低】",
+    "fixed": "【自主度：低】",
+    "bounded": "【自主度：中】",
+    "guided": "【自主度：高】",
+    "adaptive": "【自主度：极高】",
+}
+LEGACY_V2_MAX_AUTONOMY_PREFIXES = {
+    "scripted": "【最高生效自主度：极低】",
+    "fixed": "【最高生效自主度：低】",
+    "bounded": "【最高生效自主度：中】",
+    "guided": "【最高生效自主度：高】",
+    "adaptive": "【最高生效自主度：极高】",
+}
+
+
+def uses_full_legacy_role_contract(manifest: dict[str, Any]) -> bool:
+    """Return whether the manifest uses Manager 2.0's complete role contract."""
+
+    roles = roles_from_manifest(manifest)
+    if not roles or any("autonomy" in role for role in roles):
+        return False
+    primary = (
+        manifest.get("agent")
+        if manifest.get("type") == "expert"
+        else manifest.get("primary_agent")
+    )
+    return isinstance(primary, dict) and primary.get("mode", "primary") == "primary"
+
+
+def render_legacy_v2_workflow_projection(text: str) -> str:
+    """Convert a modern deterministic Workflow projection to Manager 2.0 labels."""
+
+    replacements: dict[str, str] = {}
+    for level in workflow_autonomy.AUTONOMY_LEVELS:
+        replacements[workflow_autonomy.AUTONOMY_LABELS[level]] = (
+            LEGACY_V2_AUTONOMY_LABELS[level]
+        )
+        replacements[workflow_autonomy.AUTONOMY_PREFIXES[level]] = (
+            LEGACY_V2_AUTONOMY_PREFIXES[level]
+        )
+        replacements[workflow_autonomy.MAX_AUTONOMY_PREFIXES[level]] = (
+            LEGACY_V2_MAX_AUTONOMY_PREFIXES[level]
+        )
+    pattern = re.compile(
+        "|".join(re.escape(value) for value in sorted(replacements, key=len, reverse=True))
+    )
+    return pattern.sub(lambda match: replacements[match.group(0)], text)
+
+
 def check_workflow_projection_parity(
     package_dir: Path,
     manifest: dict[str, Any],
@@ -1729,19 +1963,18 @@ def check_workflow_projection_parity(
     if not workflow_autonomy.has_autonomy_contract(workflows):
         return
     roles = roles_from_manifest(manifest)
-    primary = next(
-        (
-            role
-            for role in roles
-            if isinstance(role.get("id"), str)
-            and role.get("mode", "primary") == "primary"
-        ),
-        None,
+    primary = (
+        manifest.get("agent")
+        if manifest.get("type") == "expert"
+        else manifest.get("primary_agent")
     )
     if primary is None:
         return
 
+    legacy_v2 = uses_full_legacy_role_contract(manifest)
     all_projection = workflow_autonomy.render_all_workflows(workflows)
+    if legacy_v2:
+        all_projection = render_legacy_v2_workflow_projection(all_projection)
     readme = read_markdown_body(package_dir / "README.md", result)
     if all_projection not in readme:
         result.error("README.md: workflow autonomy projection differs from expert.json")
@@ -1773,6 +2006,8 @@ def check_workflow_projection_parity(
         role_projection = workflow_autonomy.render_role_workflows(workflows, role_id)
         if not role_projection:
             continue
+        if legacy_v2:
+            role_projection = render_legacy_v2_workflow_projection(role_projection)
         if role_id != primary["id"]:
             agent_path = package_dir / EXPERT_DIR / AGENTS_SUBDIR / f"{role_id}.md"
             if agent_path.exists() and role_projection not in read_markdown_body(agent_path, result):
@@ -1807,18 +2042,82 @@ def check_workflow_projection_parity(
         command = workflow["command"]
         if not workflow["contract_enabled"] or command is None:
             continue
+        expected_subtask = contract.expert_runtime_projection_policy()["command"][
+            "subtask"
+        ]
+        expected_subtask_text = str(expected_subtask).lower()
         expected = renderers.render_frontmatter(
             {
                 "description": workflow_autonomy.workflow_command_description(workflow),
                 "agent": primary["id"],
+                "subtask": expected_subtask,
             },
             workflow_autonomy.render_workflow_command(workflow),
         )
+        legacy_expected_variants = [
+            (
+                renderers.render_frontmatter(
+                    {
+                        "description": workflow_autonomy.workflow_command_description(
+                            workflow
+                        ),
+                        "agent": primary["id"],
+                    },
+                    workflow_autonomy.render_workflow_command(workflow),
+                ),
+                "subtask missing",
+            ),
+            (
+                renderers.render_frontmatter(
+                    {
+                        "description": workflow_autonomy.workflow_command_description(
+                            workflow
+                        ),
+                        "agent": primary["id"],
+                        "subtask": False,
+                    },
+                    workflow_autonomy.render_workflow_command(workflow),
+                ),
+                "subtask=false",
+            ),
+        ]
+        if legacy_v2:
+            expected = render_legacy_v2_workflow_projection(expected)
+            legacy_expected_variants = [
+                (render_legacy_v2_workflow_projection(value), evidence)
+                for value, evidence in legacy_expected_variants
+            ]
         command_path = package_dir / EXPERT_DIR / COMMANDS_SUBDIR / f"{command['name']}.md"
-        if command_path.exists() and read_markdown_body(command_path, result) != expected:
-            result.error(
-                f"{command_path}: workflow command projection differs from expert.json"
+        if command_path.exists():
+            actual = read_markdown_body(command_path, result)
+            legacy_evidence = next(
+                (
+                    evidence
+                    for legacy_value, evidence in legacy_expected_variants
+                    if actual == legacy_value and actual != expected
+                ),
+                None,
             )
+            if legacy_evidence is not None:
+                result.warn(
+                    f"{command_path}: legacy workflow command does not use subtask "
+                    f"{expected_subtask_text}; "
+                    "structural modification must regenerate it",
+                    code="LEGACY_COMMAND_ROUTING",
+                    phase="workflow",
+                    path=str(command_path),
+                    location="frontmatter.subtask",
+                    root_cause="legacy-command-routing",
+                    remediation=(
+                        "Regenerate the workflow command with subtask "
+                        f"{expected_subtask_text}."
+                    ),
+                    evidence=legacy_evidence,
+                )
+            elif actual != expected:
+                result.error(
+                    f"{command_path}: workflow command projection differs from expert.json"
+                )
 
 
 def check_package_owned_config_keys(
@@ -1888,6 +2187,7 @@ def check_permission_policy(
                     source_permission.pop("skill", None)
             normalized_role["permission"] = source_permission
             normalized_role["permission_reason"] = role.get("permission_reason", "")
+            normalized_role["autonomy"] = role.get("autonomy")
             tools = role.get("tools", {})
             if not isinstance(tools, dict):
                 continue
@@ -1906,46 +2206,29 @@ def check_permission_policy(
         except (contract.ContractError, permission_policy.PermissionPolicyError) as exc:
             result.error(f"{role_id}: {exc}")
             continue
+        legacy_role_autonomy = role.get("autonomy") is None
         config_agent = config_agents.get(role_id)
-        if isinstance(config_agent, dict) and config_agent.get("permission") != expected:
+        if (
+            not legacy_role_autonomy
+            and isinstance(config_agent, dict)
+            and config_agent.get("permission") != expected
+        ):
             result.error(
                 f"{RUNTIME_CONFIG}: agent.{role_id}.permission must match the autonomy-derived policy"
             )
-        legacy_permission_baseline = audit["warning"] == "legacy-permission-baseline"
-        if legacy_permission_baseline:
-            result.warn(
-                f"{role_id}: HIGH RISK legacy-permission-baseline preserves historical permissions, including possible unconditional Bash wildcard allow; migrate to the unified skill schema during the next structural modification, and add workflow autonomy only when a formal Workflow is declared"
-            )
-        elif audit["warning"] == "unused-role-bounded-fallback":
-            result.warn(
-                f"{role_id}: unused-role-bounded-fallback; role is not assigned to an autonomy-enabled workflow"
-            )
+        if legacy_role_autonomy:
+            continue
         for expected_text in (
             audit["source"],
             audit["effective"],
-            audit["permission_reason"] or "无",
+            audit["label"],
         ):
             if expected_text not in readme:
                 message = (
                     f"README.md: Agent permission baseline for {role_id} "
                     "differs from expert.json"
                 )
-                if legacy_permission_baseline:
-                    result.warn(
-                        message,
-                        code="LEGACY_README_PERMISSION_PROJECTION_MISMATCH",
-                        phase="documentation",
-                        path="README.md",
-                        location="documentation",
-                        root_cause="legacy-permission-contract",
-                        remediation=(
-                            "Preserve compatibility now; migrate to the unified skill "
-                            "schema and regenerate README.md during the next structural "
-                            "modification."
-                        ),
-                    )
-                else:
-                    result.error(message)
+                result.error(message)
                 break
 
 
@@ -2001,10 +2284,7 @@ def check_runtime_config(
                 result,
             )
 
-    primary_count = sum(1 for data in agents.values() if isinstance(data, dict) and data.get("mode") == "primary")
     subagent_count = sum(1 for data in agents.values() if isinstance(data, dict) and data.get("mode") == "subagent")
-    if primary_count != 1:
-        result.error(f"{RUNTIME_CONFIG}: expected exactly 1 primary agent, got {primary_count}")
     if manifest.get("type") == "expert" and subagent_count != 0:
         result.error(f"{RUNTIME_CONFIG}: type expert expected 0 subagents, got {subagent_count}")
     if manifest.get("type") == "team" and subagent_count < 1:
@@ -2093,12 +2373,16 @@ def check_runtime_config(
             if manifest.get("type") == "team" and isinstance(manifest.get("primary_agent"), dict)
             else None
         )
-        expected_mode = "primary" if agent_id == primary_id else "subagent"
+        expected_mode = (
+            role.get("mode", "primary" if role.get("autonomy") is None else "all")
+            if agent_id == primary_id
+            else "subagent"
+        )
         if config_agent.get("mode") != expected_mode:
             result.error(f"{RUNTIME_CONFIG}: agent.{agent_id}.mode must be {expected_mode}")
         if fm and fm.get("mode") != expected_mode:
             result.error(f"{md_path}: mode must be {expected_mode}")
-        for field in ("steps", *contract.AGENT_OPTIONAL_RUNTIME_KEYS):
+        for field in ("steps", *contract.AGENT_READ_RUNTIME_KEYS):
             if field in expected_runtime:
                 if config_agent.get(field) != expected_runtime[field]:
                     result.error(

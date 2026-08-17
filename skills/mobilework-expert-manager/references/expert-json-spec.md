@@ -3,8 +3,17 @@
 `expert.json` 是 MobileWork 专家包的结构与资源所有权 manifest。生成器以它和声明资源为输入，
 在 sibling staging 中重建派生文件，完整校验通过后再原子替换目标目录。
 
+能力资源选型在需求设计阶段完成：管理器根据已确认能力选择无资源、Skill、custom tool 或
+OpenCode Plugin；generator 和 validator 只做确定性投影与校验，绝不根据角色数量、职责文本、
+附件名或目录名自行补建资源。生成后的业务 Agent 在普通运行中不得修改专家包。
+
 本文件描述当前合同。不要增加 `package_layout_version`，不要建立版本分支，也不要从
 `README.md`、`opencode.json` 或 `.opencode/` 反推缺失的 manifest。
+
+创建位置不是 `expert.json` 字段。新建单专家、专家团或资料转新专家在当前业务卡确认后，通过独立
+`question` 工具选择 `my-experts`、`workspace` 或安全的自定义父目录；该回答只进入
+`ExecutionContext` version 2 的 `targetMode/outputRoot`，不写入 manifest 或派生物。已有专家修改、
+安装、校验和打包不新增此选择。
 
 设计 agent、skill、触发描述和输出合同时，同时读取
 `references/opencode-authoring-best-practices.md`。
@@ -34,6 +43,8 @@
   "skills": [],
   "agent": {
     "id": "contract-reviewer",
+    "mode": "all",
+    "autonomy": "bounded",
     "name": "合同审查专家",
     "description": "审查合同条款并提出修改建议。",
     "skills": []
@@ -42,7 +53,7 @@
 ```
 
 - `type: expert` 必须有 `agent`，禁止 `primary_agent` 与 `subagents`。
-- 单专家只生成一个 `mode: primary` agent，不包含团队委派规则。
+- 单专家只生成一个 `mode: all` agent，不包含团队委派规则。
 
 ### 专家团
 
@@ -55,6 +66,8 @@
   "skills": [],
   "primary_agent": {
     "id": "delivery-director",
+    "mode": "all",
+    "autonomy": "bounded",
     "name": "交付总监",
     "description": "编排、验收并集成跨角色交付。",
     "skills": []
@@ -62,6 +75,8 @@
   "subagents": [
     {
       "id": "engineer",
+      "mode": "subagent",
+      "autonomy": "bounded",
       "name": "工程师",
       "description": "实现并验证代码变更。",
       "skills": []
@@ -71,7 +86,7 @@
 ```
 
 - `type: team` 必须有一个 `primary_agent` 和至少一个 `subagents[]`，禁止 `agent`。
-- agent id 必须唯一；团长使用 `mode: primary`，团员使用 `mode: subagent`。
+- agent id 必须唯一；团长使用 `mode: all`，团员使用 `mode: subagent`。
 
 ## 2. 命名与展示字段
 
@@ -136,6 +151,19 @@
 - 同一技能可分配给一个、多个或全部角色；“全部成员”展开为团长和每个团员，不保存通配。
 - `permission.skill` 完全由角色 `skills[]` 派生，禁止在新 manifest 中手写。
 - `package_resources[]` 必须声明每个技能目录内包括 `SKILL.md` 在内的全部文件和匹配 SHA-256。
+- 完整 Skill 名集合必须与两类 Command `name` 和所有 Agent `id` 互斥；该规则同样检查旧 schema
+  派生出的完整名称。
+
+Skill 名称使用完整语义 kebab-case，不强制专家或角色前缀；同一能力只声明一份，多角色引用同一
+完整名称。角色存在、职责、流程、输出合同和质量门都不会自动创建 Skill。没有适合用 Skill
+固化的能力时，顶层及角色 `skills[]` 保持为空或省略，`.opencode/skills/` 仍可作为空目录存在，
+且业务 `SKILL.md` 数量为零。
+
+管理器自建 `origin: managed`、`edit_policy: managed` 的 Skill 时，先在可信 staging 中编写完整
+Skill 目录，按 Agent Skills 官方页面的强制规则校验，再计算每个文件 SHA-256 并登记
+`package_resources[]`。`create_expert.normalize_manifest` 只接受这些已声明输入，
+`write_package_resources` 逐字节复制；generator 不负责从职责文本创作 Skill。上传 Skill 继续由
+`import_skill.py` 诊断并保持原目录树和全部文件字节。
 
 新 `skills[]` 与旧 `common_skills`/purpose schema 不得混用。未修改的旧包仍可读取、校验、安装和
 打包；任何结构性修改先按本页“修改已有包”迁移，不在新建流程继续使用旧命名规则。
@@ -146,19 +174,28 @@
 
 - `id`、`name`、`display_name`、`profession`、`description`、`avatar_url`、`color`；
 - `responsibilities`、`route_triggers`、`workflow`、`quality_gates`、`handoff_contract`；
+- 必填 `autonomy`，值为 `scripted`、`fixed`、`bounded`、`guided` 或 `adaptive`；
 - `skills`、`references`、`instructions`、`mcp`、`custom_tools`、`permission`、可选 `permission_reason`；
 - OpenCode 正式步数字段 `steps`，以及仅供 `expert.json` 读取旧包的 MobileWork 历史输入
   `max_turns`、`maxTurns`；
-- 可选运行参数 `model`、`variant`、`temperature`、`top_p`、`hidden`、`options`。
+- 可选运行参数 `model`、`variant`、`hidden`、`options`。
+
+`agent.id`、`primary_agent.id` 和每个 `subagents[].id` 都属于包内运行时标识集合，必须与两类
+Command `name` 及完整 Skill 名两两互斥。`name`、`display_name` 等展示字段不参与该规则。
 
 `title` 是只读旧 MobileWork manifest 时允许的 `name` 回退，不是新的 Agent 字段。新 manifest
 统一声明 `name`；当旧角色只有 `title` 时 generator 将其用于显示名，但不会向 Agent Markdown
 或 `opencode.json.agent.<id>` 派生 `title`。若同时声明 `name` 与 `title`，`name` 优先。
 角色 `mcp[]` 只能引用已声明的 MCP server，且条目不得重复。
 角色 `custom_tools[]` 只接受非空、不重复的相对 path，并必须精确匹配
-`runtime_extensions.custom_tools[].path`。单专家不自动拥有全部包级 custom tool；workflow
-executor 可以只为实际参与角色建立该 workflow 所需的 tool 所有权。旧 `tools` mapping 仅作为
+`runtime_extensions.custom_tools[].path`。每个 custom tool 还必须以非空 `purpose` 记录已确认的具体
+调用用途；不得从 JavaScript/TypeScript 源码描述或函数名推断。单专家不自动拥有全部包级 custom tool；Workflow
+executor 只能引用角色已经拥有的 custom tool，不能建立所有权。旧 `tools` mapping 仅作为
 布尔 permission 兼容输入，不是 custom tool 所有权声明。
+
+这些资源字段必须来自已确认的能力映射，不得由 `responsibilities`、`workflow`、
+`quality_gates` 或角色位置直接推导。Plugin 没有角色所有权字段；本地 Plugin 是
+package-wide 运行行为，只通过 `runtime_extensions.plugins` 声明并在包说明中展示。
 
 角色资源绑定合同：
 
@@ -188,24 +225,23 @@ executor 可以只为实际参与角色建立该 workflow 所需的 tool 所有�
 |---|---|
 | `model` | 非空 `provider/model`；未声明时继承 OpenCode 或 workspace 默认模型。 |
 | `variant` | 非空字符串，并且同一角色必须显式声明 `model`。 |
-| `temperature` | 有限数字，范围 `0.0–1.0`。 |
-| `top_p` | 有限数字，范围 `0.0–1.0`。 |
 | `hidden` | 布尔值，只允许出现在 `subagents[]`。 |
-| `options` | 非空 JSON 对象；用于 `reasoningEffort`、`textVerbosity` 等 provider-specific 参数，递归禁止非有限数字。 |
+| `options` | 非空 JSON 对象；用于 `reasoningEffort`、`textVerbosity` 等 provider-specific 参数，递归禁止非有限数字，也不得包含 `temperature` 或 `top_p`。 |
 
-`temperature` 与 `top_p` 可以同时声明，但通常只调一个以便解释行为。未声明的可选参数不生成，
-由 OpenCode、模型或 provider 继承默认值；生成器不得自行推断采样参数。`options` 仍受 secret 与
-便携性扫描约束，不得写真实凭证、私有 endpoint 或开发机路径。
+MobileWork 专家 Agent 不声明或投影 `temperature`、`top_p`，采样行为由 OpenCode、模型或 provider
+继承。旧包中的顶层采样字段只允许只读校验和安装，并产生 `LEGACY_AGENT_SAMPLING_FIELD`；任何
+结构性修改前必须移除。`options` 仍受 secret 与便携性扫描约束，不得写真实凭证、私有 endpoint、
+开发机路径或嵌套采样字段。
 
 角色字段使用显式 allowlist。OpenCode 遗留字段 `maxSteps` 已弃用，本合同也拒绝它；同时拒绝
 `prompt`、`disable` 及其他未知顶层字段；
 provider-specific 参数必须放入 `options`。旧 `tools` 只作为 manifest 到 `permission` 的布尔兼容
 输入，永不写入 Agent Markdown 或 `opencode.json`。
 
-统一技能池 manifest 未声明顶层 Workflow 时，permission 使用 `no-workflow-bounded-default`；
-启用 workflow autonomy 时，permission 按 `references/permission-policy-spec.md` 从角色的全部
-effective autonomy、execution 和 ownership 合并。显式规则提高计算动作时必须声明非空
-`permission_reason`；它不能改写 task、Skill、MCP、Bash 通配或外部目录硬边界。
+permission 只按角色 `autonomy` 和结构化所有权生成，与是否声明 Workflow 以及 Workflow/Phase 的
+autonomy、override、execution 无关。手写 permission 只能逐项收紧；`permission_reason` 不能
+授权高于角色矩阵的动作。包内已分配 Skill 精确 allow；外部 Skill 在 `guided` 为 ask、
+`adaptive` 为 allow，其余三档 deny。完整规则见 `references/permission-policy-spec.md`。
 
 生成的 agent frontmatter 至少包含：
 
@@ -219,14 +255,14 @@ profession:
   en: 合同风险审查专家
   zh: 合同风险审查专家
 steps: 80
-mode: primary
+mode: all
 color: '#2563eb'
 permission: {}
 ```
 
 `name` 等于文件名 stem 和 agent id。`expert.json` 接受的三种步数输入一律只派生为官方
 `steps`；角色声明的 `model`、
-`variant`、`temperature`、`top_p`、`hidden`、`options` 原样投影。frontmatter 与
+`variant`、`hidden`、`options` 原样投影。frontmatter 与
 `opencode.json.agent.<id>` 的 `description`、`steps`、`mode`、`permission` 及所有已声明运行参数
 必须一致；未声明的可选参数在两处都必须省略。
 
@@ -367,15 +403,16 @@ execution 只接受 `executors/standards`；每个 Agent override 只接受 `aut
 
 | kind | ref | 必须满足 |
 |---|---|---|
-| `skill-script` | `<完整-skill-id>:scripts/<path>` | 对应 `package_resources[]` 真实文件存在，角色未拒绝该 skill |
-| `custom-tool` | `runtime_extensions.custom_tools[].path` | backing source 存在，角色权限未明确拒绝 |
+| `skill-script` | `<完整-skill-id>:scripts/<path>` | 对应 `package_resources[]` 真实文件存在，且 Skill 已分配给该角色 |
+| `custom-tool` | `runtime_extensions.custom_tools[].path` | backing source 存在，且角色 `custom_tools[]` 明确拥有 |
 | `mcp-tool` | `<mcp-name>/<tool-name>` | MCP 已声明且属于参与角色 |
 | `programming-tool` | 精确 Bash pattern | 不含 shell 控制符，至少一个 token 精确引用 `package_resources[]`，权限未拒绝，standards 限定输入输出和用途 |
 | `agent` | 已声明 Agent id | `scripted` 禁止；其他档位需要明确标准 |
 
 `scripted`、`fixed`、`bounded` 必须有非空 executors 和 standards；`guided` 必须有关键确认点
 standards，executors 可选；`adaptive` 可不声明 execution。启用自主度的 workflow 必须至少有
-一个 phase，且每个 phase 都必须有非空 `acceptance[]`。
+一个 phase，且每个 phase 都必须有非空 `acceptance[]`。execution 只能选择角色当前 permission
+为 allow 或 ask 的已拥有能力；deny 校验失败，且 execution 不能生成 allowlist 或提高权限。
 
 ### Workflow command
 
@@ -386,11 +423,19 @@ standards，executors 可选；`adaptive` 可不声明 execution。启用自主�
 参与角色只出现一次并显示其生效自主度、自主度来源和 execution 来源，运行时实例不重复写入；
 override 的原因、执行器和标准保留在该 Agent 项下。它不得包含手写 template。README、Agent、
 Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_extensions.commands[]`，两种
-来源不得重名，普通 command 不增加自主度前缀。
+来源不得重名，且两类 Command `name`、完整 Skill 名、Agent `id` 必须两两互斥；普通 command 不
+增加自主度前缀。Command 与 Skill 冲突报 `<command-field>.name: conflicts with skill <name>`，
+Command 与 Agent 冲突报 `<command-field>.name: conflicts with agent <name>`，Agent 与 Skill 冲突报
+`<agent-field>.id: conflicts with skill <name>`；不自动修复或保留 warning 兼容。
 
 ## 7. 运行时与资源入口
 
 - `runtime_extensions`、MCP、env 和 CLI 安装投影见 `runtime-extensions-spec.md`。
+- custom tool 与本地 Plugin 使用 `<slug>-<name>` 或 `<slug>/<name>` 命名空间；custom tool 由
+  角色 `custom_tools[]` 精确拥有，Plugin 始终为 package-wide。外部系统访问使用 MCP，不以
+  Plugin 代替连接器。npm Plugin 必须来自可信、真实存在且精确锁定版本的包。
+- 零资源映射不生成 `.opencode/tools/`、`.opencode/plugins/` 或 `opencode.json.plugin`；
+  generator 不为保持目录形状生成占位工具或 Plugin。
 - 本地与 Git Reference 分别使用 `path` 与 `repository`，两者恰好出现一个；角色通过
   `references[]` 声明使用关系。角色规则使用 `role_instructions` 声明本地 Markdown，再通过角色
   `instructions[]` 分配，不进入 workspace 全局 `runtime_extensions.instructions`。
@@ -401,21 +446,25 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
 ## 8. 修改已有包
 
 1. 读取 `expert.json` 和它声明的真实资源文件。
-2. 若包使用 `common_skills` 和 purpose 对象，结构性修改前先迁移到统一技能池：保留现有完整
+2. 结构性修改前为每个角色显式补齐 autonomy；旧包只读诊断、校验和安装的 bounded 临时投影
+   不能写回或替代用户选择。把单专家主 Agent 和专家团团长的旧 `mode: primary` 迁移为 `all`；
+   团员保持 `subagent`。
+3. 若包使用 `common_skills` 和 purpose 对象，结构性修改前先迁移到统一技能池：保留现有完整
    技能名和全部文件字节，旧通用技能分配给全部角色，旧角色技能只保留原角色分配，并将条目标记
    为 `origin: legacy-migrated`、`edit_policy: managed`。
-3. 保持 slug、agent id、完整 skill name 不变，除非用户明确要求重命名。
-4. `origin: uploaded`、`edit_policy: preserved` 的技能默认不得改写；明确授权后保留 origin，
+4. 保持 slug、agent id、完整 skill name 不变，除非用户明确要求重命名。
+5. `origin: uploaded`、`edit_policy: preserved` 的技能默认不得改写；明确授权后保留 origin，
    仅将 edit_policy 转为 `managed`。
-5. 在 manifest 用户可见字段中先完成 MobileWork 口径归一化。
-6. 修改 manifest 和必要输入资源，不直接修补派生 Markdown 或 runtime config。
-7. 经确认后使用 `create_expert.py --force` 重建。
-8. 运行 validator、便携性扫描、打包和解压后二次校验。
+6. 在 manifest 用户可见字段中先完成 MobileWork 口径归一化。
+7. 修改 manifest 和必要输入资源，不直接修补派生 Markdown 或 runtime config。
+8. 经确认后使用 `create_expert.py --force` 重建。
+9. 运行 validator、便携性扫描、打包和解压后二次校验。
 
 ## 9. 可复制单专家模板
 
-下方第一个标记块是生成新 manifest 时的可复制模板。它使用显式空技能池；需要技能时先准备
-完整技能目录，再将每个文件登记到 `package_resources[]` 并用完整名称分配给角色。第二个标记块
+下方第一个标记块是生成新 manifest 时的可复制模板。它使用显式空技能池；只有能力映射选择
+Skill 时才先准备完整技能目录，再将每个文件登记到 `package_resources[]` 并用完整名称分配给角色。
+角色职责本身不触发资源创建。第二个标记块
 只供兼容测试读取旧 schema，不用于新建。
 
 <!-- mobilework-template:expert-json:start -->
@@ -478,7 +527,8 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
     "name": "合同审查专家",
     "display_name": "合同审查专家",
     "description": "Reviews contract terms, identifies risk, and proposes precise amendments.",
-    "mode": "primary",
+    "mode": "all",
+    "autonomy": "bounded",
     "steps": 80,
     "color": "#2563eb",
     "avatar_url": "avatars/contract-reviewer.png",
@@ -510,13 +560,11 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
       "read": "allow",
       "edit": "allow",
       "bash": {
-        "*": "ask",
-        "git status*": "allow",
-        "git diff*": "allow"
+        "*": "ask"
       },
       "webfetch": "allow"
     },
-    "permission_reason": "允许只读 Git 状态检查，以便为合同修改保留可核验的变更证据。",
+    "permission_reason": "保留角色权限说明；该字段不能提高角色自主度矩阵。",
     "profession": "合同风险审查专家",
     "route_triggers": [
       "用户要求审查合同风险、提取关键条款或生成修改建议。"
@@ -597,7 +645,8 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
     "name": "合同审查专家",
     "display_name": "合同审查专家",
     "description": "Reviews contract terms, identifies risk, and proposes precise amendments.",
-    "mode": "primary",
+    "mode": "all",
+    "autonomy": "bounded",
     "steps": 80,
     "color": "#2563eb",
     "avatar_url": "avatars/contract-reviewer.png",
@@ -632,9 +681,7 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
       "read": "allow",
       "edit": "allow",
       "bash": {
-        "*": "ask",
-        "git status*": "allow",
-        "git diff*": "allow"
+        "*": "ask"
       },
       "webfetch": "allow",
       "skill": {
@@ -644,7 +691,7 @@ Skill 投影保持原样；额外的非 workflow command 继续使用 `runtime_e
         "contract-review-expert-contract-reviewer-clause-checklist": "allow"
       }
     },
-    "permission_reason": "允许只读 Git 状态检查，以便为合同修改保留可核验的变更证据。",
+    "permission_reason": "保留角色权限说明；该字段不能提高角色自主度矩阵。",
     "profession": "合同风险审查专家",
     "route_triggers": [
       "用户要求审查合同风险、提取关键条款或生成修改建议。"

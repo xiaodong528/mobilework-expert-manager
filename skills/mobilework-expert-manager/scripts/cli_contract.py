@@ -23,6 +23,7 @@ _EMERGENCY_POLICY: dict[str, Any] = {
         "defaultSchemaVersion": 2,
         "supportedSchemaVersions": [1, 2],
         "formats": ["human", "json"],
+        "streamEncoding": "utf-8",
         "v2Fields": [
             "schemaVersion",
             "operation",
@@ -59,6 +60,7 @@ _CLI_POLICY = _CANONICAL_POLICY["cli"]
 SCHEMA_V2_FIELDS = tuple(_CLI_POLICY["v2Fields"])
 SUPPORTED_SCHEMA_VERSIONS = tuple(_CLI_POLICY["supportedSchemaVersions"])
 SUPPORTED_FORMATS = tuple(_CLI_POLICY["formats"])
+STREAM_ENCODING = str(_CLI_POLICY["streamEncoding"])
 GATE_NAMES = tuple(_CANONICAL_POLICY["gates"]["names"])
 GATE_VALUES = tuple(_CANONICAL_POLICY["gates"]["values"])
 EVIDENCE_LEVELS = tuple(_CANONICAL_POLICY["evidenceLevels"])
@@ -124,6 +126,7 @@ class CliPolicy:
     default_schema_version: int = DEFAULT_SCHEMA_VERSION
     supported_schema_versions: tuple[int, ...] = SUPPORTED_SCHEMA_VERSIONS
     formats: tuple[str, ...] = SUPPORTED_FORMATS
+    stream_encoding: str = STREAM_ENCODING
     v2_fields: tuple[str, ...] = SCHEMA_V2_FIELDS
     gate_names: tuple[str, ...] = GATE_NAMES
     gate_values: tuple[str, ...] = GATE_VALUES
@@ -146,6 +149,7 @@ class CliPolicy:
             "supportedSchemaVersions", list(SUPPORTED_SCHEMA_VERSIONS)
         )
         formats_raw = raw.get("formats", list(SUPPORTED_FORMATS))
+        stream_encoding = raw.get("streamEncoding", STREAM_ENCODING)
         fields_raw = raw.get("v2Fields", list(SCHEMA_V2_FIELDS))
         exits_raw = raw.get("exitCodes", dict(_DEFAULT_EXIT_CODES))
         gates_raw = policy.get(
@@ -184,6 +188,8 @@ class CliPolicy:
         formats = tuple(formats_raw)
         if formats != SUPPORTED_FORMATS:
             raise CliArgumentError("formats must match the manager contract")
+        if stream_encoding != STREAM_ENCODING:
+            raise CliArgumentError("streamEncoding must match the manager contract")
 
         if not isinstance(fields_raw, Sequence) or isinstance(
             fields_raw, (str, bytes)
@@ -224,6 +230,7 @@ class CliPolicy:
             default_schema_version=default_schema,
             supported_schema_versions=supported,
             formats=formats,
+            stream_encoding=stream_encoding,
             v2_fields=fields,
             gate_names=gate_names,
             gate_values=gate_values,
@@ -527,8 +534,22 @@ def render_human(result: CliResult) -> str:
     return output_sanitizer.sanitize_text("\n".join(lines))
 
 
+def _configure_standard_stream_encoding(destination: TextIO) -> None:
+    if destination is not sys.stdout and destination is not sys.stderr:
+        return
+    reconfigure = getattr(destination, "reconfigure", None)
+    if not callable(reconfigure):
+        return
+    encoding = str(getattr(destination, "encoding", "") or "")
+    normalized = encoding.lower().replace("_", "-")
+    if normalized in {"utf-8", "utf8"}:
+        return
+    reconfigure(encoding=STREAM_ENCODING, errors="strict")
+
+
 def write_diagnostic(message: str, *, stderr: TextIO | None = None) -> None:
     destination = sys.stderr if stderr is None else stderr
+    _configure_standard_stream_encoding(destination)
     destination.write(output_sanitizer.sanitize_text(message).rstrip("\n") + "\n")
 
 
@@ -549,6 +570,7 @@ def emit(
     if output_format not in resolved_policy.formats:
         raise CliArgumentError(f"unsupported output format {output_format}")
     destination = sys.stdout if stdout is None else stdout
+    _configure_standard_stream_encoding(destination)
     for diagnostic in diagnostics:
         write_diagnostic(diagnostic, stderr=stderr)
     if output_format == "json":

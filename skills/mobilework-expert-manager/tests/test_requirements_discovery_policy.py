@@ -19,9 +19,147 @@ import manager_contract
 
 
 class RequirementsDiscoveryPolicyTests(unittest.TestCase):
+    def test_capability_implementation_mapping_is_machine_readable(self) -> None:
+        mapping = manager_contract.load_policy()["requirementsDiscovery"][
+            "capabilityImplementationMapping"
+        ]
+        self.assertEqual(mapping["defaultMode"], "manager-selects-minimal-fit")
+        self.assertFalse(mapping["rolePresenceCreatesResource"])
+        self.assertEqual(
+            mapping["responsibilityTextDirectProjection"], "forbidden"
+        )
+        self.assertEqual(
+            mapping["candidateResourceTypes"],
+            ["none", "skill", "custom-tool", "opencode-plugin"],
+        )
+        self.assertEqual(
+            mapping["candidateEvidenceSources"],
+            [
+                "user-goal",
+                "role-responsibility",
+                "workflow",
+                "quality-requirement",
+                "trusted-material",
+                "explicit-request",
+                "uploaded-resource",
+            ],
+        )
+        self.assertEqual(
+            mapping["candidateOnlyEvidenceSources"],
+            ["role-responsibility", "workflow", "quality-requirement"],
+        )
+        self.assertEqual(
+            mapping["resourceSemantics"],
+            {
+                "none": "no-capability-resource-generated",
+                "skill": (
+                    "reusable-method-checklist-sop-guidance-or-python-shell-"
+                    "script-bundle"
+                ),
+                "custom-tool": (
+                    "agent-invoked-deterministic-javascript-or-typescript-"
+                    "capability"
+                ),
+                "opencode-plugin": (
+                    "event-listener-tool-interceptor-or-runtime-behavior-modifier"
+                ),
+            },
+        )
+        self.assertEqual(
+            mapping["selectionConstraints"],
+            {
+                "externalSystemAccessUsesMcpNotPlugin": True,
+                "existingPythonOrShellStaysInSkillExecutor": True,
+                "preferLeastRuntimePower": True,
+                "oneResourcePerRuntimeResponsibility": True,
+                "multiResourceCombinationRequiresDistinctConfirmedRuntimeResponsibilities": True,
+                "sharedCapabilityUsesOneResourceWithMultipleRoleReferences": True,
+                "localPluginOwnership": "package-wide-not-role-owned",
+                "generatedExpertRuntimeMutation": "forbidden",
+            },
+        )
+        self.assertEqual(
+            mapping["businessTruthBoundary"],
+            {
+                "managerMayInferTechnicalMapping": True,
+                "managerMayProposeBusinessCapability": True,
+                "managerMayInventBusinessCapabilityOrRule": False,
+                "candidateRequires": [
+                    "stable-business-label",
+                    "observable-runtime-behavior",
+                    "trusted-provenance",
+                ],
+                "missingBusinessRuleAction": (
+                    "keep-material-decision-open-and-ask-authorized-source"
+                ),
+            },
+        )
+        authorization = mapping["authorization"]
+        self.assertTrue(authorization["requiresCurrentWholeCardConfirmation"])
+        self.assertTrue(authorization["technicalCarrierChoiceDelegatedToManager"])
+        self.assertEqual(
+            authorization["materialMappingChangeAction"],
+            "invalidate-prior-confirmation-and-run-full-card-first",
+        )
+        self.assertEqual(
+            authorization["generationAuthorizationScope"],
+            "current-expert-package-resources-only",
+        )
+        self.assertEqual(
+            authorization["generationDoesNotAuthorize"],
+            [
+                "install",
+                "enable",
+                "network-download",
+                "external-connection",
+                "permission-expansion",
+                "execute-generated-code",
+                "release",
+            ],
+        )
+        self.assertFalse(mapping["naming"]["skill"]["expertOrRolePrefixRequired"])
+        self.assertEqual(
+            mapping["naming"]["internalReferenceFallback"],
+            "<slug>-reference-<alias>",
+        )
+        self.assertEqual(
+            mapping["zeroResourceProjection"],
+            {
+                "condition": "no-fit-confirmed-capability",
+                "topLevelSkills": "empty-or-omitted",
+                "roleSkills": "empty-or-omitted",
+                "skillsDirectory": "present-and-empty",
+                "toolsDirectory": "omitted",
+                "pluginsDirectory": "omitted",
+                "skillMarkdownCount": 0,
+                "customToolCount": 0,
+                "pluginCount": 0,
+                "opencodePluginConfig": "omitted",
+            },
+        )
+        self.assertEqual(
+            mapping["npmPlugin"],
+            {
+                "requiresTrustedExistingPackage": True,
+                "requiresExactVersion": True,
+                "versionFormat": "exact-semver-no-range",
+                "inventedPackageOrVersion": "forbidden",
+            },
+        )
+
     def test_machine_policy_defines_ledger_card_budget_and_side_effects(self) -> None:
         policy = manager_contract.load_policy()["requirementsDiscovery"]
-        self.assertEqual(policy["schemaVersion"], 11)
+        self.assertEqual(policy["schemaVersion"], 14)
+        self.assertEqual(
+            [(item["value"], item["label"], item["externalSkill"]) for item in policy["roleAutonomySelection"]["values"]],
+            [
+                ("scripted", "低", "deny"),
+                ("fixed", "较低", "deny"),
+                ("bounded", "中", "deny"),
+                ("guided", "较高", "ask"),
+                ("adaptive", "高", "allow"),
+            ],
+        )
         self.assertEqual(policy["ledgerPersistence"], "session-only")
         self.assertEqual(
             policy["sources"],
@@ -59,6 +197,116 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
                 "skillTextCountsAsHostEvidence": False,
                 "assistantSelfReportCountsAsHostEvidence": False,
             },
+        )
+        selection = policy["creationTargetSelection"]
+        self.assertEqual(
+            selection["appliesTo"],
+            [
+                "create-expert",
+                "create-team",
+                "convert-material-to-new-expert",
+            ],
+        )
+        self.assertEqual(
+            selection["excludedOperations"],
+            ["modify-existing", "install", "validate", "package"],
+        )
+        self.assertEqual(
+            selection["question"],
+            {
+                "toolPreference": {
+                    "recognizedNames": ["AskUserQuestion", "question"],
+                    "equivalentCapability": "single-select-with-custom-input",
+                    "whenAvailable": "must-use",
+                },
+                "request": {
+                    "header": "安装位置",
+                    "question": "确认后，将新专家创建到哪里？",
+                    "multiple": False,
+                    "custom": True,
+                    "options": [
+                        {
+                            "label": "我的专家（MobileWork 个人专家目录）",
+                            "description": (
+                                "由 MobileWork 宿主解析；独立运行默认使用 "
+                                "~/.mobilework/experts/personal。"
+                            ),
+                        },
+                        {
+                            "label": "当前工作空间",
+                            "description": "创建到当前工作空间根目录。",
+                        },
+                    ],
+                },
+                "replyMapping": {
+                    "event": "question.replied",
+                    "eventAnswerPath": "properties.answers[0][0]",
+                    "requiredQuestionAnswerCount": 1,
+                    "requiredSelectedLabelCount": 1,
+                    "fixedLabels": [
+                        {
+                            "label": "我的专家（MobileWork 个人专家目录）",
+                            "creationTarget": "my-experts",
+                        },
+                        {
+                            "label": "当前工作空间",
+                            "creationTarget": "workspace",
+                        },
+                    ],
+                    "unmatchedSingleAnswer": "custom",
+                },
+                "fallback": {
+                    "when": "no-equivalent-ask-user-tool-available",
+                    "channel": "assistant-body",
+                    "question": "确认后，将新专家创建到哪里？",
+                    "choices": [
+                        "我的专家（MobileWork 个人专家目录）",
+                        "当前工作空间",
+                    ],
+                    "customInstruction": "也可以回复其他已存在的绝对父目录。",
+                    "mustAwaitReply": True,
+                },
+            },
+        )
+        self.assertEqual(
+            selection["budget"],
+            {
+                "consumesDiscoveryRound": False,
+                "consumesDecisionBudget": False,
+                "invalidatesConfirmedBusinessCard": False,
+            },
+        )
+        self.assertEqual(
+            selection["executionGate"]["preAnswerForbidden"],
+            [
+                "environment-preflight",
+                "process",
+                "filesystem-write",
+                "network",
+                "data-egress",
+                "plugin",
+                "mcp",
+                "permission-expansion",
+                "generator",
+                "validation",
+            ],
+        )
+        self.assertEqual(
+            selection["executionGate"]["toolUnavailableAction"],
+            "ask-in-conversation",
+        )
+        self.assertTrue(selection["executionGate"]["bodyFallbackAllowed"])
+        self.assertNotIn("questionUnavailable", selection["errors"])
+        self.assertEqual(selection["customPath"]["finalPath"], "<parent>/<slug>")
+        self.assertEqual(
+            selection["customPath"]["forbidden"],
+            [
+                "filesystem-root",
+                "symlink",
+                "windows-reparse-point",
+                "special-file",
+                "path-escape",
+            ],
         )
         self.assertEqual(
             policy["ledgerFields"],
@@ -449,6 +697,9 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
                     "information-sources-appendix",
                     "discovery-tail-before-current-card-confirmation",
                 ],
+                "allowedDefaultExceptions": [
+                    "role-autonomy-selection-labels",
+                ],
                 "developmentDetailsActivation": (
                     "explicit-request-after-current-whole-card-confirmation"
                 ),
@@ -462,6 +713,9 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
                     "autonomy-enums",
                     "translated-permission-or-autonomy-level-labels",
                     "machine-skill-identifiers",
+                    "machine-custom-tool-identifiers",
+                    "machine-plugin-identifiers",
+                    "technical-carrier-types",
                     "technical-binding-syntax",
                     "external-entry-implementation-channel-types",
                 ],
@@ -515,10 +769,20 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
             {
                 "businessCard": [
                     "business-capability-name",
-                    "role-ownership",
+                    "usage-scope",
+                    "trigger-or-invocation",
+                    "inputs-and-outputs",
+                    "visible-side-effects",
+                    "permissions-cost-and-runtime-prerequisites",
+                    "quality-gates",
+                    "implementation-status",
                 ],
-                "machineSkillIdentifiers": (
+                "machineResourceIdentifiers": (
                     "development-details-after-current-whole-card-confirmation"
+                ),
+                "technicalCarrierType": (
+                    "manager-selected-after-current-whole-card-confirmation-without-"
+                    "extra-confirmation-when-boundaries-are-unchanged"
                 ),
             },
         )
@@ -865,7 +1129,7 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
         self.assertIn("追溯到\nmanager contract", requirements)
         self.assertIn("提升为 `confirmed`", requirements)
         self.assertIn("业务能力名称", requirements)
-        self.assertIn("机器 Skill 标识", requirements)
+        self.assertIn("机器 Skill、custom tool 或 Plugin 标识", requirements)
         self.assertIn("### 默认展示边界", requirements)
         self.assertIn("不能出现“低自主度”“高自主度”", requirements)
         self.assertIn("该限制也覆盖 provenance 和卡后提问", requirements)
@@ -1031,7 +1295,7 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
         evals = json.loads((SKILL / "evals/evals.json").read_text(encoding="utf-8"))[
             "evals"
         ]
-        self.assertEqual(len(evals), 40)
+        self.assertEqual(len(evals), 44)
         by_id = {item["id"]: item for item in evals}
         self.assertEqual(
             {
@@ -1039,16 +1303,23 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
                 for item in evals
                 if "host_expectation_indexes" in item
             },
-            {106, 114, 139, 140},
+            {104, 106, 114, 139, 140, 144},
         )
         self.assertEqual(
             {
                 eval_id: by_id[eval_id]["host_expectation_indexes"]
-                for eval_id in (106, 114, 139, 140)
+                for eval_id in (104, 106, 114, 139, 140, 144)
             },
-            {106: [5], 114: [4], 139: [2, 6], 140: [7]},
+            {
+                104: [2, 3],
+                106: [5],
+                114: [4],
+                139: [2, 6],
+                140: [7],
+                144: [7],
+            },
         )
-        for eval_id in (106, 114, 139, 140):
+        for eval_id in (104, 106, 114, 139, 140, 144):
             item = by_id[eval_id]
             host_indexes = item["host_expectation_indexes"]
             self.assertEqual(len(host_indexes), len(set(host_indexes)))
@@ -1074,7 +1345,7 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
             "carried only as pending status",
             by_id[139]["expectations"][1],
         )
-        for eval_id in (139, 140):
+        for eval_id in (104, 139, 140):
             item = by_id[eval_id]
             self.assertIn("multi-turn", item["suites"])
             self.assertGreaterEqual(len(item["conversation"]), 3)
@@ -1090,6 +1361,23 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
         self.assertTrue(
             any("machine Skill identifiers" in item for item in delegated)
         )
+        dynamic = by_id[144]
+        dynamic_prompt = dynamic["prompt"]
+        self.assertEqual(dynamic["conversation"][0]["content"], dynamic_prompt)
+        for forbidden_technical_choice in (
+            "managed Skill",
+            "Custom Tool",
+            "local Plugin",
+            ".opencode/",
+        ):
+            self.assertNotIn(forbidden_technical_choice, dynamic_prompt)
+        for confirmed_scoring_rule in (
+            "missing_items 是 original_evidence 为空的 id",
+            "四舍五入到两位小数",
+            "空列表得 0 分",
+            "列表非空且 missing_items 为空时 evidence_complete 才为 true",
+        ):
+            self.assertIn(confirmed_scoring_rule, dynamic_prompt)
         standards = by_id[114]["expectations"]
         self.assertEqual(by_id[114]["critical_expectation_indexes"], [0, 1, 2, 3])
         self.assertIn("业务负责人直接确认", by_id[114]["prompt"])
@@ -1150,8 +1438,8 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
         self.assertIn("24-item train", requirements)
         self.assertIn("16-item held-out", requirements)
         self.assertIn("`pr-smoke` | 8", requirements)
-        self.assertIn("`release-benchmark` | 10", requirements)
-        self.assertIn("`full` | 40", requirements)
+        self.assertIn("`release-benchmark` | 13", requirements)
+        self.assertIn("`full` | 44", requirements)
 
     def test_behavior_catalog_declares_nested_executable_suites(self) -> None:
         evals = json.loads((SKILL / "evals/evals.json").read_text(encoding="utf-8"))[
@@ -1183,17 +1471,21 @@ class RequirementsDiscoveryPolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             suite_ids["release-benchmark"],
-            {101, 104, 106, 108, 109, 110, 114, 127, 139, 140},
+            {101, 104, 106, 108, 109, 110, 114, 127, 139, 140, 141, 142, 143},
         )
-        self.assertEqual(suite_ids["full"], set(range(101, 141)))
+        self.assertEqual(suite_ids["full"], set(range(101, 145)))
         self.assertLess(suite_ids["pr-smoke"], suite_ids["release-benchmark"])
         self.assertLess(suite_ids["release-benchmark"], suite_ids["full"])
 
         by_id = {item["id"]: item for item in evals}
-        for eval_id in (139, 140):
+        for eval_id in (104, 139, 140):
             self.assertIn("multi-turn", by_id[eval_id]["suites"])
             self.assertIn("requirements-discovery", by_id[eval_id]["suites"])
         self.assertEqual(by_id[114]["critical_expectation_indexes"], [0, 1, 2, 3])
+        self.assertEqual(
+            by_id[104]["critical_expectation_indexes"],
+            list(range(len(by_id[104]["expectations"]))),
+        )
         self.assertEqual(
             by_id[139]["critical_expectation_indexes"],
             list(range(len(by_id[139]["expectations"]))),

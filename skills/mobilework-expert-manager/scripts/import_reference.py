@@ -224,6 +224,7 @@ def _text_content(path: PurePosixPath, data: bytes) -> tuple[str, str]:
         raise ImportReferenceError(
             f"conversion-required: {path.name} is not UTF-8 text"
         ) from exc
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
     if not content.strip():
         raise ImportReferenceError(f"source file is empty: {path.name}")
     return path.name, content

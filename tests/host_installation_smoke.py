@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_NAME = "mobilework-expert-manager"
 MARKETPLACE_NAME = "mobilework-tools"
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 SELECTOR = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
 SOURCE_SKILL = ROOT / "skills" / PLUGIN_NAME / "SKILL.md"
 

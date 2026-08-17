@@ -42,12 +42,19 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
         data["slug"] = f"{level}-acceptance-expert"
         data["name"] = f"{level} acceptance expert"
         data["runtime_extensions"] = {
-            "custom_tools": [{"path": "validate.ts", "content": "export default {}\n"}]
+            "custom_tools": [
+                {
+                    "path": "validate.ts",
+                    "purpose": "执行已确认验收规则的确定性校验。",
+                    "content": "export default {}\n",
+                }
+            ]
         }
         data["package_resources"] = []
         agent = data["agent"]
         agent["id"] = f"{level}-reviewer"
         agent["name"] = data["name"]
+        agent["autonomy"] = level
         agent["permission"] = {}
         agent["custom_tools"] = ["validate.ts"]
         agent.pop("tools", None)
@@ -101,6 +108,7 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
                 "id": "acceptance-lead",
                 "name": "acceptance lead",
                 "skills": [{"purpose": "lead-review"}],
+                "autonomy": "adaptive",
                 "permission": {},
             }
         )
@@ -111,8 +119,10 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
                 "id": "acceptance-worker",
                 "name": "acceptance worker",
                 "mode": "subagent",
+                "autonomy": "fixed",
                 "skills": [{"purpose": "worker-review"}],
                 "permission": {},
+                "custom_tools": ["team-verify.ts"],
             }
         )
         worker.pop("tools", None)
@@ -120,7 +130,11 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
         data["subagents"] = [worker]
         data["runtime_extensions"] = {
             "custom_tools": [
-                {"path": "team-verify.ts", "content": "export default {}\n"}
+                {
+                    "path": "team-verify.ts",
+                    "purpose": "对团员产出执行已确认的确定性验证。",
+                    "content": "export default {}\n",
+                }
             ]
         }
         data["workflows"] = [
@@ -222,7 +236,7 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
             {
                 "id": "dynamic-lead",
                 "name": "dynamic lead",
-                "mode": "primary",
+                "mode": "all",
                 "permission": {},
             }
         )
@@ -352,7 +366,7 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
 
         workflows = data.get("workflows") or []
         if data["type"] == "expert" and workflows:
-            level = workflows[0]["autonomy"]
+            level = data["agent"]["autonomy"]
             permission = config["agent"][data["agent"]["id"]]["permission"]
             self.assertEqual(permission["*"], "deny" if level == "scripted" else "ask")
             self.assertEqual(permission["doom_loop"], "allow" if level == "adaptive" else "deny" if level == "scripted" else "ask")
@@ -368,9 +382,9 @@ class P0AcceptanceMatrixTests(unittest.TestCase):
             if "skills" in data:
                 self.assertEqual(permission["*"], "ask")
                 self.assertEqual(permission["bash"]["*"], "ask")
-                self.assertIn("no-workflow-bounded-default", readme)
+                self.assertIn("role-autonomy", readme)
             else:
-                self.assertIn("| legacy | legacy |", readme)
+                self.assertIn("| 中 | `bounded` | role-autonomy |", readme)
         else:
             primary_id = data["primary_agent"]["id"]
             member_ids = [role["id"] for role in data["subagents"]]

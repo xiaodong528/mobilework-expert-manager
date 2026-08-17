@@ -160,6 +160,8 @@ class RoleResourceBindingTests(unittest.TestCase):
             },
             "primary_agent": {
                 "id": "lead",
+                "mode": "all",
+                "autonomy": "bounded",
                 "name": "团长",
                 "description": "分派并验收审查任务。",
                 "skills": [],
@@ -169,6 +171,8 @@ class RoleResourceBindingTests(unittest.TestCase):
             "subagents": [
                 {
                     "id": "reviewer",
+                    "mode": "subagent",
+                    "autonomy": "bounded",
                     "name": "审查员",
                     "description": "执行被分派的审查任务。",
                     "skills": [],

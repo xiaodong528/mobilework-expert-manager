@@ -39,7 +39,13 @@ class ExpertVcsTests(unittest.TestCase):
             "slug": "versioned-expert", "type": "expert", "name": "Versioned",
             "description": "A trusted version-control fixture.",
             "common_skills": [{"purpose": "delivery"}],
-            "agent": {"id": "versioned", "description": "Deliver work.", "skills": [{"purpose": "method"}]},
+            "agent": {
+                "id": "versioned",
+                "mode": "all",
+                "autonomy": "bounded",
+                "description": "Deliver work.",
+                "skills": [{"purpose": "method"}],
+            },
         }), encoding="utf-8")
         output = root / "experts"
         result = subprocess.run(

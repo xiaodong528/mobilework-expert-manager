@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,9 @@ MAX_SKILL_NAME_LENGTH = 64
 MAX_SKILL_DESCRIPTION_LENGTH = 1024
 MAX_SKILL_COMPATIBILITY_LENGTH = 500
 RECOMMENDED_SKILL_MARKDOWN_LINES = 500
+SKILL_RESOURCE_REFERENCE_RE = re.compile(
+    r"(?:\]\(|`)((?:scripts|references|assets)/[^\s)`#]+)"
+)
 
 
 @dataclass(frozen=True)
@@ -259,26 +263,52 @@ def validate_skill_frontmatter(
     return issues
 
 
-def skill_markdown_recommendations(line_count: int) -> list[SkillMarkdownIssue]:
-    if line_count <= RECOMMENDED_SKILL_MARKDOWN_LINES:
-        return []
-    return [
-        _markdown_issue(
-            "SKILL_MARKDOWN_LENGTH_RECOMMENDED",
-            "SKILL.md",
-            (
-                f"SKILL.md has {line_count} lines; Agent Skills recommends "
-                f"{RECOMMENDED_SKILL_MARKDOWN_LINES} lines or fewer"
-            ),
-            root_cause="skill-progressive-disclosure",
-            remediation=(
-                "Move detailed material into focused references and keep SKILL.md "
-                "as the routing and workflow entrypoint."
-            ),
-            evidence=str(line_count),
-            severity="warning",
+def skill_markdown_recommendations(
+    line_count: int,
+    markdown: str = "",
+) -> list[SkillMarkdownIssue]:
+    issues: list[SkillMarkdownIssue] = []
+    if line_count > RECOMMENDED_SKILL_MARKDOWN_LINES:
+        issues.append(
+            _markdown_issue(
+                "SKILL_MARKDOWN_LENGTH_RECOMMENDED",
+                "SKILL.md",
+                (
+                    f"SKILL.md has {line_count} lines; Agent Skills recommends "
+                    f"{RECOMMENDED_SKILL_MARKDOWN_LINES} lines or fewer"
+                ),
+                root_cause="skill-progressive-disclosure",
+                remediation=(
+                    "Move detailed material into focused references and keep SKILL.md "
+                    "as the routing and workflow entrypoint."
+                ),
+                evidence=str(line_count),
+                severity="warning",
+            )
         )
-    ]
+    deep_references = sorted(
+        {
+            match.group(1)
+            for match in SKILL_RESOURCE_REFERENCE_RE.finditer(markdown)
+            if len(Path(match.group(1)).parts) > 2
+        }
+    )
+    if deep_references:
+        issues.append(
+            _markdown_issue(
+                "SKILL_REFERENCE_DEPTH_RECOMMENDED",
+                "SKILL.md",
+                "Agent Skills recommends keeping file references one level deep",
+                root_cause="skill-progressive-disclosure",
+                remediation=(
+                    "Link focused files directly from SKILL.md and avoid deep "
+                    "reference chains where practical."
+                ),
+                evidence=", ".join(deep_references),
+                severity="warning",
+            )
+        )
+    return issues
 
 
 def add_skill_markdown_issues(
@@ -570,12 +600,13 @@ def migrate_legacy_manifest(package_dir: Path, manifest: dict[str, Any]) -> dict
     ]
     migrated.pop("common_skills", None)
     migrated["package_resources"] = sorted(resources, key=lambda item: item["path"])
-    for _field, role in _role_entries(migrated):
+    for field, role in _role_entries(migrated):
         role_id = role.get("id")
         role["skills"] = _dedupe([*common, *old_role_skills.get(str(role_id), [])])
         permission = role.get("permission")
         if isinstance(permission, dict):
             permission.pop("skill", None)
+        role["mode"] = "subagent" if field.startswith("subagents[") else "all"
     validate_manifest_skills(migrated)
     return migrated
 

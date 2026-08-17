@@ -73,6 +73,12 @@ def load_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
         )
     if "targetOpenCodeVersion" in policy:
         raise ManagerContractError("manager contract must not hardcode targetOpenCodeVersion")
+    _validate_agent_skills_specification_policy(
+        policy.get("agentSkillsSpecification")
+    )
+    _validate_expert_runtime_projection_policy(
+        policy.get("expertRuntimeProjection")
+    )
     _validate_finding_catalog_policy(
         policy.get("findingCatalogVersion"),
         policy.get("findingCatalog"),
@@ -122,6 +128,64 @@ def _require_exact_object(
     if set(result) != keys:
         raise ManagerContractError(f"{field} fields are invalid")
     return result
+
+
+def _require_exact_value(value: Any, expected: Any, field: str) -> None:
+    """Validate an exact JSON value without bool/int equality shortcuts."""
+
+    if type(value) is not type(expected):
+        raise ManagerContractError(f"{field} is invalid")
+    if isinstance(expected, dict):
+        if set(value) != set(expected):
+            raise ManagerContractError(f"{field} fields are invalid")
+        for name, expected_item in expected.items():
+            _require_exact_value(value[name], expected_item, f"{field}.{name}")
+        return
+    if isinstance(expected, list):
+        if len(value) != len(expected):
+            raise ManagerContractError(f"{field} is invalid")
+        for index, (item, expected_item) in enumerate(zip(value, expected)):
+            _require_exact_value(item, expected_item, f"{field}[{index}]")
+        return
+    if value != expected:
+        raise ManagerContractError(f"{field} is invalid")
+
+
+def _validate_agent_skills_specification_policy(value: Any) -> None:
+    field = "manager contract agentSkillsSpecification"
+    expected = {
+        "page": "https://agentskills.io/specification",
+        "repository": "https://github.com/agentskills/agentskills",
+        "repositorySnapshot": {
+            "commit": "69ef37e9424c0a7ea9dd2293b559e43ec8176379",
+            "url": (
+                "https://github.com/agentskills/agentskills/tree/"
+                "69ef37e9424c0a7ea9dd2293b559e43ec8176379"
+            ),
+        },
+        "authority": "official-page",
+        "validatorRole": "cross-check-oracle",
+        "officialHardRuleFailure": "block",
+        "officialRecommendationFinding": "warning",
+    }
+    _require_exact_value(value, expected, field)
+
+
+def _validate_expert_runtime_projection_policy(value: Any) -> None:
+    field = "manager contract expertRuntimeProjection"
+    expected = {
+        "command": {
+            "agentMode": "all",
+            "subtask": True,
+        },
+        "agent": {
+            "canonicalStepField": "steps",
+            "legacyStepInputFields": ["max_turns", "maxTurns"],
+            "deprecatedStepFields": ["maxSteps"],
+            "forbiddenSamplingFields": ["temperature", "top_p"],
+        },
+    }
+    _require_exact_value(value, expected, field)
 
 
 def _validate_reserved_commands_policy(value: Any) -> None:
@@ -276,6 +340,10 @@ def _validate_cli_policy(value: Any) -> None:
     if formats != ["human", "json"]:
         raise ManagerContractError(
             "manager contract cli.formats must be ['human', 'json']"
+        )
+    if cli.get("streamEncoding") != "utf-8":
+        raise ManagerContractError(
+            "manager contract cli.streamEncoding must be 'utf-8'"
         )
     expected_fields = [
         "schemaVersion",
@@ -535,6 +603,451 @@ def _require_keys(value: Mapping[str, Any], expected: set[str], field: str) -> N
         raise ManagerContractError(f"{field} fields are invalid")
 
 
+def _validate_creation_target_selection(value: Any) -> None:
+    field = "manager contract requirementsDiscovery.creationTargetSelection"
+    selection = _object(value, field)
+    _require_keys(
+        selection,
+        {
+            "schemaVersion",
+            "appliesTo",
+            "excludedOperations",
+            "binding",
+            "question",
+            "budget",
+            "executionGate",
+            "errors",
+            "customPath",
+        },
+        field,
+    )
+    if type(selection.get("schemaVersion")) is not int or selection["schemaVersion"] != 1:
+        raise ManagerContractError(f"{field}.schemaVersion must be 1")
+    if _string_list(selection.get("appliesTo"), f"{field}.appliesTo") != [
+        "create-expert",
+        "create-team",
+        "convert-material-to-new-expert",
+    ]:
+        raise ManagerContractError(f"{field}.appliesTo is invalid")
+    if _string_list(
+        selection.get("excludedOperations"), f"{field}.excludedOperations"
+    ) != ["modify-existing", "install", "validate", "package"]:
+        raise ManagerContractError(f"{field}.excludedOperations is invalid")
+
+    binding = _object(selection.get("binding"), f"{field}.binding")
+    _require_keys(
+        binding,
+        {"scope", "invalidatedByDesignChange", "reselectionRequiredAfterInvalidation"},
+        f"{field}.binding",
+    )
+    if binding.get("scope") != "current-whole-card-confirmation-version":
+        raise ManagerContractError(f"{field}.binding.scope is invalid")
+    for name in ("invalidatedByDesignChange", "reselectionRequiredAfterInvalidation"):
+        if not _boolean(binding.get(name), f"{field}.binding.{name}"):
+            raise ManagerContractError(f"{field}.binding.{name} must be true")
+
+    question = _object(selection.get("question"), f"{field}.question")
+    _require_keys(
+        question,
+        {"toolPreference", "request", "replyMapping", "fallback"},
+        f"{field}.question",
+    )
+    preference = _object(
+        question.get("toolPreference"), f"{field}.question.toolPreference"
+    )
+    expected_preference = {
+        "recognizedNames": ["AskUserQuestion", "question"],
+        "equivalentCapability": "single-select-with-custom-input",
+        "whenAvailable": "must-use",
+    }
+    _require_keys(preference, set(expected_preference), f"{field}.question.toolPreference")
+    if preference != expected_preference:
+        raise ManagerContractError(f"{field}.question.toolPreference is invalid")
+
+    request = _object(question.get("request"), f"{field}.question.request")
+    _require_keys(
+        request,
+        {"header", "question", "multiple", "custom", "options"},
+        f"{field}.question.request",
+    )
+    expected_request = {
+        "header": "安装位置",
+        "question": "确认后，将新专家创建到哪里？",
+    }
+    for name, expected in expected_request.items():
+        if request.get(name) != expected:
+            raise ManagerContractError(f"{field}.question.request.{name} is invalid")
+    if _boolean(request.get("multiple"), f"{field}.question.request.multiple"):
+        raise ManagerContractError(f"{field}.question.request.multiple must be false")
+    if not _boolean(request.get("custom"), f"{field}.question.request.custom"):
+        raise ManagerContractError(f"{field}.question.request.custom must be true")
+    if request.get("options") != [
+        {
+            "label": "我的专家（MobileWork 个人专家目录）",
+            "description": (
+                "由 MobileWork 宿主解析；独立运行默认使用 "
+                "~/.mobilework/experts/personal。"
+            ),
+        },
+        {
+            "label": "当前工作空间",
+            "description": "创建到当前工作空间根目录。",
+        },
+    ]:
+        raise ManagerContractError(f"{field}.question.request.options is invalid")
+
+    reply = _object(question.get("replyMapping"), f"{field}.question.replyMapping")
+    _require_keys(
+        reply,
+        {
+            "event",
+            "eventAnswerPath",
+            "requiredQuestionAnswerCount",
+            "requiredSelectedLabelCount",
+            "fixedLabels",
+            "unmatchedSingleAnswer",
+        },
+        f"{field}.question.replyMapping",
+    )
+    if reply.get("event") != "question.replied":
+        raise ManagerContractError(f"{field}.question.replyMapping.event is invalid")
+    if reply.get("eventAnswerPath") != "properties.answers[0][0]":
+        raise ManagerContractError(
+            f"{field}.question.replyMapping.eventAnswerPath is invalid"
+        )
+    for name in ("requiredQuestionAnswerCount", "requiredSelectedLabelCount"):
+        if _positive_int(reply.get(name), f"{field}.question.replyMapping.{name}") != 1:
+            raise ManagerContractError(
+                f"{field}.question.replyMapping.{name} must be 1"
+            )
+    if reply.get("fixedLabels") != [
+        {
+            "label": "我的专家（MobileWork 个人专家目录）",
+            "creationTarget": "my-experts",
+        },
+        {"label": "当前工作空间", "creationTarget": "workspace"},
+    ]:
+        raise ManagerContractError(f"{field}.question.replyMapping.fixedLabels is invalid")
+    if reply.get("unmatchedSingleAnswer") != "custom":
+        raise ManagerContractError(
+            f"{field}.question.replyMapping.unmatchedSingleAnswer is invalid"
+        )
+
+    fallback = _object(question.get("fallback"), f"{field}.question.fallback")
+    _require_keys(
+        fallback,
+        {
+            "when",
+            "channel",
+            "question",
+            "choices",
+            "customInstruction",
+            "mustAwaitReply",
+        },
+        f"{field}.question.fallback",
+    )
+    expected_fallback = {
+        "when": "no-equivalent-ask-user-tool-available",
+        "channel": "assistant-body",
+        "question": "确认后，将新专家创建到哪里？",
+        "choices": [
+            "我的专家（MobileWork 个人专家目录）",
+            "当前工作空间",
+        ],
+        "customInstruction": "也可以回复其他已存在的绝对父目录。",
+    }
+    for name, expected in expected_fallback.items():
+        if fallback.get(name) != expected:
+            raise ManagerContractError(f"{field}.question.fallback.{name} is invalid")
+    if not _boolean(
+        fallback.get("mustAwaitReply"), f"{field}.question.fallback.mustAwaitReply"
+    ):
+        raise ManagerContractError(f"{field}.question.fallback.mustAwaitReply must be true")
+
+    budget = _object(selection.get("budget"), f"{field}.budget")
+    _require_keys(
+        budget,
+        {
+            "consumesDiscoveryRound",
+            "consumesDecisionBudget",
+            "invalidatesConfirmedBusinessCard",
+        },
+        f"{field}.budget",
+    )
+    for name in budget:
+        if _boolean(budget.get(name), f"{field}.budget.{name}"):
+            raise ManagerContractError(f"{field}.budget.{name} must be false")
+
+    gate = _object(selection.get("executionGate"), f"{field}.executionGate")
+    _require_keys(
+        gate,
+        {
+            "position",
+            "preAnswerForbidden",
+            "validAnswerCount",
+            "toolUnavailableAction",
+            "bodyFallbackAllowed",
+        },
+        f"{field}.executionGate",
+    )
+    if gate.get("position") != "after-current-whole-card-confirmation-before-execution":
+        raise ManagerContractError(f"{field}.executionGate.position is invalid")
+    if _string_list(
+        gate.get("preAnswerForbidden"), f"{field}.executionGate.preAnswerForbidden"
+    ) != [
+        "environment-preflight",
+        "process",
+        "filesystem-write",
+        "network",
+        "data-egress",
+        "plugin",
+        "mcp",
+        "permission-expansion",
+        "generator",
+        "validation",
+    ]:
+        raise ManagerContractError(f"{field}.executionGate.preAnswerForbidden is invalid")
+    if _positive_int(
+        gate.get("validAnswerCount"), f"{field}.executionGate.validAnswerCount"
+    ) != 1:
+        raise ManagerContractError(f"{field}.executionGate.validAnswerCount must be 1")
+    if gate.get("toolUnavailableAction") != "ask-in-conversation":
+        raise ManagerContractError(
+            f"{field}.executionGate.toolUnavailableAction is invalid"
+        )
+    if not _boolean(
+        gate.get("bodyFallbackAllowed"), f"{field}.executionGate.bodyFallbackAllowed"
+    ):
+        raise ManagerContractError(f"{field}.executionGate.bodyFallbackAllowed must be true")
+
+    errors = _object(selection.get("errors"), f"{field}.errors")
+    expected_errors = {
+        "ambiguousAnswer": "CREATION_TARGET_ANSWER_AMBIGUOUS",
+        "invalidPath": "CREATION_TARGET_PATH_INVALID",
+        "targetOutsideRoot": "TARGET_OUTSIDE_ROOT",
+    }
+    _require_keys(errors, set(expected_errors), f"{field}.errors")
+    if errors != expected_errors:
+        raise ManagerContractError(f"{field}.errors is invalid")
+
+    custom = _object(selection.get("customPath"), f"{field}.customPath")
+    _require_keys(
+        custom,
+        {
+            "meaning",
+            "finalPath",
+            "mustExist",
+            "mustBeAbsolute",
+            "forbidden",
+            "overwriteAction",
+        },
+        f"{field}.customPath",
+    )
+    if custom.get("meaning") != "parent-directory":
+        raise ManagerContractError(f"{field}.customPath.meaning is invalid")
+    if custom.get("finalPath") != "<parent>/<slug>":
+        raise ManagerContractError(f"{field}.customPath.finalPath is invalid")
+    for name in ("mustExist", "mustBeAbsolute"):
+        if not _boolean(custom.get(name), f"{field}.customPath.{name}"):
+            raise ManagerContractError(f"{field}.customPath.{name} must be true")
+    if _string_list(custom.get("forbidden"), f"{field}.customPath.forbidden") != [
+        "filesystem-root",
+        "symlink",
+        "windows-reparse-point",
+        "special-file",
+        "path-escape",
+    ]:
+        raise ManagerContractError(f"{field}.customPath.forbidden is invalid")
+    if custom.get("overwriteAction") != "separate-force-confirmation":
+        raise ManagerContractError(f"{field}.customPath.overwriteAction is invalid")
+
+
+def _validate_role_autonomy_selection(value: Any) -> None:
+    field = "manager contract requirementsDiscovery.roleAutonomySelection"
+    selection = _object(value, field)
+    expected = {
+        "schemaVersion": 1,
+        "appliesTo": [
+            "create-expert",
+            "create-team",
+            "structural-modification",
+        ],
+        "excludedOperations": [
+            "read-only-diagnostics",
+            "validate",
+            "install",
+            "package",
+        ],
+        "roles": {
+            "expert": ["agent"],
+            "team": ["primary_agent", "each-subagent"],
+        },
+        "values": [
+            {"value": "scripted", "label": "低", "externalSkill": "deny"},
+            {"value": "fixed", "label": "较低", "externalSkill": "deny"},
+            {"value": "bounded", "label": "中", "externalSkill": "deny"},
+            {"value": "guided", "label": "较高", "externalSkill": "ask"},
+            {"value": "adaptive", "label": "高", "externalSkill": "allow"},
+        ],
+        "selectionRule": "one-explicit-value-per-role",
+        "permissionBaseline": "role-autonomy-only",
+        "workflowPhaseAffectsPermission": False,
+        "legacyReadInstallDefault": "bounded",
+        "legacyWarning": "LEGACY_ROLE_AUTONOMY_DEFAULTED",
+        "structuralModificationRequiresExplicit": True,
+    }
+    _require_keys(selection, set(expected), field)
+    if selection != expected:
+        raise ManagerContractError(f"{field} is invalid")
+
+
+def _validate_capability_implementation_mapping(value: Any) -> None:
+    field = (
+        "manager contract requirementsDiscovery.capabilityImplementationMapping"
+    )
+    expected = {
+        "defaultMode": "manager-selects-minimal-fit",
+        "rolePresenceCreatesResource": False,
+        "responsibilityTextDirectProjection": "forbidden",
+        "candidateResourceTypes": [
+            "none",
+            "skill",
+            "custom-tool",
+            "opencode-plugin",
+        ],
+        "candidateEvidenceSources": [
+            "user-goal",
+            "role-responsibility",
+            "workflow",
+            "quality-requirement",
+            "trusted-material",
+            "explicit-request",
+            "uploaded-resource",
+        ],
+        "candidateOnlyEvidenceSources": [
+            "role-responsibility",
+            "workflow",
+            "quality-requirement",
+        ],
+        "resourceSemantics": {
+            "none": "no-capability-resource-generated",
+            "skill": (
+                "reusable-method-checklist-sop-guidance-or-python-shell-"
+                "script-bundle"
+            ),
+            "custom-tool": (
+                "agent-invoked-deterministic-javascript-or-typescript-"
+                "capability"
+            ),
+            "opencode-plugin": (
+                "event-listener-tool-interceptor-or-runtime-behavior-modifier"
+            ),
+        },
+        "selectionConstraints": {
+            "externalSystemAccessUsesMcpNotPlugin": True,
+            "existingPythonOrShellStaysInSkillExecutor": True,
+            "preferLeastRuntimePower": True,
+            "oneResourcePerRuntimeResponsibility": True,
+            "multiResourceCombinationRequiresDistinctConfirmedRuntimeResponsibilities": True,
+            "sharedCapabilityUsesOneResourceWithMultipleRoleReferences": True,
+            "localPluginOwnership": "package-wide-not-role-owned",
+            "generatedExpertRuntimeMutation": "forbidden",
+        },
+        "businessTruthBoundary": {
+            "managerMayInferTechnicalMapping": True,
+            "managerMayProposeBusinessCapability": True,
+            "managerMayInventBusinessCapabilityOrRule": False,
+            "candidateRequires": [
+                "stable-business-label",
+                "observable-runtime-behavior",
+                "trusted-provenance",
+            ],
+            "missingBusinessRuleAction": (
+                "keep-material-decision-open-and-ask-authorized-source"
+            ),
+        },
+        "authorization": {
+            "requiresCurrentWholeCardConfirmation": True,
+            "cardMustConfirm": [
+                "business-capability-name",
+                "usage-scope",
+                "trigger-or-invocation",
+                "inputs-and-outputs",
+                "visible-side-effects",
+                "permissions-cost-and-runtime-prerequisites",
+                "quality-gates",
+                "implementation-status",
+            ],
+            "technicalCarrierChoiceDelegatedToManager": True,
+            "extraTechnicalConfirmation": (
+                "not-required-for-behavior-preserving-mapping-within-"
+                "confirmed-boundaries"
+            ),
+            "materialMappingImpacts": [
+                "automatic-trigger",
+                "external-write",
+                "network",
+                "permission",
+                "dependency",
+                "cost",
+                "runtime-prerequisite",
+            ],
+            "materialMappingChangeAction": (
+                "invalidate-prior-confirmation-and-run-full-card-first"
+            ),
+            "preReconfirmationWriteAction": "forbidden",
+            "generationAuthorizationScope": (
+                "current-expert-package-resources-only"
+            ),
+            "generationDoesNotAuthorize": [
+                "install",
+                "enable",
+                "network-download",
+                "external-connection",
+                "permission-expansion",
+                "execute-generated-code",
+                "release",
+            ],
+        },
+        "naming": {
+            "skill": {
+                "format": "full-semantic-kebab-case",
+                "expertOrRolePrefixRequired": False,
+                "userMayModifySuggestedName": True,
+            },
+            "customTool": {
+                "namespace": "<slug>-<name>-or-<slug>/<name>",
+                "workspaceCollisionNamespaceRequired": True,
+            },
+            "localPlugin": {
+                "namespace": "<slug>-<name>-or-<slug>/<name>",
+                "workspaceCollisionNamespaceRequired": True,
+            },
+            "legacyPurposePrefix": "preserved",
+            "internalReferenceFallback": "<slug>-reference-<alias>",
+        },
+        "zeroResourceProjection": {
+            "condition": "no-fit-confirmed-capability",
+            "topLevelSkills": "empty-or-omitted",
+            "roleSkills": "empty-or-omitted",
+            "skillsDirectory": "present-and-empty",
+            "toolsDirectory": "omitted",
+            "pluginsDirectory": "omitted",
+            "skillMarkdownCount": 0,
+            "customToolCount": 0,
+            "pluginCount": 0,
+            "opencodePluginConfig": "omitted",
+        },
+        "npmPlugin": {
+            "requiresTrustedExistingPackage": True,
+            "requiresExactVersion": True,
+            "versionFormat": "exact-semver-no-range",
+            "inventedPackageOrVersion": "forbidden",
+        },
+    }
+    _require_exact_value(value, expected, field)
+
+
 def _validate_requirements_discovery_policy(value: Any) -> None:
     requirements = _object(value, "manager contract requirementsDiscovery")
     expected_keys = {
@@ -547,6 +1060,9 @@ def _validate_requirements_discovery_policy(value: Any) -> None:
         "questionChannelsMutuallyExclusive",
         "questionChannelLimits",
         "questionChannelEvidence",
+        "creationTargetSelection",
+        "roleAutonomySelection",
+        "capabilityImplementationMapping",
         "decisionIdentity",
         "decisionIntroduction",
         "materialImpacts",
@@ -572,9 +1088,9 @@ def _validate_requirements_discovery_policy(value: Any) -> None:
         )
     if type(requirements.get("schemaVersion")) is not int or requirements[
         "schemaVersion"
-    ] != 11:
+    ] != 14:
         raise ManagerContractError(
-            "manager contract requirementsDiscovery.schemaVersion must be 11"
+            "manager contract requirementsDiscovery.schemaVersion must be 14"
         )
     _non_empty_string(
         requirements.get("ledgerPersistence"),
@@ -677,6 +1193,12 @@ def _validate_requirements_discovery_policy(value: Any) -> None:
             raise ManagerContractError(
                 f"manager contract requirementsDiscovery.questionChannelEvidence.{field} must be false"
             )
+
+    _validate_creation_target_selection(requirements.get("creationTargetSelection"))
+    _validate_role_autonomy_selection(requirements.get("roleAutonomySelection"))
+    _validate_capability_implementation_mapping(
+        requirements.get("capabilityImplementationMapping")
+    )
 
     identity = _object(
         requirements.get("decisionIdentity"),
@@ -1462,6 +1984,7 @@ def _validate_requirements_discovery_policy(value: Any) -> None:
         {
             "defaultSurface",
             "scope",
+            "allowedDefaultExceptions",
             "developmentDetailsActivation",
             "forbiddenDefaultCategories",
             "requiredBusinessEffects",
@@ -1487,6 +2010,7 @@ def _validate_requirements_discovery_policy(value: Any) -> None:
         )
     for field in (
         "scope",
+        "allowedDefaultExceptions",
         "forbiddenDefaultCategories",
         "requiredBusinessEffects",
     ):
@@ -1495,11 +2019,27 @@ def _validate_requirements_discovery_policy(value: Any) -> None:
             f"manager contract requirementsDiscovery.presentationBoundary.{field}",
         )
 
-    if "external-entry-implementation-channel-types" not in presentation[
-        "forbiddenDefaultCategories"
+    if presentation["allowedDefaultExceptions"] != [
+        "role-autonomy-selection-labels"
     ]:
         raise ManagerContractError(
-            "manager contract presentationBoundary must forbid external entry implementation channel types"
+            "manager contract presentationBoundary role autonomy label exception is invalid"
+        )
+
+    required_forbidden_categories = {
+        "machine-skill-identifiers",
+        "machine-custom-tool-identifiers",
+        "machine-plugin-identifiers",
+        "technical-carrier-types",
+        "external-entry-implementation-channel-types",
+    }
+    missing_forbidden_categories = required_forbidden_categories.difference(
+        presentation["forbiddenDefaultCategories"]
+    )
+    if missing_forbidden_categories:
+        raise ManagerContractError(
+            "manager contract presentationBoundary must defer machine resource "
+            "identifiers, technical carrier types, and external entry channel types"
         )
 
     external_entry = _object(
@@ -1563,17 +2103,40 @@ def _validate_requirements_discovery_policy(value: Any) -> None:
     )
     _require_keys(
         disclosure,
-        {"businessCard", "machineSkillIdentifiers"},
+        {"businessCard", "machineResourceIdentifiers", "technicalCarrierType"},
         "manager contract requirementsDiscovery.capabilityDisclosure",
     )
-    _string_list(
+    business_card = _string_list(
         disclosure.get("businessCard"),
         "manager contract requirementsDiscovery.capabilityDisclosure.businessCard",
     )
-    _non_empty_string(
-        disclosure.get("machineSkillIdentifiers"),
-        "manager contract requirementsDiscovery.capabilityDisclosure.machineSkillIdentifiers",
+    mapping_authorization = requirements["capabilityImplementationMapping"][
+        "authorization"
+    ]
+    if business_card != mapping_authorization["cardMustConfirm"]:
+        raise ManagerContractError(
+            "manager contract capabilityDisclosure.businessCard must match "
+            "capabilityImplementationMapping.authorization.cardMustConfirm"
+        )
+    machine_identifiers = _non_empty_string(
+        disclosure.get("machineResourceIdentifiers"),
+        "manager contract requirementsDiscovery.capabilityDisclosure.machineResourceIdentifiers",
     )
+    if machine_identifiers != "development-details-after-current-whole-card-confirmation":
+        raise ManagerContractError(
+            "manager contract capabilityDisclosure.machineResourceIdentifiers is invalid"
+        )
+    carrier_type = _non_empty_string(
+        disclosure.get("technicalCarrierType"),
+        "manager contract requirementsDiscovery.capabilityDisclosure.technicalCarrierType",
+    )
+    if carrier_type != (
+        "manager-selected-after-current-whole-card-confirmation-without-extra-"
+        "confirmation-when-boundaries-are-unchanged"
+    ):
+        raise ManagerContractError(
+            "manager contract capabilityDisclosure.technicalCarrierType is invalid"
+        )
 
     sections = _string_list(
         requirements.get("businessCardSections"),

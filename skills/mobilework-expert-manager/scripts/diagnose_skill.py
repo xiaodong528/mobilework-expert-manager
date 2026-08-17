@@ -119,12 +119,14 @@ def diagnose_root(root: Path, result: ValidationResult) -> None:
                 path="SKILL.md",
             )
         try:
-            line_count = len(skill_md.read_text(encoding="utf-8").splitlines())
+            markdown = skill_md.read_text(encoding="utf-8")
+            line_count = len(markdown.splitlines())
         except (OSError, UnicodeError):
+            markdown = ""
             line_count = 0
         skill_contract.add_skill_markdown_issues(
             result,
-            skill_contract.skill_markdown_recommendations(line_count),
+            skill_contract.skill_markdown_recommendations(line_count, markdown),
             path="SKILL.md",
         )
 

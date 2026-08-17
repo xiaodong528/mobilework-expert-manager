@@ -76,6 +76,7 @@ class DriftBackupTests(unittest.TestCase):
             callback()
         self.assertEqual(raised.exception.code, code)
 
+    @unittest.skipUnless(os.name == "posix", "drift recovery is POSIX-only")
     def test_create_load_and_stage_restore_round_trip(self) -> None:
         record = self.create()
 
@@ -112,6 +113,7 @@ class DriftBackupTests(unittest.TestCase):
             stat.S_IMODE(staged["agents/demo.md"].stat().st_mode), 0o640
         )
 
+    @unittest.skipUnless(os.name == "posix", "drift recovery is POSIX-only")
     def test_allocates_collision_suffix_without_overwriting_first_backup(self) -> None:
         fixed = datetime(2026, 8, 4, 1, 2, 3, 456789, tzinfo=timezone.utc)
         with mock.patch.object(drift_backup, "_utc_now", return_value=fixed):
@@ -252,6 +254,7 @@ class DriftBackupTests(unittest.TestCase):
         self.assertFalse(published.exists())
         self.assertEqual(list(parent.glob(".published.failed-*")), [])
 
+    @unittest.skipUnless(os.name == "posix", "exclusive directory publish is POSIX-only")
     def test_failed_publish_readback_removes_exact_new_backup(self) -> None:
         injected = drift_backup.DriftBackupError(
             "DRIFT_BACKUP_HASH_MISMATCH",
@@ -268,6 +271,7 @@ class DriftBackupTests(unittest.TestCase):
         self.assertTrue(slug_root.is_dir())
         self.assertEqual(list(slug_root.iterdir()), [])
 
+    @unittest.skipUnless(os.name == "posix", "exclusive directory publish is POSIX-only")
     def test_failed_readback_never_deletes_replacement_directory(self) -> None:
         injected = drift_backup.DriftBackupError(
             "DRIFT_BACKUP_HASH_MISMATCH",
@@ -309,6 +313,7 @@ class DriftBackupTests(unittest.TestCase):
             "preserve\n",
         )
 
+    @unittest.skipUnless(os.name == "posix", "drift recovery is POSIX-only")
     def test_rejects_wrong_hash_and_target_traversal(self) -> None:
         record = self.create()
         self.assert_error(
@@ -345,6 +350,7 @@ class DriftBackupTests(unittest.TestCase):
             ),
         )
 
+    @unittest.skipUnless(os.name == "posix", "drift recovery is POSIX-only")
     def test_rejects_tampered_payload_and_manifest_fields(self) -> None:
         record = self.create()
         payload = record.path / "payload/000001.bin"
@@ -376,6 +382,7 @@ class DriftBackupTests(unittest.TestCase):
             ),
         )
 
+    @unittest.skipUnless(os.name == "posix", "drift recovery is POSIX-only")
     def test_rejects_extra_missing_symlink_and_unsafe_permissions(self) -> None:
         record = self.create()
         extra = record.path / "payload/extra.bin"
@@ -430,6 +437,7 @@ class DriftBackupTests(unittest.TestCase):
                 ),
             )
 
+    @unittest.skipUnless(os.name == "posix", "drift recovery is POSIX-only")
     def test_restore_staging_rejects_existing_target_and_symlink_parent(self) -> None:
         record = self.create()
         snapshot = drift_backup.load_and_verify_backup(
@@ -465,7 +473,8 @@ class DriftBackupTests(unittest.TestCase):
 
     def test_policy_is_loaded_lazily_and_validated(self) -> None:
         self.policy["driftRecovery"]["fileMode"] = 0o644
-        self.assert_error("DRIFT_BACKUP_POLICY_INVALID", self.create)
+        callback = self.create if os.name == "posix" else drift_backup._policy
+        self.assert_error("DRIFT_BACKUP_POLICY_INVALID", callback)
         self.assertFalse((self.runtime / ".expert-drift-backups").exists())
 
     def test_target_state_hash_is_canonical_and_excludes_original_bytes(self) -> None:

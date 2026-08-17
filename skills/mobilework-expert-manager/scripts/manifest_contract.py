@@ -54,6 +54,60 @@ def manifest_roles(manifest: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]
     return []
 
 
+def collect_runtime_name_issues(
+    manifest: dict[str, Any],
+) -> list[ManifestIssue]:
+    """Reject package-local Command, Skill, and Agent id collisions."""
+
+    try:
+        skill_names = set(skill_contract.catalog_names(manifest))
+    except package_contract.ContractError:
+        # The Skill contract reports its own more specific error first.
+        return []
+    issues: list[ManifestIssue] = []
+    agent_entries = [
+        (f"{field}.id", role_id)
+        for field, role in manifest_roles(manifest)
+        if isinstance((role_id := role.get("id")), str)
+    ]
+    agent_names = {role_id for _field, role_id in agent_entries}
+    command_entries: list[tuple[str, str]] = []
+    runtime_extensions = manifest.get("runtime_extensions")
+    if isinstance(runtime_extensions, dict):
+        commands = runtime_extensions.get("commands")
+        if isinstance(commands, list):
+            for index, command in enumerate(commands):
+                if not isinstance(command, dict):
+                    continue
+                name = command.get("name")
+                if isinstance(name, str):
+                    command_entries.append(
+                        (f"runtime_extensions.commands[{index}].name", name)
+                    )
+
+    workflows = manifest.get("workflows")
+    if isinstance(workflows, list):
+        for index, workflow in enumerate(workflows):
+            if not isinstance(workflow, dict):
+                continue
+            command = workflow.get("command")
+            if not isinstance(command, dict):
+                continue
+            name = command.get("name")
+            if isinstance(name, str):
+                command_entries.append((f"workflows[{index}].command.name", name))
+
+    for field, name in command_entries:
+        if name in skill_names:
+            issues.append(ManifestIssue(field, f"conflicts with skill {name}"))
+        if name in agent_names:
+            issues.append(ManifestIssue(field, f"conflicts with agent {name}"))
+    for field, name in agent_entries:
+        if name in skill_names:
+            issues.append(ManifestIssue(field, f"conflicts with skill {name}"))
+    return issues
+
+
 def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
     issues: list[ManifestIssue] = []
     unexpected = sorted(set(manifest) - TOP_LEVEL_KEYS)
@@ -98,9 +152,24 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
         role_id = role.get("id")
         if isinstance(role_id, str):
             role_ids.append(role_id)
-        expected_mode = "primary" if field in {"agent", "primary_agent"} else "subagent"
-        if role.get("mode", expected_mode) != expected_mode:
-            issues.append(ManifestIssue(f"{field}.mode", f"must be {expected_mode}"))
+        is_main = field in {"agent", "primary_agent"}
+        autonomy = role.get("autonomy")
+        if autonomy is not None and autonomy not in workflow_autonomy.AUTONOMY_LEVELS:
+            issues.append(
+                ManifestIssue(
+                    f"{field}.autonomy",
+                    "must be one of " + ", ".join(workflow_autonomy.AUTONOMY_LEVELS),
+                )
+            )
+        if is_main:
+            mode = role.get("mode", "primary" if autonomy is None else "all")
+            if mode not in {"primary", "all"}:
+                issues.append(ManifestIssue(f"{field}.mode", "must be primary or all"))
+            expected_mode = mode if mode in {"primary", "all"} else "all"
+        else:
+            expected_mode = "subagent"
+            if role.get("mode", expected_mode) != expected_mode:
+                issues.append(ManifestIssue(f"{field}.mode", "must be subagent"))
         default_steps = 80 if field == "agent" else 150 if field == "primary_agent" else 50
         try:
             package_contract.normalize_agent_runtime_options(
@@ -108,6 +177,7 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
                 field,
                 expected_mode=expected_mode,
                 default_steps=default_steps,
+                allow_legacy_sampling=True,
             )
         except package_contract.ContractError as exc:
             issue_field, separator, message = str(exc).partition(": ")
@@ -231,6 +301,8 @@ def collect_manifest_issues(manifest: dict[str, Any]) -> list[ManifestIssue]:
     except workflow_autonomy.WorkflowContractError as exc:
         field, separator, message = str(exc).partition(": ")
         issues.append(ManifestIssue(field if separator else "workflows", message if separator else field))
+    else:
+        issues.extend(collect_runtime_name_issues(manifest))
     return issues
 
 

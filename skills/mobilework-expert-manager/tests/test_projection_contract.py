@@ -90,7 +90,7 @@ class ProjectionContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             runtime = Path(temp) / ".opencode"
             (runtime / "agents").mkdir(parents=True)
-            (runtime / "agents/demo.md").write_text("demo\n", encoding="utf-8")
+            (runtime / "agents/demo.md").write_bytes(b"demo\n")
             (runtime / "opencode.jsonc").write_text(
                 '{"agent":{"demo":{"mode":"primary"}},"server":{"port":1234}}\n',
                 encoding="utf-8",

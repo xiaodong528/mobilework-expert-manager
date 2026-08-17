@@ -187,9 +187,12 @@ class AgentSkillsFrontmatterContractTests(unittest.TestCase):
         )
 
     def test_recommendations_are_non_blocking_structured_warnings(self) -> None:
-        issues = skill_contract.skill_markdown_recommendations(501)
-        self.assertEqual(len(issues), 1)
-        self.assertEqual(issues[0].severity, "warning")
+        issues = skill_contract.skill_markdown_recommendations(
+            501,
+            "See [deep guidance](references/domain/checklist.md).",
+        )
+        self.assertEqual(len(issues), 2)
+        self.assertTrue(all(issue.severity == "warning" for issue in issues))
         result = ValidationResult()
         skill_contract.add_skill_markdown_issues(
             result,
@@ -198,9 +201,19 @@ class AgentSkillsFrontmatterContractTests(unittest.TestCase):
         )
         self.assertTrue(result.ok)
         self.assertEqual(
-            result.findings[0].code,
-            "SKILL_MARKDOWN_LENGTH_RECOMMENDED",
+            {finding.code for finding in result.findings},
+            {
+                "SKILL_MARKDOWN_LENGTH_RECOMMENDED",
+                "SKILL_REFERENCE_DEPTH_RECOMMENDED",
+            },
         )
+
+    def test_shallow_resource_reference_has_no_recommendation(self) -> None:
+        issues = skill_contract.skill_markdown_recommendations(
+            20,
+            "See [the checklist](references/checklist.md) and run `scripts/check.py`.",
+        )
+        self.assertEqual(issues, [])
 
 
 class AgentSkillsStaticDiagnosisTests(unittest.TestCase):

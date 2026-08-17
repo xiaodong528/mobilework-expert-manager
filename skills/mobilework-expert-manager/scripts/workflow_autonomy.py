@@ -17,25 +17,25 @@ import manager_contract
 AUTONOMY_LEVELS = ("scripted", "fixed", "bounded", "guided", "adaptive")
 AUTONOMY_RANK = {name: index for index, name in enumerate(AUTONOMY_LEVELS, start=1)}
 AUTONOMY_LABELS = {
-    "scripted": "极低：全程照脚本执行，不能自行换方法",
-    "fixed": "低：按固定步骤执行，只能处理预设分支",
+    "scripted": "低：全程照脚本执行，不能自行换方法",
+    "fixed": "较低：按固定步骤执行，只能处理预设分支",
     "bounded": "中：可在明确边界内选择方法",
-    "guided": "高：可根据目标灵活安排，但关键决定需确认",
-    "adaptive": "极高：可自主规划、调整和返工，仍受安全与验收标准约束",
+    "guided": "较高：可根据目标灵活安排，但关键决定需确认",
+    "adaptive": "高：可自主规划、调整和返工，仍受安全与验收标准约束",
 }
 AUTONOMY_PREFIXES = {
-    "scripted": "【自主度：极低】",
-    "fixed": "【自主度：低】",
+    "scripted": "【自主度：低】",
+    "fixed": "【自主度：较低】",
     "bounded": "【自主度：中】",
-    "guided": "【自主度：高】",
-    "adaptive": "【自主度：极高】",
+    "guided": "【自主度：较高】",
+    "adaptive": "【自主度：高】",
 }
 MAX_AUTONOMY_PREFIXES = {
-    "scripted": "【最高生效自主度：极低】",
-    "fixed": "【最高生效自主度：低】",
+    "scripted": "【最高生效自主度：低】",
+    "fixed": "【最高生效自主度：较低】",
     "bounded": "【最高生效自主度：中】",
-    "guided": "【最高生效自主度：高】",
-    "adaptive": "【最高生效自主度：极高】",
+    "guided": "【最高生效自主度：较高】",
+    "adaptive": "【最高生效自主度：高】",
 }
 AUTONOMY_BOUNDARIES = {
     "scripted": "只能按顺序调用声明的确定性执行器；禁止临时写替代代码、口算、目测或纯文字替代执行。",
@@ -43,6 +43,13 @@ AUTONOMY_BOUNDARIES = {
     "bounded": "只能在声明的执行器、方法和标准范围内选择；禁止越出允许清单。",
     "guided": "可以探索，但关键方案、例外处理和高影响决定必须先确认。",
     "adaptive": "可以在职责、权限和验收标准内自主规划；不得绕过权威脚本、安全规则或质量门。",
+}
+COMPACT_AUTONOMY_BOUNDARIES = {
+    "scripted": "只按声明顺序和确定性执行器执行，不得替换方法。",
+    "fixed": "只按声明 SOP、分支和重试规则执行，不得更换执行器。",
+    "bounded": "只在声明的执行器、方法和标准内选择。",
+    "guided": "关键方案、例外和高影响决定须先确认。",
+    "adaptive": "只在职责、权限和验收标准内自主调整。",
 }
 EXECUTOR_KINDS = {
     "skill-script",
@@ -585,6 +592,11 @@ def _validate_executor_references(
         if isinstance(role.get("id"), str)
     }
     skills = _declared_skill_names(manifest)
+    try:
+        skill_assignments = skill_contract.role_assignments(manifest)
+    except package_contract.ContractError:
+        # Skill shape errors are reported by the shared manifest/Skill validators.
+        skill_assignments = {}
     resources = {
         item["path"]
         for item in manifest.get("package_resources", [])
@@ -603,7 +615,6 @@ def _validate_executor_references(
         for item in manifest.get("mcp_servers", [])
         if isinstance(item, dict) and isinstance(item.get("name"), str)
     } if isinstance(manifest.get("mcp_servers", []), list) else set()
-
     for workflow_index, workflow in enumerate(workflows):
         for phase_index, phase, agent_id, _level, execution in iter_assignments(workflow):
             role = roles.get(agent_id, {})
@@ -628,6 +639,10 @@ def _validate_executor_references(
                         raise WorkflowContractError(
                             f"{field}.ref: skill-script must reference a declared supplemental skill script"
                         )
+                    if skill_name not in skill_assignments.get(agent_id, []):
+                        raise WorkflowContractError(
+                            f"{field}.ref: skill {skill_name} is not assigned to Agent {agent_id}"
+                        )
                     if _skill_permission_denies(role, skill_name):
                         raise WorkflowContractError(
                             f"{field}.ref: Agent {agent_id} permission denies skill {skill_name}"
@@ -636,6 +651,14 @@ def _validate_executor_references(
                     if ref not in custom_tools:
                         raise WorkflowContractError(
                             f"{field}.ref: custom-tool must reference runtime_extensions.custom_tools path"
+                        )
+                    owned_custom_tools = role.get("custom_tools", [])
+                    if (
+                        not isinstance(owned_custom_tools, list)
+                        or ref not in owned_custom_tools
+                    ):
+                        raise WorkflowContractError(
+                            f"{field}.ref: custom tool {ref} is not owned by Agent {agent_id}"
                         )
                     tool_name = Path(ref).stem
                     if _permission_denies(role, ref, tool_name):
@@ -655,6 +678,17 @@ def _validate_executor_references(
                         raise WorkflowContractError(
                             f"{field}.ref: mcp-tool must reference an MCP owned by Agent {agent_id}"
                         )
+                    role_autonomy = role.get(
+                        "autonomy", permission_policy.ROLE_AUTONOMY_DEFAULT
+                    )
+                    if permission_policy.AUTONOMY_ORDER.get(role_autonomy, -1) < permission_policy.AUTONOMY_ORDER["bounded"]:
+                        raise WorkflowContractError(
+                            f"{field}.ref: Agent {agent_id} role autonomy denies MCP execution"
+                        )
+                    if _permission_denies(role, f"{mcp_name}_*", ref):
+                        raise WorkflowContractError(
+                            f"{field}.ref: Agent {agent_id} permission denies MCP {mcp_name}"
+                        )
                 elif kind == "programming-tool":
                     try:
                         permission_policy.validate_bash_pattern(ref)
@@ -666,12 +700,20 @@ def _validate_executor_references(
                         raise WorkflowContractError(
                             f"{field}.ref: programming-tool must reference a declared package resource"
                         )
+                    role_autonomy = role.get(
+                        "autonomy", permission_policy.ROLE_AUTONOMY_DEFAULT
+                    )
+                    if permission_policy.BASELINES.get(role_autonomy, {}).get("bash") == "deny":
+                        raise WorkflowContractError(
+                            f"{field}.ref: Agent {agent_id} role autonomy denies programming-tool bash"
+                        )
                     if _permission_denies(role, "bash", ref):
                         raise WorkflowContractError(
                             f"{field}.ref: Agent {agent_id} permission denies programming tool bash"
                         )
-                elif kind == "agent" and ref not in role_ids:
-                    raise WorkflowContractError(f"{field}.ref: references unknown agent {ref}")
+                elif kind == "agent":
+                    if ref not in role_ids:
+                        raise WorkflowContractError(f"{field}.ref: references unknown agent {ref}")
 
 
 def has_autonomy_contract(workflows: Iterable[dict[str, Any]]) -> bool:
@@ -680,21 +722,25 @@ def has_autonomy_contract(workflows: Iterable[dict[str, Any]]) -> bool:
 
 def _executor_lines(execution: dict[str, Any] | None, indent: str = "") -> list[str]:
     if execution is None:
-        return [f"{indent}- 执行器：未限定（仅适用于 adaptive）。", f"{indent}- 执行标准：依照职责、权限和验收标准。"]
-    lines = [f"{indent}- 执行器："]
-    if execution["executors"]:
-        lines.extend(
-            f"{indent}  - `{item['kind']}` → `{item['ref']}`"
-            for item in execution["executors"]
-        )
-    else:
-        lines.append(f"{indent}  - 未指定；按 guided 的确认点或 adaptive 边界执行。")
-    lines.append(f"{indent}- 执行标准：")
-    lines.extend(f"{indent}  - {item}" for item in execution["standards"])
-    return lines
+        return [
+            f"{indent}- 执行器：未限定（仅适用于 adaptive）；执行标准：依照职责、权限和验收标准。"
+        ]
+    executors = "、".join(
+        f"`{item['kind']}` → `{item['ref']}`" for item in execution["executors"]
+    ) or "未指定；按 guided 的确认点或 adaptive 边界执行"
+    standards = "；".join(execution["standards"])
+    return [
+        f"{indent}- 执行器：{executors}",
+        f"{indent}- 执行标准：{standards}",
+    ]
 
 
-def _command_agent_lines(phase: dict[str, Any], indent: str = "   ") -> list[str]:
+def _command_agent_lines(
+    phase: dict[str, Any],
+    indent: str = "   ",
+    *,
+    compact: bool = False,
+) -> list[str]:
     lines = [f"{indent}- 参与 Agent："]
     for agent_id in phase["participants"]:
         override = phase["agent_overrides"].get(agent_id)
@@ -705,15 +751,28 @@ def _command_agent_lines(phase: dict[str, Any], indent: str = "   ") -> list[str
             if declares_autonomy
             else phase["effective_autonomy"]
         )
+        if compact:
+            lines.append(
+                f"{indent}  - Agent `{agent_id}`：{autonomy_prefix(level)}；"
+                f"生效自主度：{autonomy_label(level)}；"
+                f"通俗边界：{COMPACT_AUTONOMY_BOUNDARIES[level]}；"
+                "自主度来源："
+                + ("Agent override" if declares_autonomy else "Phase")
+                + "；execution 来源："
+                + ("Agent override" if declares_execution else "Phase")
+            )
+            if override is not None and override["reason"]:
+                lines.append(f"{indent}    - 提高原因：{override['reason']}")
+            if declares_execution and override is not None:
+                lines.extend(_executor_lines(override["execution"], f"{indent}    "))
+            continue
         lines.append(f"{indent}  - Agent `{agent_id}`：{autonomy_prefix(level)}")
         lines.append(f"{indent}    - 生效自主度：{autonomy_label(level)}")
         lines.append(f"{indent}    - 通俗边界：{AUTONOMY_BOUNDARIES[level]}")
         lines.append(
             f"{indent}    - 自主度来源："
             + ("Agent override" if declares_autonomy else "Phase")
-        )
-        lines.append(
-            f"{indent}    - execution 来源："
+            + "；execution 来源："
             + ("Agent override" if declares_execution else "Phase")
         )
         if override is not None and override["reason"]:
@@ -731,13 +790,8 @@ def _parallel_runtime_lines(
         return []
     roles = "、".join(f"`{agent_id}`" for agent_id in phase["participants"])
     return [
-        f"{indent}- 多实例角色：{roles} 均为必参与角色；每个角色至少创建一个实例。",
-        f"{indent}- 动态 fan-out：团长按当前输入和运行容量分别决定每个角色的实例数与任务范围；"
-        "不得从 manifest 写死实例数或分片。",
-        f"{indent}- 实例隔离：每个实例使用新的 `task` 调用和独立 `task_id`、Todo、输出及验收状态；"
-        "同角色实例共享角色自主度、权限和执行边界。",
-        f"{indent}- 两级 fan-in：先验收每个角色组的全部实例，再验收整个 Phase；"
-        "任何必参与角色或实例未通过时不得完成 Phase。",
+        f"{indent}- 多实例角色：{roles} 均为必参与角色；每个角色至少创建一个实例；动态 fan-out 分别决定每个角色的实例数与任务范围，不得从 manifest 写死数量或分片。",
+        f"{indent}- 实例隔离：每个实例使用新的 `task` 调用和独立 `task_id`、Todo、输出及写目标；两级 fan-in 先验收每个角色组的全部实例，再验收 Phase，任一必需实例未通过不得完成。",
     ]
 
 
@@ -747,6 +801,7 @@ def render_workflow(
     include_command: bool = True,
     command_view: bool = False,
 ) -> str:
+    compact = len(workflow["phases"]) > 4
     lines = [f"### {workflow['name']}"]
     if workflow["trigger"]:
         lines.append(f"触发条件：{workflow['trigger']}")
@@ -768,15 +823,28 @@ def render_workflow(
                     lines.extend(f"     - {item}" for item in phase["acceptance"])
         return "\n".join(lines)
 
-    lines.append(f"- Workflow 声明默认自主度：{autonomy_label(workflow['autonomy'])}")
+    if compact:
+        lines.append(
+            f"- Workflow 声明默认自主度：{autonomy_label(workflow['autonomy'])}；"
+            "Workflow 最高生效自主度："
+            f"{autonomy_label(workflow['max_effective_autonomy'])}"
+        )
+    else:
+        lines.append(f"- Workflow 声明默认自主度：{autonomy_label(workflow['autonomy'])}")
+        lines.append(
+            "- Workflow 最高生效自主度："
+            f"{autonomy_label(workflow['max_effective_autonomy'])}"
+        )
+    default_boundary = AUTONOMY_BOUNDARIES[workflow["autonomy"]]
+    maximum_boundary = AUTONOMY_BOUNDARIES[workflow["max_effective_autonomy"]]
+    if compact:
+        default_boundary = COMPACT_AUTONOMY_BOUNDARIES[workflow["autonomy"]]
+        maximum_boundary = COMPACT_AUTONOMY_BOUNDARIES[
+            workflow["max_effective_autonomy"]
+        ]
     lines.append(
-        "- Workflow 最高生效自主度："
-        f"{autonomy_label(workflow['max_effective_autonomy'])}"
-    )
-    lines.append(f"- 默认通俗边界：{AUTONOMY_BOUNDARIES[workflow['autonomy']]}")
-    lines.append(
-        "- 最高风险边界："
-        f"{AUTONOMY_BOUNDARIES[workflow['max_effective_autonomy']]}"
+        f"- 自主度边界：{default_boundary}"
+        + (f" 最高风险边界：{maximum_boundary}" if maximum_boundary != default_boundary else "")
     )
     if include_command:
         command = workflow["command"]
@@ -794,44 +862,52 @@ def render_workflow(
             else phase["name"]
         )
         lines.append(f"{index}. **{phase_title}**（{phase['mode']}）→ {participants}")
-        lines.append(f"   - 声明自主度：`{declared}`")
+        if compact:
+            lines.append(
+                f"   - 声明自主度：`{declared}`；"
+                f"Phase 默认生效自主度：{autonomy_label(phase['effective_autonomy'])}；"
+                "Phase 最高生效自主度："
+                f"{autonomy_label(phase['max_effective_autonomy'])}"
+            )
+        else:
+            lines.append(f"   - 声明自主度：`{declared}`")
+            lines.append(
+                f"   - Phase 默认生效自主度：{autonomy_label(phase['effective_autonomy'])}"
+            )
+            lines.append(
+                "   - Phase 最高生效自主度："
+                f"{autonomy_label(phase['max_effective_autonomy'])}"
+            )
+        boundary_table = COMPACT_AUTONOMY_BOUNDARIES if compact else AUTONOMY_BOUNDARIES
+        phase_boundary = boundary_table[phase["effective_autonomy"]]
+        phase_maximum_boundary = boundary_table[phase["max_effective_autonomy"]]
         lines.append(
-            f"   - Phase 默认生效自主度：{autonomy_label(phase['effective_autonomy'])}"
-        )
-        lines.append(
-            "   - Phase 最高生效自主度："
-            f"{autonomy_label(phase['max_effective_autonomy'])}"
-        )
-        lines.append(
-            f"   - Phase 默认通俗边界：{AUTONOMY_BOUNDARIES[phase['effective_autonomy']]}"
-        )
-        lines.append(
-            "   - Phase 最高风险边界："
-            f"{AUTONOMY_BOUNDARIES[phase['max_effective_autonomy']]}"
+            f"   - Phase 边界：{phase_boundary}"
+            + (
+                f" 最高风险边界：{phase_maximum_boundary}"
+                if phase_maximum_boundary != phase_boundary
+                else ""
+            )
         )
         if phase["autonomy_reason"]:
             lines.append(f"   - 提高原因：{phase['autonomy_reason']}")
         if command_view:
-            lines.extend(_command_agent_lines(phase))
+            lines.extend(_command_agent_lines(phase, compact=compact))
         if phase["input"]:
             lines.append(f"   - 输入：{phase['input']}")
         if phase["expected_output"]:
             lines.append(f"   - 预期产物：{phase['expected_output']}")
         lines.extend(_parallel_runtime_lines(phase))
         lines.extend(_executor_lines(phase["execution"], "   "))
-        lines.append("   - 验收标准：")
-        lines.extend(f"     - {item}" for item in phase["acceptance"])
+        lines.append("   - 验收标准：" + "；".join(phase["acceptance"]))
         if not command_view:
             for agent_id, override in phase["agent_overrides"].items():
                 declared_override = override["autonomy"] or "继承 phase"
                 lines.append(f"   - Agent override `{agent_id}`：")
-                lines.append(f"     - 声明自主度：`{declared_override}`")
                 lines.append(
-                    f"     - 生效自主度：{autonomy_label(override['effective_autonomy'])}"
+                    f"     - 声明自主度：`{declared_override}`；生效自主度：{autonomy_label(override['effective_autonomy'])}"
                 )
-                lines.append(
-                    f"     - 通俗边界：{AUTONOMY_BOUNDARIES[override['effective_autonomy']]}"
-                )
+                lines.append(f"     - 通俗边界：{AUTONOMY_BOUNDARIES[override['effective_autonomy']]}")
                 if override["reason"]:
                     lines.append(f"     - 提高原因：{override['reason']}")
                 lines.append(
@@ -862,15 +938,14 @@ def render_role_workflows(workflows: Iterable[dict[str, Any]], role_id: str) -> 
             level = override["effective_autonomy"] if override else phase["effective_autonomy"]
             execution = override["execution"] if override else phase["execution"]
             lines.append(f"- **{phase['name']}**：{autonomy_label(level)}")
-            lines.append(f"  - 通俗边界：{AUTONOMY_BOUNDARIES[level]}")
+            lines.append(f"  - 通俗边界：{COMPACT_AUTONOMY_BOUNDARIES[level]}")
             if phase["mode"] == "parallel":
                 lines.append(
                     "  - 多实例：团长可为本角色创建多个独立实例；每个实例使用新的 "
                     "`task_id` 和 Todo，并继承本角色相同的自主度、权限与执行边界。"
                 )
             lines.extend(_executor_lines(execution, "  "))
-            lines.append("  - 验收标准：")
-            lines.extend(f"    - {item}" for item in phase["acceptance"])
+            lines.append("  - 验收标准：" + "；".join(phase["acceptance"]))
         sections.append("\n".join(lines))
     return "\n\n".join(sections)
 
@@ -881,7 +956,7 @@ def render_workflow_command(workflow: dict[str, Any]) -> str:
         "",
         "用户要求：$ARGUMENTS",
         "",
-        "同时使用本次调用中可访问的图片、PDF、文档或其他附件；不要假设存在未声明资源。",
+        "只使用本次调用可访问且已声明的附件。",
         "",
         "## 自主度与执行合同",
         "",
@@ -890,10 +965,8 @@ def render_workflow_command(workflow: dict[str, Any]) -> str:
         "## 停止、升级与确认",
         "",
         f"- {AUTONOMY_BOUNDARIES[workflow['max_effective_autonomy']]}",
-        "- 缺少输入、执行器、执行标准或验收依据时，停止并只索要会改变执行结果的最少信息。",
-        "- 工具失败时按当前自主度合同处理，不得静默改用未声明工具或降低验收标准。",
-        "- guided 到达关键决定、例外处理或高影响分支时必须先确认。",
-        "- 验证失败不得宣称完成；报告失败标准、证据和下一步。",
+        "- 缺少输入、执行器、标准或验收依据时停止；不得静默换工具、降标准或把失败称为完成。",
+        "- guided 的关键决定、例外或高影响分支必须先确认。",
         "",
         "## 最终交付",
         "",

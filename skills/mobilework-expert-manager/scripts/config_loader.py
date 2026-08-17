@@ -119,6 +119,24 @@ def _sidecar_metadata(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _sidecar_metadata_matches(
+    expected: tuple[int, ...],
+    actual: tuple[int, ...],
+    *,
+    allow_windows_ctime_alias: bool = False,
+) -> bool:
+    if os.name != "nt" or not allow_windows_ctime_alias:
+        return expected == actual
+    # CPython exposes creation time through lstat().st_ctime_ns on Windows,
+    # while fstat().st_ctime_ns for the same handle may alias st_mtime_ns.
+    # Keep the stable file identity, type, size, mtime, and reparse bit bound.
+    return (
+        expected[:5] == actual[:5]
+        and expected[6] & safe_input.REPARSE_POINT_ATTRIBUTE
+        == actual[6] & safe_input.REPARSE_POINT_ATTRIBUTE
+    )
+
+
 def _hash_sidecar(path: Path) -> dict[str, Any]:
     try:
         before = path.lstat()
@@ -139,7 +157,11 @@ def _hash_sidecar(path: Path) -> dict[str, Any]:
     digest = hashlib.sha256()
     size = 0
     try:
-        if _sidecar_metadata(os.fstat(descriptor)) != _sidecar_metadata(before):
+        if not _sidecar_metadata_matches(
+            _sidecar_metadata(before),
+            _sidecar_metadata(os.fstat(descriptor)),
+            allow_windows_ctime_alias=True,
+        ):
             raise ConfigLoadError("sidecar materialization changed before hashing")
         while True:
             chunk = os.read(descriptor, safe_input.READ_CHUNK_BYTES)
@@ -147,7 +169,11 @@ def _hash_sidecar(path: Path) -> dict[str, Any]:
                 break
             digest.update(chunk)
             size += len(chunk)
-        if _sidecar_metadata(os.fstat(descriptor)) != _sidecar_metadata(before):
+        if not _sidecar_metadata_matches(
+            _sidecar_metadata(before),
+            _sidecar_metadata(os.fstat(descriptor)),
+            allow_windows_ctime_alias=True,
+        ):
             raise ConfigLoadError("sidecar materialization changed while hashing")
     finally:
         os.close(descriptor)
@@ -155,7 +181,10 @@ def _hash_sidecar(path: Path) -> dict[str, Any]:
         after = path.lstat()
     except OSError as exc:
         raise ConfigLoadError("sidecar materialization changed after hashing") from exc
-    if _sidecar_metadata(after) != _sidecar_metadata(before):
+    if not _sidecar_metadata_matches(
+        _sidecar_metadata(before),
+        _sidecar_metadata(after),
+    ):
         raise ConfigLoadError("sidecar materialization changed after hashing")
     return {
         "identity": list(_sidecar_metadata(before)),
@@ -194,7 +223,11 @@ def _materialize_sidecar(path: Path, target: Path) -> dict[str, Any]:
     target_flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         opened = os.fstat(descriptor)
-        if _sidecar_metadata(opened) != _sidecar_metadata(before):
+        if not _sidecar_metadata_matches(
+            _sidecar_metadata(before),
+            _sidecar_metadata(opened),
+            allow_windows_ctime_alias=True,
+        ):
             raise ConfigLoadError("trusted sidecar changed before hashing")
         try:
             target_descriptor = os.open(target, target_flags, 0o700)
@@ -224,7 +257,11 @@ def _materialize_sidecar(path: Path, target: Path) -> dict[str, Any]:
                 ) from exc
         finally:
             os.close(target_descriptor)
-        if _sidecar_metadata(os.fstat(descriptor)) != _sidecar_metadata(before):
+        if not _sidecar_metadata_matches(
+            _sidecar_metadata(before),
+            _sidecar_metadata(os.fstat(descriptor)),
+            allow_windows_ctime_alias=True,
+        ):
             raise ConfigLoadError("trusted sidecar changed while hashing")
     finally:
         os.close(descriptor)
@@ -232,7 +269,10 @@ def _materialize_sidecar(path: Path, target: Path) -> dict[str, Any]:
         after = path.lstat()
     except OSError as exc:
         raise ConfigLoadError("trusted sidecar changed after hashing") from exc
-    if _sidecar_metadata(after) != _sidecar_metadata(before):
+    if not _sidecar_metadata_matches(
+        _sidecar_metadata(before),
+        _sidecar_metadata(after),
+    ):
         raise ConfigLoadError("trusted sidecar changed after hashing")
     try:
         target.chmod(0o700)
@@ -597,7 +637,7 @@ def verify(
             ]
         )
     try:
-        package_contract.assert_no_symlinks(runtime_dir)
+        install_expert.assert_workspace_runtime_no_symlinks(runtime_dir)
         receipts = install_state.load_receipts(runtime_dir)
     except (package_contract.ContractError, install_state.InstallStateError) as exc:
         _raise_chain(

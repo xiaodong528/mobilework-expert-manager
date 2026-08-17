@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -45,13 +47,88 @@ class PackageLockProtocolTests(unittest.TestCase):
                 self.assertEqual(first["pid"], os.getpid())
                 self.assertRegex(first["ownerToken"], r"^[a-f0-9]{32}$")
                 self.assertEqual(first["createdAt"], first["heartbeatAt"])
+                marker_path = lock_path / create_expert.PACKAGE_LOCK_UNPUBLISHED_OWNER
+                self.assertEqual(
+                    marker_path.read_text(encoding="ascii"),
+                    f"{first['ownerToken']}\n",
+                )
                 if os.name == "posix":
                     self.assertEqual(stat.S_IMODE(lock_path.stat().st_mode) & 0o077, 0)
                     self.assertEqual(stat.S_IMODE(owner_path.stat().st_mode) & 0o077, 0)
-                time.sleep(0.035)
-                current = json.loads(owner_path.read_text(encoding="utf-8"))
+                    self.assertEqual(stat.S_IMODE(marker_path.stat().st_mode) & 0o077, 0)
+                deadline = time.monotonic() + 2.0
+                current = first
+                while (
+                    current["heartbeatAt"] == first["heartbeatAt"]
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.05)
+                    current = json.loads(owner_path.read_text(encoding="utf-8"))
                 self.assertNotEqual(current["heartbeatAt"], first["heartbeatAt"])
             self.assertFalse(lock_path.exists())
+
+    def test_retries_transient_windows_sharing_conflicts_for_lock_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            target = root / "target"
+            source.write_text("new", encoding="utf-8")
+            target.write_text("old", encoding="utf-8")
+            real_replace = os.replace
+            attempts = 0
+
+            def flaky_replace(source_path: Path, target_path: Path) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 4:
+                    raise OSError(errno.EACCES, "sharing conflict")
+                real_replace(source_path, target_path)
+
+            with (
+                patch.object(create_expert.os, "replace", side_effect=flaky_replace),
+                patch.object(create_expert.time, "sleep") as sleep_mock,
+            ):
+                create_expert.replace_lock_entry(source, target, platform_name="nt")
+
+            self.assertEqual(attempts, 4)
+            self.assertEqual(sleep_mock.call_count, 3)
+            sleep_mock.assert_called_with(0.002)
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+            self.assertFalse(source.exists())
+
+    def test_retries_transient_windows_sharing_conflicts_for_quarantine_cleanup(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            quarantine = Path(temp) / "quarantine"
+            quarantine.mkdir()
+            (quarantine / create_expert.PACKAGE_LOCK_UNPUBLISHED_OWNER).write_text(
+                "owner\n",
+                encoding="ascii",
+            )
+            real_rmtree = shutil.rmtree
+            attempts = 0
+
+            def flaky_rmtree(target: Path) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 4:
+                    raise OSError(errno.EBUSY, "sharing conflict")
+                real_rmtree(target)
+
+            with (
+                patch.object(create_expert.shutil, "rmtree", side_effect=flaky_rmtree),
+                patch.object(create_expert.time, "sleep") as sleep_mock,
+            ):
+                create_expert.remove_lock_quarantine(
+                    quarantine,
+                    platform_name="nt",
+                )
+
+            self.assertEqual(attempts, 4)
+            self.assertEqual(sleep_mock.call_count, 3)
+            sleep_mock.assert_called_with(0.002)
+            self.assertFalse(quarantine.exists())
 
     def test_unknown_and_active_owners_are_never_stolen(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -192,10 +269,27 @@ class PackageLockProtocolTests(unittest.TestCase):
                 )
                 raise OSError("injected publication failure")
 
-            with patch.object(
-                create_expert,
-                "write_lock_owner",
-                side_effect=replace_then_fail,
+            real_stat = Path.stat
+
+            def force_reused_directory_identity(
+                candidate: Path,
+                *args: object,
+                **kwargs: object,
+            ) -> object:
+                metadata = real_stat(candidate, *args, **kwargs)
+                if candidate == lock_path or candidate.name.startswith(
+                    f"{lock_path.name}.unpublished-"
+                ):
+                    return SimpleNamespace(st_dev=1, st_ino=1)
+                return metadata
+
+            with (
+                patch.object(Path, "stat", force_reused_directory_identity),
+                patch.object(
+                    create_expert,
+                    "write_lock_owner",
+                    side_effect=replace_then_fail,
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "changed before owner publication"):
                     with create_expert.package_lock(root, "contract-review"):
@@ -262,15 +356,28 @@ class PackageLockProtocolTests(unittest.TestCase):
             self.assertEqual(completed.stdout.strip(), "owner-published")
             crashed_owner = create_expert.read_lock_owner(lock_path)
             self.assertIsNotNone(crashed_owner)
-            self.assertFalse(create_expert.lock_owner_is_stale(crashed_owner, 0.05))
+            heartbeat_at = create_expert.valid_lock_timestamp(
+                crashed_owner["heartbeatAt"]
+            )
+            self.assertIsNotNone(heartbeat_at)
+            observed_at = time.time()
+            stale_margin = 0.1
+            stale_seconds = max(0.0, observed_at - heartbeat_at) + stale_margin
+            self.assertFalse(
+                create_expert.lock_owner_is_stale(
+                    crashed_owner,
+                    stale_seconds,
+                    now=observed_at,
+                )
+            )
 
-            time.sleep(0.06)
+            time.sleep(stale_margin + 0.02)
             with create_expert.package_lock(
                 root,
                 "contract-review",
-                timeout_seconds=0.2,
+                timeout_seconds=0.3,
                 heartbeat_seconds=0.005,
-                stale_seconds=0.05,
+                stale_seconds=stale_seconds,
                 poll_seconds=0.002,
             ):
                 self.assertNotEqual(

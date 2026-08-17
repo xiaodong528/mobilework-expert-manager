@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import manager_contract
+import package_contract
 import safe_input
 import cli_contract
 import finding_catalog
@@ -22,7 +23,7 @@ import finding_catalog
 class ManagerContractTests(unittest.TestCase):
     def test_policy_has_no_fixed_opencode_version(self) -> None:
         policy = manager_contract.load_policy()
-        self.assertEqual(policy["contractVersion"], "2.14.0")
+        self.assertEqual(policy["contractVersion"], "2.20.0")
         self.assertRegex(
             policy["contractVersion"],
             manager_contract.CONTRACT_VERSION_RE,
@@ -45,6 +46,11 @@ class ManagerContractTests(unittest.TestCase):
         self.assertEqual(
             frozenset(policy["cli"]["exitCodes"].values()),
             cli_contract.VALID_EXIT_CODES,
+        )
+        self.assertEqual(policy["cli"]["streamEncoding"], "utf-8")
+        self.assertEqual(
+            policy["cli"]["streamEncoding"],
+            cli_contract.STREAM_ENCODING,
         )
         self.assertEqual(
             tuple(policy["gates"]["names"]),
@@ -128,11 +134,262 @@ class ManagerContractTests(unittest.TestCase):
             finding_catalog.FALLBACK_BY_SEVERITY,
         )
         requirements = policy["requirementsDiscovery"]
-        self.assertEqual(requirements["schemaVersion"], 11)
+        self.assertEqual(requirements["schemaVersion"], 14)
+        role_autonomy = requirements["roleAutonomySelection"]
+        self.assertEqual(
+            [(item["value"], item["label"], item["externalSkill"]) for item in role_autonomy["values"]],
+            [
+                ("scripted", "低", "deny"),
+                ("fixed", "较低", "deny"),
+                ("bounded", "中", "deny"),
+                ("guided", "较高", "ask"),
+                ("adaptive", "高", "allow"),
+            ],
+        )
+        self.assertEqual(role_autonomy["permissionBaseline"], "role-autonomy-only")
+        self.assertFalse(role_autonomy["workflowPhaseAffectsPermission"])
+        selection = requirements["creationTargetSelection"]
+        self.assertEqual(selection["schemaVersion"], 1)
+        self.assertEqual(
+            selection["errors"],
+            {
+                "ambiguousAnswer": "CREATION_TARGET_ANSWER_AMBIGUOUS",
+                "invalidPath": "CREATION_TARGET_PATH_INVALID",
+                "targetOutsideRoot": "TARGET_OUTSIDE_ROOT",
+            },
+        )
+        request = selection["question"]["request"]
+        self.assertEqual(
+            selection["question"]["toolPreference"],
+            {
+                "recognizedNames": ["AskUserQuestion", "question"],
+                "equivalentCapability": "single-select-with-custom-input",
+                "whenAvailable": "must-use",
+            },
+        )
+        self.assertEqual(
+            set(request),
+            {"header", "question", "options", "multiple", "custom"},
+        )
+        self.assertFalse(request["multiple"])
+        self.assertTrue(request["custom"])
+        self.assertEqual(
+            set(request["options"][0]),
+            {"label", "description"},
+        )
         self.assertNotIn(
             "technicalBindingAction",
             requirements["technicalMappingReturn"]["questionSelection"],
         )
+
+    def test_agent_skills_specification_uses_official_page_authority(self) -> None:
+        specification = manager_contract.load_policy()[
+            "agentSkillsSpecification"
+        ]
+        self.assertEqual(
+            specification,
+            {
+                "page": "https://agentskills.io/specification",
+                "repository": "https://github.com/agentskills/agentskills",
+                "repositorySnapshot": {
+                    "commit": "69ef37e9424c0a7ea9dd2293b559e43ec8176379",
+                    "url": (
+                        "https://github.com/agentskills/agentskills/tree/"
+                        "69ef37e9424c0a7ea9dd2293b559e43ec8176379"
+                    ),
+                },
+                "authority": "official-page",
+                "validatorRole": "cross-check-oracle",
+                "officialHardRuleFailure": "block",
+                "officialRecommendationFinding": "warning",
+            },
+        )
+
+    def test_expert_runtime_projection_is_machine_readable(self) -> None:
+        projection = manager_contract.load_policy()["expertRuntimeProjection"]
+        self.assertEqual(
+            projection,
+            {
+                "command": {
+                    "agentMode": "all",
+                    "subtask": True,
+                },
+                "agent": {
+                    "canonicalStepField": "steps",
+                    "legacyStepInputFields": ["max_turns", "maxTurns"],
+                    "deprecatedStepFields": ["maxSteps"],
+                    "forbiddenSamplingFields": ["temperature", "top_p"],
+                },
+            },
+        )
+        agent = projection["agent"]
+        self.assertEqual(
+            package_contract.AGENT_STEP_KEYS,
+            (agent["canonicalStepField"], *agent["legacyStepInputFields"]),
+        )
+        self.assertEqual(
+            package_contract.LEGACY_AGENT_SAMPLING_KEYS,
+            tuple(agent["forbiddenSamplingFields"]),
+        )
+        self.assertTrue(
+            set(agent["deprecatedStepFields"])
+            <= package_contract.FORBIDDEN_AGENT_MANIFEST_KEYS
+        )
+
+    def test_policy_rejects_expert_runtime_projection_drift(self) -> None:
+        original = manager_contract.load_policy()
+        mutations = (
+            lambda policy: policy.pop("expertRuntimeProjection"),
+            lambda policy: policy["expertRuntimeProjection"].update(
+                {"extra": "drift"}
+            ),
+            lambda policy: policy["expertRuntimeProjection"]["command"].update(
+                {"agentMode": "subagent"}
+            ),
+            lambda policy: policy["expertRuntimeProjection"]["command"].update(
+                {"subtask": False}
+            ),
+            lambda policy: policy["expertRuntimeProjection"]["command"].update(
+                {"subtask": 0}
+            ),
+            lambda policy: policy["expertRuntimeProjection"]["agent"].update(
+                {"canonicalStepField": "maxSteps"}
+            ),
+            lambda policy: policy["expertRuntimeProjection"]["agent"].update(
+                {"legacyStepInputFields": ["maxTurns", "max_turns"]}
+            ),
+            lambda policy: policy["expertRuntimeProjection"]["agent"].update(
+                {"forbiddenSamplingFields": ["top_p", "temperature"]}
+            ),
+        )
+        self._assert_policy_mutations_rejected(original, mutations)
+
+    def test_policy_rejects_agent_skills_specification_drift(self) -> None:
+        original = manager_contract.load_policy()
+        mutations = (
+            lambda policy: policy.pop("agentSkillsSpecification"),
+            lambda policy: policy["agentSkillsSpecification"].update(
+                {"authority": "validator"}
+            ),
+            lambda policy: policy["agentSkillsSpecification"].update(
+                {"validatorRole": "authority"}
+            ),
+            lambda policy: policy["agentSkillsSpecification"].update(
+                {"officialHardRuleFailure": "warning"}
+            ),
+            lambda policy: policy["agentSkillsSpecification"].update(
+                {"officialRecommendationFinding": "block"}
+            ),
+            lambda policy: policy["agentSkillsSpecification"][
+                "repositorySnapshot"
+            ].update({"commit": "main"}),
+            lambda policy: policy["agentSkillsSpecification"].update(
+                {"extra": "drift"}
+            ),
+            lambda policy: policy["agentSkillsSpecification"].pop("page"),
+        )
+        self._assert_policy_mutations_rejected(original, mutations)
+
+    def test_policy_rejects_capability_mapping_drift(self) -> None:
+        original = manager_contract.load_policy()
+        mutations = (
+            lambda policy: policy["requirementsDiscovery"].pop(
+                "capabilityImplementationMapping"
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ].update({"extra": "drift"}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ].update({"defaultMode": "default-none"}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ].update({"rolePresenceCreatesResource": 0}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ].update({"responsibilityTextDirectProjection": "allowed"}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ].update(
+                {
+                    "candidateResourceTypes": [
+                        "none",
+                        "skill",
+                        "opencode-plugin",
+                        "custom-tool",
+                    ]
+                }
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ].update({"candidateOnlyEvidenceSources": ["role-responsibility"]}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["resourceSemantics"].update(
+                {"custom-tool": "arbitrary-code"}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["selectionConstraints"].update(
+                {"externalSystemAccessUsesMcpNotPlugin": 1}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["selectionConstraints"].update(
+                {"oneResourcePerRuntimeResponsibility": False}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["businessTruthBoundary"].update(
+                {"managerMayInventBusinessCapabilityOrRule": True}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["businessTruthBoundary"].update(
+                {
+                    "candidateRequires": [
+                        "stable-business-label",
+                        "observable-runtime-behavior",
+                    ]
+                }
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["authorization"].update(
+                {"requiresCurrentWholeCardConfirmation": 1}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["authorization"].update(
+                {"technicalCarrierChoiceDelegatedToManager": False}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["authorization"].update(
+                {"materialMappingChangeAction": "continue-generation"}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["naming"]["skill"].update(
+                {"expertOrRolePrefixRequired": True}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["zeroResourceProjection"].update({"skillMarkdownCount": False}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["zeroResourceProjection"].update({"toolsDirectory": "present"}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["npmPlugin"].update({"requiresExactVersion": 1}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["npmPlugin"].update({"requiresTrustedExistingPackage": False}),
+            lambda policy: policy["requirementsDiscovery"][
+                "capabilityImplementationMapping"
+            ]["npmPlugin"].update({"versionFormat": "semver-range"}),
+        )
+        self._assert_policy_mutations_rejected(original, mutations)
 
     def test_policy_rejects_cli_receipt_and_root_semantic_drift(self) -> None:
         original = manager_contract.load_policy()
@@ -141,6 +398,7 @@ class ManagerContractTests(unittest.TestCase):
                 {"supportedSchemaVersions": [2, 3], "defaultSchemaVersion": 3}
             ),
             lambda policy: policy["cli"].update({"formats": ["json", "yaml"]}),
+            lambda policy: policy["cli"].update({"streamEncoding": "cp1252"}),
             lambda policy: policy["receiptContract"].update(
                 {"writeVersion": 2, "readVersions": [1, 2, 3]}
             ),
@@ -226,6 +484,46 @@ class ManagerContractTests(unittest.TestCase):
             lambda policy: policy["requirementsDiscovery"].update(
                 {"schemaVersion": 9.0}
             ),
+            lambda policy: policy["requirementsDiscovery"].pop(
+                "creationTargetSelection"
+            ),
+            lambda policy: policy["requirementsDiscovery"].pop(
+                "roleAutonomySelection"
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "roleAutonomySelection"
+            ]["values"][3].update({"externalSkill": "allow"}),
+            lambda policy: policy["requirementsDiscovery"][
+                "roleAutonomySelection"
+            ].update({"workflowPhaseAffectsPermission": True}),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["question"]["request"].update({"multiple": True}),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["question"]["request"]["options"][0].pop("description"),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["question"]["fallback"].update({"mustAwaitReply": False}),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["question"]["toolPreference"].update(
+                {"recognizedNames": ["question"]}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["question"]["replyMapping"].update(
+                {"eventAnswerPath": "answers[0]"}
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["budget"].update({"consumesDecisionBudget": True}),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["executionGate"].update({"validAnswerCount": 2}),
+            lambda policy: policy["requirementsDiscovery"][
+                "creationTargetSelection"
+            ]["customPath"].update({"mustExist": False}),
             lambda policy: policy["requirementsDiscovery"].update(
                 {"ledgerFields": ["decision_id", "decision_id"]}
             ),
@@ -350,6 +648,12 @@ class ManagerContractTests(unittest.TestCase):
             ),
             lambda policy: policy["requirementsDiscovery"]["capabilityDisclosure"].update(
                 {"businessCard": []}
+            ),
+            lambda policy: policy["requirementsDiscovery"]["capabilityDisclosure"].update(
+                {"machineResourceIdentifiers": "show-before-confirmation"}
+            ),
+            lambda policy: policy["requirementsDiscovery"]["capabilityDisclosure"].update(
+                {"technicalCarrierType": "user-must-always-confirm-again"}
             ),
             lambda policy: policy["requirementsDiscovery"].pop(
                 "presentationBoundary"
@@ -732,6 +1036,19 @@ class ManagerContractTests(unittest.TestCase):
                         ]["forbiddenDefaultCategories"]
                         if category
                         != "external-entry-implementation-channel-types"
+                    ]
+                }
+            ),
+            lambda policy: policy["requirementsDiscovery"][
+                "presentationBoundary"
+            ].update(
+                {
+                    "forbiddenDefaultCategories": [
+                        category
+                        for category in policy["requirementsDiscovery"][
+                            "presentationBoundary"
+                        ]["forbiddenDefaultCategories"]
+                        if category != "machine-plugin-identifiers"
                     ]
                 }
             ),

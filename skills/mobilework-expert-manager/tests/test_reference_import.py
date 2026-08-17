@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 
@@ -122,6 +122,15 @@ class ReferenceImportTests(unittest.TestCase):
         )
         self.assertIn("Supplement rule", converted.read_text(encoding="utf-8"))
 
+    def test_text_import_normalizes_platform_newlines_to_lf(self) -> None:
+        name, content = reference_importer._text_content(
+            PurePosixPath("rules.md"),
+            b"first\r\nsecond\rthird\n",
+        )
+
+        self.assertEqual(name, "rules.md")
+        self.assertEqual(content, "first\nsecond\nthird\n")
+
     def test_missing_confirmation_binary_and_symlink_leave_package_unchanged(self) -> None:
         text = self.root / "rules.md"
         text.write_text("rules\n", encoding="utf-8")
@@ -166,7 +175,10 @@ class ReferenceImportTests(unittest.TestCase):
             link.symlink_to(text)
             linked = self.run_import(link, "--confirm")
             self.assertEqual(linked.returncode, 2)
-            self.assertIn("symlink", linked.stderr)
+            self.assertIn(
+                "reparse point" if os.name == "nt" else "symlink",
+                linked.stderr,
+            )
             self.assertEqual(create_expert.calculate_package_revision(self.package), before)
 
         if hasattr(os, "mkfifo"):
@@ -323,7 +335,10 @@ class ReferenceImportTests(unittest.TestCase):
         rejected = self.run_import(source, "--confirm")
 
         self.assertEqual(rejected.returncode, 2)
-        self.assertIn("symlink", rejected.stderr)
+        self.assertIn(
+            "reparse point" if os.name == "nt" else "symlink",
+            rejected.stderr,
+        )
         self.assertEqual(create_expert.calculate_package_revision(self.package), before)
 
     def test_imported_package_json_reference_is_installed_and_receipted(self) -> None:

@@ -55,12 +55,14 @@ import install_state
 import manifest_contract
 import output_sanitizer
 import package_snapshot
+import permission_policy
 import posix_noreplace
 import projection_contract
 import provenance
 import renderers
 import safe_input
 import secure_transaction
+import skill_contract
 import validate_expert
 import workspace_lock
 
@@ -70,6 +72,78 @@ RUNTIME_CONFIG = "opencode.json"
 
 def _posix_platform() -> bool:
     return os.name == "posix"
+
+
+def _allowed_host_bin_symlink(root: Path, path: Path) -> bool:
+    """Return whether path is one constrained npm executable link."""
+
+    relative = path.relative_to(root)
+    if len(relative.parts) != 3 or relative.parts[:2] != ("node_modules", ".bin"):
+        return False
+    node_modules = root / "node_modules"
+    target = Path(os.readlink(path))
+    if target.is_absolute():
+        parts = target.parts
+        indices = [index for index, part in enumerate(parts) if part == "node_modules"]
+        if not indices:
+            return False
+        node_modules_index = indices[-1]
+        if (
+            node_modules_index == 0
+            or parts[node_modules_index - 1] != "opencode-plugin-seed"
+        ):
+            return False
+        mirrored_relative = Path(*parts[node_modules_index + 1 :])
+        mirrored_target = node_modules / mirrored_relative
+        try:
+            resolved_target = target.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return False
+        if resolved_target != target or target.is_symlink() or not target.is_file():
+            return False
+        if mirrored_target.is_symlink() or not mirrored_target.is_file():
+            return False
+        return (
+            target.stat().st_size == mirrored_target.stat().st_size
+            and contract.sha256_file(target) == contract.sha256_file(mirrored_target)
+        )
+    try:
+        resolved_target = (path.parent / target).resolve(strict=True)
+        resolved_target.relative_to(node_modules.resolve(strict=True))
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return resolved_target.is_file()
+
+
+def assert_workspace_runtime_no_symlinks(root: Path) -> None:
+    """Reject runtime symlinks except constrained npm ``.bin`` links.
+
+    MobileWork materializes executable links in
+    ``.opencode/node_modules/.bin`` after opening a workspace. Expert installs
+    never own or mutate that subtree. Every directory link and every other file
+    link remains forbidden; an allowed executable link must resolve strictly to
+    a regular file inside the same real ``node_modules`` directory.
+    """
+
+    if root.is_symlink():
+        raise contract.ContractError(f"symlink is not allowed: {root}")
+    for current, directories, files in os.walk(root, followlinks=False):
+        base = Path(current)
+        for name in list(directories):
+            if name == ".git":
+                directories.remove(name)
+                continue
+            path = base / name
+            if path.is_symlink():
+                raise contract.ContractError(
+                    f"symlink is not allowed: {path.relative_to(root).as_posix()}"
+                )
+        for name in files:
+            path = base / name
+            if path.is_symlink() and not _allowed_host_bin_symlink(root, path):
+                raise contract.ContractError(
+                    f"symlink is not allowed: {path.relative_to(root).as_posix()}"
+                )
 
 
 def _posix_recovery_backend_available() -> bool:
@@ -814,6 +888,150 @@ def apply_reference_capability(
     return generated
 
 
+def _replace_agent_markdown_permission(
+    sources: dict[str, bytes],
+    role_id: str,
+    permission: dict[str, Any],
+) -> None:
+    relative = f"{contract.AGENTS_SUBDIR}/{role_id}.md"
+    content = sources.get(relative)
+    if content is None:
+        fail(f"legacy role autonomy projection is missing {relative}")
+    try:
+        text = (
+            content.decode("utf-8")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
+    except UnicodeDecodeError:
+        fail(f"legacy role autonomy projection requires UTF-8 Agent Markdown: {relative}")
+    if not text.startswith("---\n"):
+        fail(f"legacy role autonomy projection requires Agent frontmatter: {relative}")
+    closing = text.find("\n---\n", 4)
+    if closing < 0:
+        fail(f"legacy role autonomy projection found invalid Agent frontmatter: {relative}")
+    try:
+        frontmatter = validate_expert.load_unique_yaml_mapping(text[4:closing])
+    except Exception as exc:
+        fail(f"legacy role autonomy projection cannot parse {relative}: {exc}")
+    if not isinstance(frontmatter, dict):
+        fail(f"legacy role autonomy projection requires mapping frontmatter: {relative}")
+    frontmatter["permission"] = permission
+    body = text[closing + len("\n---\n") :]
+    sources[relative] = renderers.render_frontmatter(frontmatter, body).encode("utf-8")
+
+
+def _restrict_permission_projection(
+    baseline: dict[str, Any],
+    declared: dict[str, Any],
+) -> dict[str, Any]:
+    """Meet a generated baseline with package-declared restrictions only."""
+
+    def meet(base: Any, candidate: Any) -> Any:
+        if isinstance(base, str) and isinstance(candidate, str):
+            return min(
+                (base, candidate),
+                key=lambda action: permission_policy.ACTION_RANK[action],
+            )
+        if not isinstance(base, dict) or not isinstance(candidate, dict):
+            return copy.deepcopy(base)
+        result = copy.deepcopy(base)
+        fallback = base.get("*")
+        for key, value in candidate.items():
+            if key in base:
+                result[key] = meet(base[key], value)
+                continue
+            if isinstance(value, str):
+                effective_base = fallback if isinstance(fallback, str) else "ask"
+                if (
+                    value in permission_policy.ACTION_RANK
+                    and effective_base in permission_policy.ACTION_RANK
+                    and permission_policy.ACTION_RANK[value]
+                    <= permission_policy.ACTION_RANK[effective_base]
+                ):
+                    result[key] = value
+        return result
+
+    return meet(baseline, declared)
+
+
+def apply_legacy_role_autonomy_projection(
+    manifest: dict[str, Any],
+    runtime: dict[str, Any],
+    sources: dict[str, bytes],
+) -> list[str]:
+    """Overlay bounded permissions for legacy roles without mutating package bytes."""
+
+    roles = manifest_contract.manifest_roles(manifest)
+    defaulted = [
+        (field, role)
+        for field, role in roles
+        if role.get("autonomy") is None
+    ]
+    if not defaulted:
+        return []
+    try:
+        mcp_names = list(contract.normalize_mcp_servers(manifest.get("mcp_servers")))
+    except contract.ContractError as exc:
+        fail(str(exc))
+    runtime_extensions = manifest.get("runtime_extensions", {})
+    custom_tool_paths = [
+        item["path"]
+        for item in runtime_extensions.get("custom_tools", [])
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    ] if isinstance(runtime_extensions, dict) else []
+    subagent_ids = [
+        str(role.get("id"))
+        for field, role in roles
+        if field.startswith("subagents[") and isinstance(role.get("id"), str)
+    ]
+    runtime_agents = runtime.get("agent")
+    if not isinstance(runtime_agents, dict):
+        fail("legacy role autonomy projection requires runtime agent mappings")
+    projected: list[str] = []
+    for field, role in defaulted:
+        role_id = role.get("id")
+        if not isinstance(role_id, str):
+            fail(f"{field}.id must be a string for legacy role autonomy projection")
+        try:
+            normalized_role = {
+                **role,
+                "autonomy": permission_policy.ROLE_AUTONOMY_DEFAULT,
+                "allowed_skills": skill_contract.role_skill_names(
+                    manifest, role, field
+                ),
+                "mcp": role.get("mcp", []),
+                "custom_tools": role.get("custom_tools", []),
+                # Legacy declarations are intentionally ignored by the temporary
+                # bounded projection because they may be more permissive.
+                "permission": {},
+                "permission_reason": "",
+            }
+            permission, _audit = permission_policy.build_role_permission(
+                normalized_role,
+                workflows=[],
+                manifest_mode=skill_contract.schema_mode(manifest),
+                mcp_names=mcp_names,
+                custom_tool_paths=custom_tool_paths,
+                subagent_ids=subagent_ids,
+                is_primary=not field.startswith("subagents["),
+                legacy_tools_permission={},
+            )
+        except (contract.ContractError, permission_policy.PermissionPolicyError) as exc:
+            fail(f"{field}: cannot derive legacy bounded permission projection: {exc}")
+        runtime_role = runtime_agents.get(role_id)
+        if not isinstance(runtime_role, dict):
+            fail(f"legacy role autonomy projection is missing runtime Agent {role_id}")
+        declared_permission = runtime_role.get("permission")
+        if not isinstance(declared_permission, dict):
+            fail(f"legacy role autonomy projection requires permission for {role_id}")
+        permission = _restrict_permission_projection(permission, declared_permission)
+        runtime_role["permission"] = permission
+        _replace_agent_markdown_permission(sources, role_id, permission)
+        projected.append(role_id)
+    return projected
+
+
 def derive_install_projection(
     snapshot: safe_input.InputSnapshot,
     target: manager_contract.TargetContract,
@@ -831,6 +1049,7 @@ def derive_install_projection(
     except ValueError as exc:
         fail(str(exc))
     sources = copy_sources(snapshot)
+    apply_legacy_role_autonomy_projection(manifest, runtime, sources)
     reference_fallbacks = apply_reference_capability(
         manifest,
         runtime,
@@ -1118,7 +1337,7 @@ def install_package(
     runtime_dir_existed = runtime_dir.exists()
     if runtime_dir_existed:
         try:
-            contract.assert_no_symlinks(runtime_dir)
+            assert_workspace_runtime_no_symlinks(runtime_dir)
         except contract.ContractError as exc:
             fail(f"workspace runtime contains an unsafe symlink: {exc}")
     config_path = runtime_dir / contract.WORKSPACE_CONFIG
@@ -1546,6 +1765,7 @@ def install_package(
         "runtime": {"status": "not-tested", "reason": "install-only"},
         "execution": _transaction_execution("install", secure=posix_backend),
         "provenance": evidence,
+        "findings": [item.as_dict() for item in validation.findings],
         "status": "installable",
         "runtime_status": "runtime-not-tested",
         "workspace": str(workspace_dir),
@@ -1623,7 +1843,7 @@ def restore_drift_backup(
     if runtime_dir.is_symlink() or not runtime_dir.is_dir():
         raise _restore_blocked("workspace runtime directory is not safe for restore")
     try:
-        contract.assert_no_symlinks(runtime_dir)
+        assert_workspace_runtime_no_symlinks(runtime_dir)
     except contract.ContractError as exc:
         raise _restore_blocked("workspace runtime contains an unsafe path") from exc
 
@@ -1887,7 +2107,7 @@ def uninstall_package(
     if runtime_dir.is_symlink() or not runtime_dir.is_dir():
         fail(f"workspace runtime directory does not exist safely: {runtime_dir}")
     try:
-        contract.assert_no_symlinks(runtime_dir)
+        assert_workspace_runtime_no_symlinks(runtime_dir)
     except contract.ContractError as exc:
         fail(f"workspace runtime contains an unsafe symlink: {exc}")
 

@@ -219,7 +219,7 @@ class McpOAuthContractTests(unittest.TestCase):
         created, package = self.generate(data, name="mode-omitted")
         self.assertEqual(created.returncode, 0, created.stderr)
         runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
-        self.assertEqual(runtime["agent"][data["agent"]["id"]]["mode"], "primary")
+        self.assertEqual(runtime["agent"][data["agent"]["id"]]["mode"], "all")
         self.assertEqual(self.validate(package).returncode, 0)
 
     def test_rejects_unknown_manifest_and_runtime_extension_fields(self) -> None:

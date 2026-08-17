@@ -1,4 +1,0 @@
-interface:
-  display_name: "MobileWork 专家管理器"
-  short_description: "把业务需求变成可确认、可验证的专家或专家团方案"
-  default_prompt: "使用 $mobilework-expert-manager 理解我的业务目标，用白话推荐合适的资料、规则、工具、外部连接和角色方案；先让我确认，再生成并验证 MobileWork 专家包。"

@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SKILLS_REF_COMMIT: 38a2ff82958afee88dadf4831509e6f7e9d8ef4e
+      SKILLS_REF_COMMIT: 69ef37e9424c0a7ea9dd2293b559e43ec8176379
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

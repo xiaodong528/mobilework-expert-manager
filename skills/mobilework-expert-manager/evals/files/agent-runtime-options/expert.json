@@ -24,11 +24,11 @@
     "display_name": "运行参数团长",
     "profession": "Agent 运行合同负责人",
     "description": "编排并验收各角色运行参数的投影结果。",
-    "mode": "primary",
+    "mode": "all",
+    "autonomy": "bounded",
     "steps": 120,
     "model": "openai/gpt-5",
     "variant": "high",
-    "temperature": 0.2,
     "options": {
       "reasoningEffort": "high",
       "textVerbosity": "low"
@@ -63,8 +63,8 @@
       "profession": "Agent 配置审计员",
       "description": "独立核对角色运行参数及默认继承边界。",
       "mode": "subagent",
+      "autonomy": "bounded",
       "steps": 50,
-      "top_p": 0.7,
       "hidden": true,
       "options": {
         "textVerbosity": "low"

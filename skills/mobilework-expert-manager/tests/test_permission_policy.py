@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -29,6 +30,7 @@ def workflow(level: str, role_id: str = "reviewer", execution: dict | None = Non
 def role(**updates: object) -> dict:
     value = {
         "id": "reviewer",
+        "autonomy": "bounded",
         "allowed_skills": ["review-common"],
         "mcp": [],
         "custom_tools": [],
@@ -57,17 +59,20 @@ class PermissionPolicyTests(unittest.TestCase):
             is_primary=True,
         )
 
-    def test_five_level_matrix(self) -> None:
+    def test_five_level_matrix_and_skill_actions(self) -> None:
         expected = {
-            "scripted": ("deny", "deny", "deny", "deny", "deny"),
-            "fixed": ("ask", "ask", "ask", "ask", "ask"),
-            "bounded": ("ask", "allow", "ask", "allow", "ask"),
-            "guided": ("ask", "allow", "ask", "allow", "ask"),
-            "adaptive": ("ask", "allow", "ask", "allow", "allow"),
+            "scripted": ("deny", "deny", "deny", "deny", "deny", "deny"),
+            "fixed": ("ask", "ask", "ask", "ask", "ask", "deny"),
+            "bounded": ("ask", "allow", "ask", "allow", "ask", "deny"),
+            "guided": ("ask", "allow", "ask", "allow", "ask", "ask"),
+            "adaptive": ("ask", "allow", "ask", "allow", "allow", "allow"),
         }
         for level, actions in expected.items():
             with self.subTest(level=level):
-                permission, audit = self.build(role(), [workflow(level)])
+                permission, audit = self.build(
+                    role(autonomy=level),
+                    [workflow("adaptive")],
+                )
                 self.assertEqual(
                     (
                         permission["*"],
@@ -75,17 +80,54 @@ class PermissionPolicyTests(unittest.TestCase):
                         permission["bash"]["*"],
                         permission["webfetch"],
                         permission["doom_loop"],
+                        permission["skill"]["*"],
                     ),
                     actions,
                 )
-                self.assertNotEqual(permission["bash"]["*"], "allow")
-                self.assertEqual(permission["external_directory"]["*"], "deny" if level == "scripted" else "ask")
-                self.assertEqual(audit["effective"], level)
-                self.assertEqual(permission["todowrite"], "allow")
-                self.assertGreater(
-                    list(permission).index("todowrite"),
-                    list(permission).index("*"),
+                self.assertEqual(
+                    permission["external_directory"]["*"],
+                    "deny" if level == "scripted" else "ask",
                 )
+                self.assertEqual(permission["skill"]["review-common"], "allow")
+                self.assertEqual(audit["effective"], level)
+                self.assertEqual(audit["label"], permission_policy.ROLE_AUTONOMY_LABELS[level])
+                self.assertEqual(permission["todowrite"], "allow")
+
+    def test_workflow_and_execution_cannot_change_static_permission(self) -> None:
+        variants = [
+            [],
+            [workflow("scripted")],
+            [workflow("adaptive")],
+            [workflow("fixed", "other")],
+            [
+                workflow(
+                    "guided",
+                    execution={
+                        "executors": [
+                            {"kind": "programming-tool", "ref": "python check.py"},
+                            {"kind": "mcp-tool", "ref": "records/query"},
+                        ]
+                    },
+                )
+            ],
+        ]
+        outputs = [self.build(role(autonomy="guided", mcp=["records"]), item)[0] for item in variants]
+        for output in outputs[1:]:
+            self.assertEqual(output, outputs[0])
+        self.assertNotIn("python check.py", outputs[0]["bash"])
+        self.assertNotIn("records_query", outputs[0])
+
+    def test_changing_role_autonomy_changes_only_the_matrix(self) -> None:
+        bounded, _audit = self.build(role(autonomy="bounded"), [workflow("fixed")])
+        adaptive, _audit = self.build(role(autonomy="adaptive"), [workflow("fixed")])
+        self.assertEqual(bounded["task"], adaptive["task"])
+        self.assertEqual(bounded["read"], adaptive["read"])
+        self.assertEqual(bounded["skill"]["review-common"], "allow")
+        self.assertEqual(adaptive["skill"]["review-common"], "allow")
+        self.assertEqual(bounded["skill"]["*"], "deny")
+        self.assertEqual(adaptive["skill"]["*"], "allow")
+        self.assertEqual(bounded["doom_loop"], "ask")
+        self.assertEqual(adaptive["doom_loop"], "allow")
 
     def test_todo_is_system_managed_for_primary_members_and_legacy_roles(self) -> None:
         self.assertNotIn("todowrite", permission_policy.BUILTIN_PERMISSION_KEYS)
@@ -94,16 +136,12 @@ class PermissionPolicyTests(unittest.TestCase):
             frozenset({"todowrite", "todoread"}),
         )
         for is_primary in (True, False):
-            for workflows in ([workflow("bounded")], []):
-                with self.subTest(is_primary=is_primary, legacy=not workflows):
+            for manifest_mode in ("unified", "legacy"):
+                with self.subTest(is_primary=is_primary, manifest_mode=manifest_mode):
                     permission, _audit = permission_policy.build_role_permission(
                         role(),
-                        workflows=workflows,
-                        manifest_mode=(
-                            "legacy"
-                            if not workflows
-                            else "unified"
-                        ),
+                        workflows=[workflow("adaptive")],
+                        manifest_mode=manifest_mode,
                         mcp_names=[],
                         custom_tool_paths=[],
                         subagent_ids=["worker"],
@@ -120,20 +158,14 @@ class PermissionPolicyTests(unittest.TestCase):
                         permission_policy.PermissionPolicyError,
                         "Todo 由系统托管，请删除该声明",
                     ):
-                        self.build(
-                            role(permission={key: action}),
-                            [workflow("bounded")],
-                        )
+                        self.build(role(permission={key: action}), [])
             for enabled in (True, False):
                 with self.subTest(section="tools", key=key, enabled=enabled):
                     with self.assertRaisesRegex(
                         permission_policy.PermissionPolicyError,
                         "Todo 由系统托管，请删除该声明",
                     ):
-                        permission_policy.tools_to_permission(
-                            {key: enabled},
-                            "agent.tools",
-                        )
+                        permission_policy.tools_to_permission({key: enabled}, "agent.tools")
 
     def test_todo_custom_tool_names_are_reserved(self) -> None:
         for path in ("todowrite.ts", "nested/todoread.js"):
@@ -143,76 +175,42 @@ class PermissionPolicyTests(unittest.TestCase):
                     "Todo 由系统托管，请删除该声明",
                 ):
                     permission_policy.validate_custom_tool_ownership(
-                        [path],
-                        [],
-                        "agent.custom_tools",
+                        [path], [], "agent.custom_tools"
                     )
 
     def test_common_inspection_and_secret_rules(self) -> None:
-        permission, _audit = self.build(role(), [workflow("scripted")])
+        permission, _audit = self.build(role(autonomy="scripted"), [])
         self.assertEqual(permission["read"]["*"], "allow")
         self.assertEqual(permission["read"][".env"], "deny")
         self.assertEqual(permission["read"][".env.example"], "allow")
         for key in ("glob", "grep", "list", "lsp"):
             self.assertEqual(permission[key], "allow")
 
-    def test_mixed_sensitive_conflicts_become_ask(self) -> None:
-        permission, audit = self.build(
-            role(), [workflow("scripted"), workflow("adaptive")]
-        )
-        self.assertEqual(permission["*"], "ask")
-        for key in ("edit", "webfetch", "doom_loop"):
-            self.assertEqual(permission[key], "ask")
-        self.assertEqual(permission["bash"]["*"], "ask")
-        self.assertEqual(audit["levels"], ["scripted", "adaptive"])
-
-    def test_unused_role_falls_back_to_bounded(self) -> None:
-        permission, audit = self.build(role(), [workflow("adaptive", "other")])
-        self.assertEqual(permission["*"], "ask")
-        self.assertEqual(permission["edit"], "allow")
-        self.assertEqual(audit["warning"], "unused-role-bounded-fallback")
-
-    def test_unified_manifest_without_workflow_uses_bounded_default(self) -> None:
-        permission, audit = self.build(role(), [])
-        self.assertEqual(permission["*"], "ask")
-        self.assertEqual(permission["edit"], "allow")
-        self.assertEqual(permission["bash"]["*"], "ask")
-        self.assertEqual(permission["todowrite"], "allow")
-        self.assertEqual(audit["source"], "no-workflow-bounded-default")
-        self.assertEqual(audit["effective"], "bounded")
-        self.assertEqual(audit["levels"], ["bounded"])
-        self.assertEqual(audit["warning"], "")
-
-    def test_exact_executor_allowlists(self) -> None:
-        execution = {
-            "executors": [
-                {"kind": "programming-tool", "ref": "python3 scripts/check.py *"},
-                {"kind": "custom-tool", "ref": "validate.ts"},
-                {"kind": "mcp-tool", "ref": "records/query"},
-            ]
-        }
-        permission, _audit = self.build(
-            role(mcp=["records"]), [workflow("scripted", execution=execution)]
-        )
-        self.assertEqual(permission["bash"]["*"], "deny")
-        self.assertEqual(permission["bash"]["python3 scripts/check.py *"], "allow")
-        self.assertEqual(permission["validate"], "allow")
-        self.assertEqual(permission["records_*"], "deny")
-        self.assertEqual(permission["records_query"], "allow")
-
-    def test_owned_custom_tools_are_allowed_at_all_levels(self) -> None:
+    def test_owned_resources_obey_role_matrix(self) -> None:
         for level in permission_policy.AUTONOMY_ORDER:
             with self.subTest(level=level):
                 permission, _audit = self.build(
-                    role(custom_tools=["validate.ts"]), [workflow(level)]
+                    role(
+                        autonomy=level,
+                        custom_tools=["validate.ts"],
+                        mcp=["records"],
+                    ),
+                    [],
                 )
                 self.assertEqual(permission["validate"], "allow")
+                self.assertEqual(
+                    permission["records_*"],
+                    "deny" if level in {"scripted", "fixed"} else "allow",
+                )
                 self.assertEqual(
                     permission_policy._action_for_path(permission, "future_tool"),
                     "deny" if level == "scripted" else "ask",
                 )
 
-    def test_explicit_undeclared_mcp_and_tool_are_rejected(self) -> None:
+    def test_unowned_mcp_and_custom_tools_stay_unavailable(self) -> None:
+        permission, _audit = self.build(role(autonomy="adaptive"), [])
+        self.assertEqual(permission["records_*"], "deny")
+        self.assertNotIn("validate", permission)
         cases = (
             ({"records_query": "allow"}, "undeclared MCP"),
             ({"evil_query": "allow"}, "undeclared tool or MCP"),
@@ -222,38 +220,49 @@ class PermissionPolicyTests(unittest.TestCase):
             with self.subTest(explicit=explicit):
                 with self.assertRaisesRegex(permission_policy.PermissionPolicyError, message):
                     self.build(
-                        role(permission=explicit, permission_reason="业务需要"),
-                        [workflow("adaptive")],
+                        role(
+                            autonomy="adaptive",
+                            permission=explicit,
+                            permission_reason="理由不能提权",
+                        ),
+                        [],
                     )
 
-    def test_mcp_executor_requires_declared_role_ownership(self) -> None:
-        execution = {
-            "executors": [{"kind": "mcp-tool", "ref": "records/query"}]
-        }
-        with self.assertRaisesRegex(permission_policy.PermissionPolicyError, "not owned"):
-            self.build(role(), [workflow("fixed", execution=execution)])
-        permission, _audit = self.build(
-            role(mcp=["records"]), [workflow("fixed", execution=execution)]
-        )
-        self.assertEqual(permission["records_query"], "allow")
-
-    def test_declared_tool_name_collisions_are_rejected(self) -> None:
-        with self.assertRaisesRegex(permission_policy.PermissionPolicyError, "tool name collision"):
-            permission_policy.validate_custom_tool_ownership(
-                ["one/validate.ts", "two/validate.ts"],
-                ["one/validate.ts"],
-                "agent.custom_tools",
-            )
-
-    def test_explicit_escalation_requires_reason(self) -> None:
-        with self.assertRaisesRegex(permission_policy.PermissionPolicyError, "permission_reason"):
-            self.build(role(permission={"edit": "allow"}), [workflow("scripted")])
+    def test_explicit_permission_can_tighten_but_never_raise(self) -> None:
         permission, audit = self.build(
-            role(permission={"edit": "allow"}, permission_reason="需要写入审查结果"),
-            [workflow("scripted")],
+            role(
+                autonomy="adaptive",
+                mcp=["records"],
+                custom_tools=["validate.ts"],
+                permission={
+                    "edit": "deny",
+                    "skill": {"*": "deny"},
+                    "records_*": "ask",
+                    "validate": "deny",
+                },
+                permission_reason="保留说明但不构成提权授权",
+            ),
+            [],
         )
-        self.assertEqual(permission["edit"], "allow")
-        self.assertEqual(audit["permission_reason"], "需要写入审查结果")
+        self.assertEqual(permission["edit"], "deny")
+        self.assertEqual(permission["skill"]["*"], "deny")
+        self.assertEqual(permission["records_*"], "ask")
+        self.assertEqual(permission["validate"], "deny")
+        self.assertEqual(audit["permission_reason"], "保留说明但不构成提权授权")
+        for reason in ("", "业务理由"):
+            with self.subTest(reason=reason):
+                with self.assertRaisesRegex(
+                    permission_policy.PermissionPolicyError,
+                    "cannot raise role autonomy baseline",
+                ):
+                    self.build(
+                        role(
+                            autonomy="scripted",
+                            permission={"edit": "allow"},
+                            permission_reason=reason,
+                        ),
+                        [],
+                    )
 
     def test_hard_ownership_boundaries(self) -> None:
         cases = [
@@ -266,20 +275,37 @@ class PermissionPolicyTests(unittest.TestCase):
             with self.subTest(explicit=explicit):
                 with self.assertRaisesRegex(permission_policy.PermissionPolicyError, message):
                     self.build(
-                        role(permission=explicit, permission_reason="显式业务需要"),
-                        [workflow("adaptive")],
+                        role(
+                            autonomy="adaptive",
+                            permission=explicit,
+                            permission_reason="不能绕过硬边界",
+                        ),
+                        [],
                     )
 
-    def test_legacy_behavior_is_preserved(self) -> None:
-        permission, audit = self.build(
-            role(),
-            [],
-            manifest_mode="legacy",
-        )
+    def test_missing_legacy_role_autonomy_defaults_to_bounded_projection(self) -> None:
+        legacy = role()
+        legacy.pop("autonomy")
+        legacy["permission"] = {"bash": {"*": "allow"}, "edit": "deny"}
+        permission, audit = self.build(legacy, [workflow("adaptive")], manifest_mode="legacy")
         self.assertEqual(permission["edit"], "allow")
-        self.assertEqual(permission["bash"]["*"], "allow")
-        self.assertEqual(permission["todowrite"], "allow")
-        self.assertEqual(audit["warning"], "legacy-permission-baseline")
+        self.assertEqual(permission["bash"]["*"], "ask")
+        self.assertEqual(permission["skill"]["*"], "deny")
+        self.assertEqual(audit["source"], "legacy-role-autonomy-defaulted")
+        self.assertEqual(audit["effective"], "bounded")
+        self.assertEqual(audit["warning"], "legacy-role-autonomy-defaulted")
+
+    def test_invalid_role_autonomy_is_rejected(self) -> None:
+        with self.assertRaisesRegex(permission_policy.PermissionPolicyError, "autonomy must"):
+            self.build(role(autonomy="extreme"), [])
+
+    def test_declared_tool_name_collisions_are_rejected(self) -> None:
+        with self.assertRaisesRegex(permission_policy.PermissionPolicyError, "tool name collision"):
+            permission_policy.validate_custom_tool_ownership(
+                ["one/validate.ts", "two/validate.ts"],
+                ["one/validate.ts"],
+                "agent.custom_tools",
+            )
 
 
 if __name__ == "__main__":

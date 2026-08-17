@@ -172,6 +172,69 @@ class InstallerTests(unittest.TestCase):
             {"references/example/material/package.json": original},
         )
 
+    def test_legacy_role_autonomy_install_uses_bounded_temporary_projection(self) -> None:
+        package = self.generate()
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["agent"].pop("autonomy")
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        runtime_path = package / "opencode.json"
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+        runtime_role = runtime["agent"]["contract-reviewer"]
+        runtime_role["permission"]["edit"] = "deny"
+        runtime_role["permission"]["bash"] = {"*": "ask"}
+        runtime_role["permission"]["skill"]["*"] = "allow"
+        runtime_path.write_text(
+            json.dumps(runtime, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        agent_path = package / ".opencode/agents/contract-reviewer.md"
+        agent_text = agent_path.read_text(encoding="utf-8")
+        closing = agent_text.find("\n---\n", 4)
+        self.assertGreater(closing, 0)
+        frontmatter = INSTALLER.validate_expert.load_unique_yaml_mapping(
+            agent_text[4:closing]
+        )
+        self.assertIsInstance(frontmatter, dict)
+        frontmatter["permission"] = runtime_role["permission"]
+        rendered_agent = INSTALLER.renderers.render_frontmatter(
+            frontmatter,
+            agent_text[closing + len("\n---\n") :],
+        )
+        agent_path.write_bytes(rendered_agent.replace("\n", "\r\n").encode("utf-8"))
+        self.assertIn(b"\r\n---\r\n", agent_path.read_bytes())
+
+        before = self.file_bytes(package)
+        completed = self.run_install(package)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertIn(
+            "LEGACY_ROLE_AUTONOMY_DEFAULTED",
+            {item["code"] for item in payload["findings"]},
+        )
+        self.assertEqual(self.file_bytes(package), before)
+
+        installed = contract.parse_jsonc(
+            (self.workspace / ".opencode/opencode.jsonc").read_text(encoding="utf-8"),
+            "workspace config",
+        )
+        permission = installed["agent"]["contract-reviewer"]["permission"]
+        self.assertEqual(permission["edit"], "deny")
+        self.assertEqual(permission["bash"]["*"], "ask")
+        self.assertEqual(permission["skill"]["*"], "deny")
+        installed_agent = (
+            self.workspace / ".opencode/agents/contract-reviewer.md"
+        ).read_text(encoding="utf-8")
+        installed_frontmatter = INSTALLER.validate_expert.load_unique_yaml_mapping(
+            installed_agent.split("---", 2)[1]
+        )
+        self.assertEqual(installed_frontmatter["permission"], permission)
+
     def test_cli_parse_and_environment_errors_use_stable_contract(self) -> None:
         missing = subprocess.run(
             [
@@ -989,8 +1052,6 @@ class InstallerTests(unittest.TestCase):
                 "steps": 60,
                 "model": "openai/gpt-5",
                 "variant": "high",
-                "temperature": 0.2,
-                "top_p": 0.8,
                 "options": {"reasoningEffort": "high"},
             }
         )
@@ -1013,7 +1074,7 @@ class InstallerTests(unittest.TestCase):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual(config["agent"]["runtime-agent"]["options"], {"reasoningEffort": "high"})
 
-        for key in ("model", "variant", "temperature", "top_p", "options"):
+        for key in ("model", "variant", "options"):
             data["agent"].pop(key)
         manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         regenerated = subprocess.run(
@@ -2094,6 +2155,82 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsafe symlink", result.stderr)
         self.assertEqual(list(outside.iterdir()), [])
+
+    def test_installer_accepts_constrained_npm_bin_symlink(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink is unavailable")
+        package = self.generate()
+        runtime = self.workspace / ".opencode"
+        executable = runtime / "node_modules/tool/bin.js"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        bin_dir = runtime / "node_modules/.bin"
+        bin_dir.mkdir()
+        (bin_dir / "tool").symlink_to("../tool/bin.js")
+
+        result = self.run_install(package)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((bin_dir / "tool").is_symlink())
+
+    def test_installer_accepts_mirrored_mobilework_seed_bin_symlink(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink is unavailable")
+        package = self.generate()
+        runtime = self.workspace / ".opencode"
+        payload = "#!/usr/bin/env node\n"
+        mirrored = runtime / "node_modules/tool/bin.js"
+        mirrored.parent.mkdir(parents=True)
+        mirrored.write_text(payload, encoding="utf-8")
+        seed = self.root / "app/opencode-plugin-seed/node_modules/tool/bin.js"
+        seed.parent.mkdir(parents=True)
+        seed.write_text(payload, encoding="utf-8")
+        seed = seed.resolve(strict=True)
+        bin_dir = runtime / "node_modules/.bin"
+        bin_dir.mkdir()
+        (bin_dir / "tool").symlink_to(seed)
+
+        result = self.run_install(package)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_installer_rejects_nonidentical_mobilework_seed_bin_symlink(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink is unavailable")
+        package = self.generate()
+        runtime = self.workspace / ".opencode"
+        mirrored = runtime / "node_modules/tool/bin.js"
+        mirrored.parent.mkdir(parents=True)
+        mirrored.write_text("local\n", encoding="utf-8")
+        seed = self.root / "app/opencode-plugin-seed/node_modules/tool/bin.js"
+        seed.parent.mkdir(parents=True)
+        seed.write_text("different\n", encoding="utf-8")
+        bin_dir = runtime / "node_modules/.bin"
+        bin_dir.mkdir()
+        (bin_dir / "tool").symlink_to(seed)
+
+        result = self.run_install(package)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe symlink", result.stderr)
+        self.assertFalse((runtime / "agents").exists())
+
+    def test_installer_rejects_npm_bin_symlink_escaping_node_modules(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink is unavailable")
+        package = self.generate()
+        runtime = self.workspace / ".opencode"
+        outside = self.workspace / "outside-tool"
+        outside.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        bin_dir = runtime / "node_modules/.bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "tool").symlink_to("../../../outside-tool")
+
+        result = self.run_install(package)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe symlink", result.stderr)
+        self.assertFalse((runtime / "agents").exists())
 
     def test_jsonc_parser_rejects_unterminated_comment(self) -> None:
         with self.assertRaisesRegex(contract.ContractError, "unterminated"):

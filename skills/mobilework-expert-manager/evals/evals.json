@@ -5,12 +5,14 @@
       "id": 101,
       "name": "clarify-underspecified-single-expert",
       "prompt": "帮我做一个 MobileWork 合同审查专家。",
-      "expected_output": "The assistant asks only for missing design information and does not create a manifest or package before confirmation.",
+      "expected_output": "The assistant asks only for missing business design information, treats zero capability resources as valid, and does not create a manifest or package before confirmation.",
       "files": [],
       "suites": ["pr-smoke", "release-benchmark", "full"],
       "expectations": [
         "Does not create expert.json, an expert directory, or invoke create_expert.py before design confirmation.",
-        "Recognizes this as a single-expert design request, covers missing goals, responsibilities, workflow, capabilities and success criteria in the business candidate, and asks one concise question only for unresolved blocking inputs.",
+        "Recognizes this as a single-expert design request, covers missing goals, responsibilities, workflow, grounded business capabilities and success criteria in the business candidate, and asks one concise question only for unresolved blocking inputs.",
+        "Does not project the existence of the role, its responsibilities, workflow steps or quality gates directly into Skills, Custom Tools or Plugins; zero package-owned capability resources remains a valid outcome.",
+        "May propose a capability candidate only when it has a stable business label, observable runtime behavior and trusted provenance, then defers the minimal-fit none, Skill, Custom Tool or Plugin mapping until the confirmed boundary is known.",
         "Uses an available ask-user-question tool for up to three tightly related independent questions, or asks one concise question without that tool.",
         "Does not ask for information already present in the prompt.",
         "Explains that it will propose a candidate design and obtain confirmation before generation."
@@ -20,13 +22,14 @@
       "id": 102,
       "name": "clarify-underspecified-expert-team",
       "prompt": "创建一个 MobileWork 产品交付专家团，帮我把需求做到上线。",
-      "expected_output": "The assistant begins a focused team-design interview without generating files.",
+      "expected_output": "The assistant begins a focused team-design interview without generating files or projecting team roles into capability resources.",
       "files": [],
       "suites": ["full"],
       "expectations": [
         "Does not create expert.json, a team directory, or invoke the generator before confirmation.",
         "Identifies missing team-leader and member responsibilities, delegation conditions and final acceptance ownership.",
-        "Identifies missing skill sources, complete names, trigger roles and per-role assignment decisions.",
+        "Does not treat the leader, members or their responsibilities as evidence that one Skill per role must exist; zero resources remains valid when no distinct reusable or runtime capability is justified.",
+        "May propose grounded business capability candidates from the user goal and later map each distinct confirmed runtime responsibility to none, Skill, Custom Tool or Plugin without asking the user to design manifest fields.",
         "Plans to clarify serial and parallel workflow, handoff, rework and quality gates.",
         "Limits the current round to tightly related questions rather than presenting a large questionnaire."
       ]
@@ -35,7 +38,7 @@
       "id": 103,
       "name": "clarify-only-missing-sop-information",
       "prompt": "把附件里的客户交付 SOP 转成 MobileWork 专家包。SOP 中写明的阶段、职责和验收规则都按原文保留；我还没有决定应该做成单专家还是专家团，也没有定义每项 skill 的作用。",
-      "expected_output": "The assistant extracts supplied facts and asks only about the unresolved package shape and skill design.",
+      "expected_output": "The assistant extracts supplied facts, proposes grounded business capabilities from the SOP, and asks only about unresolved business design while retaining authority to select the minimal-fit technical carrier.",
       "files": [
         "evals/files/customer-delivery-sop.md"
       ],
@@ -43,7 +46,9 @@
       "expectations": [
         "Uses the supplied SOP as evidence and does not re-ask for stages, responsibilities or acceptance rules already present there.",
         "Separates source facts, candidate design and unresolved items.",
-        "Asks about the expert-versus-team decision and missing skill source, complete name and role assignment in a dependency-aware order.",
+        "Recommends expert versus team from the supplied topology, asks only for any unresolved business ownership decision, and does not require the user to define each Skill, machine name or technical carrier.",
+        "Extracts only capabilities supported by the SOP, gives each candidate a stable business label, observable runtime behavior and source provenance, and independently maps confirmed capabilities and distinct runtime responsibilities to none, Skill, Custom Tool or Plugin.",
+        "Does not turn every SOP stage, responsibility or acceptance rule into a separate capability resource, and does not invent a rule, threshold, external write or runtime side effect absent from the source.",
         "Does not generate expert.json or call the generator before a design confirmation.",
         "Offers a recommendation in business language instead of requiring the user to design manifest fields."
       ]
@@ -51,16 +56,36 @@
     {
       "id": 104,
       "name": "generate-explicitly-confirmed-complete-design",
-      "prompt": "以下 MobileWork 单专家设计已经逐项确认，请直接生成到任务临时目录并验证：名称是合同审查专家；目标是识别付款、交付、违约和争议条款并输出风险清单；唯一角色 contract-reviewer 负责条款提取、风险分级、证据引用和审查报告，不负责提供最终法律意见；工作流是材料检查、条款提取、风险审查、交叉核对、报告交付；由管理器创建两个 managed skills，完整名称分别是 clause-extraction（提取并定位条款）和 risk-review（分级风险并给出依据），都分配给唯一角色；质量门要求每个结论有原文证据，缺页时停止；不需要 MCP、runtime extensions 或额外权限。我确认按这个设计开始生成。",
-      "expected_output": "The confirmed complete design is generated and validated without redundant clarification.",
+      "prompt": "请按以下完整方案新建 MobileWork 合同审查专家：目标是识别付款、交付、违约和争议条款并输出风险清单；唯一角色 contract-reviewer 负责条款提取、风险分级、证据引用和审查报告，不负责提供最终法律意见；工作流是材料检查、条款提取、风险审查、交叉核对、报告交付；由管理器创建两个 managed skills，完整名称分别是 clause-extraction（提取并定位条款）和 risk-review（分级风险并给出依据），都分配给唯一角色；质量门要求每个结论有原文证据，缺页时停止；不需要 MCP、runtime extensions 或额外权限。先给业务确认卡。",
+      "expected_output": "After the complete business card is confirmed, an available host question tool or the exact conversation fallback selects the current workspace before preflight, then the design is generated and validated without redundant discovery.",
       "files": [],
-      "suites": ["pr-smoke", "release-benchmark", "full"],
+      "suites": ["pr-smoke", "release-benchmark", "full", "requirements-discovery", "multi-turn"],
+      "conversation": [
+        {
+          "role": "user",
+          "content": "请按以下完整方案新建 MobileWork 合同审查专家：目标是识别付款、交付、违约和争议条款并输出风险清单；唯一角色 contract-reviewer 负责条款提取、风险分级、证据引用和审查报告，不负责提供最终法律意见；工作流是材料检查、条款提取、风险审查、交叉核对、报告交付；由管理器创建两个 managed skills，完整名称分别是 clause-extraction（提取并定位条款）和 risk-review（分级风险并给出依据），都分配给唯一角色；质量门要求每个结论有原文证据，缺页时停止；不需要 MCP、runtime extensions 或额外权限。先给业务确认卡。"
+        },
+        {
+          "role": "user",
+          "content": "确认按这张业务确认卡开始生成。"
+        },
+        {
+          "role": "user",
+          "content": "我选择“当前工作空间”。"
+        }
+      ],
+      "critical_expectation_indexes": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      "host_expectation_indexes": [2, 3],
       "expectations": [
-        "Treats the explicit confirmation as satisfying the design gate and does not ask redundant questions.",
+        "Uses the complete supplied design to render the business confirmation card without redundant ordinary discovery questions.",
+        "When no equivalent ask-user tool is available, asks exactly one conversation question after confirmation with the fixed text, the My experts and Current workspace choices, and an other absolute parent option; it waits for the reply and does not emit CREATION_TARGET_QUESTION_UNAVAILABLE or choose a default.",
+        "When an equivalent ask-user tool is available, the host trace records the OpenCode-compatible question request and one nested single-string reply at properties.answers[0][0] bound to the current confirmation version; before either the tool reply or conversation-fallback reply, preflight, process starts, filesystem or configuration writes, network or data egress, Plugin or MCP calls, permission expansion, generator and validation invocations remain zero.",
+        "Maps the unique Current workspace answer from either channel to creation-target workspace, runs core and git preflight only after the answer, and creates the final <workspace>/<slug> target without using my-experts or a custom root.",
         "Creates a type: expert manifest with one primary agent and no team delegation narrative.",
-        "Uses the two exact confirmed skill names, declares origin managed and edit_policy managed, and assigns both to the sole role without inventing prefixes, MCP or runtime extensions.",
-        "Uses the requested temporary output directory.",
-        "Runs JSON parsing, validator and portability checks before claiming completion."
+        "Uses the two exact confirmed semantic skill names without an expert or role prefix, declares origin managed and edit_policy managed, and assigns both to the sole role without inventing MCP or runtime extensions.",
+        "Stages each complete managed Skill once, passes the official Agent Skills format gate, hashes every declared file, and lets the deterministic generator copy the declared bytes instead of synthesizing Skill content from the role description.",
+        "Runs JSON parsing, validator and portability checks before claiming completion.",
+        "Does not count creation target selection as a discovery round or material-decision budget item, and requires a fresh selection if the confirmed design version changes."
       ]
     },
     {
@@ -177,7 +202,7 @@
       "expectations": [
         "Keeps design confirmation required and does not generate files before approval.",
         "Recommends two distinct kebab-case commands, one for each stable user-invocable workflow.",
-        "Routes a single-expert command to the expert or a team command to the primary leader by default.",
+        "Routes every command to the package's unique mode all Agent and fixes subtask to true: the single expert for an expert package or the primary leader for a team.",
         "Uses $ARGUMENTS for dynamic user text and treats images, PDFs and other attachments as same-invocation host message inputs.",
         "Does not invent attachment placeholders, binary encodings, local machine paths or a root opencode.json command field.",
         "Keeps commands optional and does not turn internal phases or one-off handoffs into separate commands."
@@ -193,24 +218,24 @@
       "expectations": [
         "Keeps design confirmation required and does not generate files before approval.",
         "Recommends reference_files plus local references under .opencode/references/<slug>/<alias>/, recommends repository references for Git sources with optional branch/description/hidden, and explains that PDF, DOCX or image sources must be converted to UTF-8 Markdown or text.",
-        "Recommends a local plugin under .opencode/plugins for event hooks, with dependencies in .opencode/package.json and no local path in opencode.json.plugin.",
-        "Recommends a custom JavaScript or TypeScript tool under .opencode/tools and does not invent a root tools field.",
+        "Recommends one slug-namespaced local Plugin under .opencode/plugins for the distinct event-hook responsibility, treats it as package-wide runtime behavior rather than role ownership, records dependencies in .opencode/package.json when needed, and adds no local path to opencode.json.plugin.",
+        "Recommends one slug-namespaced JavaScript or TypeScript Custom Tool under .opencode/tools for the distinct agent-invoked deterministic check, assigns its exact ownership to the intended role, and does not invent a root tools field.",
         "Recommends instruction_files under .opencode/instructions/<slug>/ and an explicit opencode.json.instructions file or glob for workspace-wide rules.",
         "Does not create or recommend root AGENTS.md, and keeps role-specific rules in agent Markdown or a skill assigned to that role.",
-        "Does not let the generator or validator infer and auto-create undeclared resources."
+        "Does not let the generator or validator infer and auto-create undeclared resources, merge the Tool and Plugin responsibilities, or treat the uploaded manuals and role prose as one-Skill-per-item instructions."
       ]
     },
     {
       "id": 113,
       "name": "recommend-low-autonomy-for-repeatable-financial-reconciliation",
       "prompt": "帮我设计一个 MobileWork 月度结算核对专家。每月会批量处理同一格式的结算表，公司已有 verify-settlement.py，金额计算、差异统计和最终判定都必须由脚本完成，结果要稳定可复现。先给设计确认稿，不要生成文件。",
-      "expected_output": "The design proactively recommends a low-autonomy workflow, fixes deterministic work to the declared script, and asks only for missing execution standards that affect correctness.",
+      "expected_output": "The design separately recommends low role autonomy and low process autonomy, fixes deterministic work to the declared script, and asks only for missing execution standards that affect correctness.",
       "files": [],
       "suites": ["full"],
       "expectations": [
-        "Recognizes the repeated financial reconciliation as a high-stability scenario and recommends scripted or fixed autonomy instead of broad exploration.",
+        "Recognizes the repeated financial reconciliation as a high-stability scenario and separately recommends low role autonomy plus scripted or fixed process autonomy instead of broad exploration.",
         "States that calculations and determinations must invoke the declared script and must not be replaced by ad-hoc code, mental arithmetic, visual inspection or prose reasoning.",
-        "Separates workflow autonomy from phase autonomy and explains the effective level in direct non-technical language.",
+        "Explains that role autonomy alone sets static permission, while workflow and phase autonomy only set decision, confirmation, risk and acceptance boundaries.",
         "Asks only for still-missing correctness constraints such as script location, input/output contract, authoritative rules, tolerance or acceptance evidence, without repeating facts already supplied.",
         "Keeps the design gate and does not generate expert.json or invoke create_expert.py before confirmation."
       ]
@@ -243,9 +268,10 @@
         "Keeps the design gate and does not generate files before explicit confirmation.",
         "Lists both workflows and recommends distinct kebab-case commands for contract-analysis and report-delivery.",
         "Explains precedence as Agent override over phase over workflow and states each declared and effective level in direct language.",
-        "Uses the user-facing levels 极低、低、中、高、极高 with their direct boundaries while preserving scripted, fixed, bounded, guided and adaptive as the stored values.",
+        "Uses the user-facing levels 低、较低、中、较高、高 with their direct boundaries while preserving scripted, fixed, bounded, guided and adaptive as the stored values.",
         "Shows extractor as effectively scripted in the extraction phase, the extraction phase as fixed for other participants, and the risk phase as guided with a confirmation point.",
-        "Preserves the declared script and template executors, identifies still-missing execution or acceptance standards without inventing them, and requests one final design confirmation."
+        "Preserves the declared script and template executors, identifies still-missing execution or acceptance standards without inventing them, and separately asks for one explicit role-autonomy choice for review-lead, extractor and risk-reviewer before final design confirmation.",
+        "Does not claim that Workflow, Phase, override or execution autonomy changes any role permission."
       ]
     },
     {
@@ -257,33 +283,33 @@
       "suites": ["full"],
       "expectations": [
         "Recognizes the stable repeated audit task as unsuitable for guided or adaptive execution by default.",
-        "Proposes solidifying the mechanical phase as a package-owned skill script or custom tool instead of writing fresh code during every workflow run.",
+        "Chooses exactly one deterministic executor for the mechanical responsibility: a Skill scripts bundle when Python or Shell is the fit, or a slug-namespaced JavaScript or TypeScript Custom Tool when agent-invoked JS/TS is the fit, instead of creating both or writing fresh code during every workflow run.",
         "Asks only for the minimum missing input schema, authoritative invoice rules, output contract and acceptance evidence needed to define that executor.",
         "Keeps the workflow in design state because scripted autonomy has no real callable executor yet.",
-        "Does not generate files, invent business thresholds, or claim the deterministic workflow is ready."
+        "Does not generate files, invent business thresholds, infer unconfirmed side effects or claim the deterministic workflow is ready; any newly discovered permission, cost, dependency or runtime prerequisite invalidates the prior card and returns to full-card-first confirmation."
       ]
     },
     {
       "id": 117,
       "name": "generate-command-with-explicit-autonomy-at-three-levels",
       "prompt": "这个 MobileWork 方案评审专家团设计已确认，请生成并校验：workflow 默认 bounded，command 名为 review-solution；并行评审 Phase 为 guided；product-strategist 完全继承 Phase，architect 通过 Agent override 降为 fixed 并覆盖 execution，qa-reviewer 只覆盖 execution、不覆盖自主度。另有一个普通 runtime_extensions command。",
-      "expected_output": "The generated workflow command exposes effective autonomy in its description, every Phase heading and every participating Agent while preserving inheritance sources and leaving the ordinary command unchanged.",
+      "expected_output": "The generated workflow command exposes effective autonomy in its description, every Phase heading and every participating Agent while preserving inheritance sources; both workflow and ordinary commands use the fixed mode-all/subtask routing contract without changing the ordinary command body.",
       "files": [
         "evals/files/software-dev-team.expert.json"
       ],
       "suites": ["full"],
       "expectations": [
         "Prefixes the workflow command description with 【自主度：中】 derived from workflow bounded autonomy while keeping expert.json command.description free of generated prefixes.",
-        "Prefixes the guided Phase heading with 【自主度：高】 and retains the detailed effective level and execution contract below it.",
+        "Prefixes the guided Phase heading with 【自主度：较高】 and retains the detailed effective level and execution contract below it.",
         "Lists product-strategist, architect and qa-reviewer exactly once within the Phase and shows each Agent's effective autonomy.",
         "Shows product-strategist autonomy and execution as inherited from Phase, architect autonomy and execution as coming from Agent override, and qa-reviewer autonomy from Phase with execution from Agent override.",
-        "Leaves runtime_extensions.commands[] descriptions and templates unchanged, and validation rejects tampering with the generated workflow command description, Phase or Agent autonomy."
+        "Leaves runtime_extensions.commands[] descriptions and templates unchanged while adding agent=<unique mode all Agent> and subtask=true to both ordinary and workflow command files; validation rejects tampering with command routing, the generated workflow command description, Phase or Agent process autonomy, and all role permissions remain derived only from each role autonomy in expert.json."
       ]
     },
     {
       "id": 118,
       "name": "generate-declared-agent-runtime-options",
-      "prompt": "附件中的 MobileWork Agent 运行参数专家团设计已经确认，请直接生成并验证：团长 runtime-lead 使用 steps 120、model openai/gpt-5、variant high、temperature 0.2、options.reasoningEffort=high；团员 runtime-auditor 使用 steps 50、top_p 0.7、hidden true、options.textVerbosity=low。其他运行参数都继承默认值，不要自行补齐。",
+      "prompt": "附件中的 MobileWork Agent 运行参数专家团设计已经确认，请直接生成并验证：团长 runtime-lead 使用 steps 120、model openai/gpt-5、variant high、options.reasoningEffort=high；团员 runtime-auditor 使用 steps 50、hidden true、options.textVerbosity=low。不要生成 temperature 或 top_p，其他运行参数都继承默认值，不要自行补齐。",
       "expected_output": "The confirmed role-specific runtime options are projected exactly to both Agent Markdown and opencode.json while omitted options remain absent.",
       "files": [
         "evals/files/agent-runtime-options/expert.json"
@@ -291,16 +317,17 @@
       "suites": ["full"],
       "expectations": [
         "Uses steps as the only official OpenCode step field and keeps each role's values independent.",
-        "Projects model, variant, temperature and options only for runtime-lead in both derived locations.",
-        "Projects top_p, hidden and options only for runtime-auditor, and allows hidden because it is a subagent.",
-        "Does not infer a model, variant, temperature, top_p, hidden or provider option that was not declared.",
+        "Projects model, variant and options only for runtime-lead in both derived locations.",
+        "Projects hidden and options only for runtime-auditor, and allows hidden because it is a subagent.",
+        "Omits temperature and top_p from expert.json, Agent Markdown, opencode.json and README, and does not allow options to reintroduce those keys.",
+        "Does not infer a model, variant, hidden or provider option that was not declared.",
         "Includes a README runtime summary, validates both derived files, installs the package and reads back the merged agent entries and receipt."
       ]
     },
     {
       "id": 119,
       "name": "reject-invalid-agent-runtime-options",
-      "prompt": "请按这个 manifest 生成 MobileWork 单专家：steps=80、max_turns=60、variant=high 但不写 model、hidden=true，并把 reasoningEffort 放在 agent 顶层；另外写入 prompt、disable 和 maxSteps 方便 OpenCode 识别。",
+      "prompt": "请按这个 manifest 生成 MobileWork 单专家：steps=80、max_turns=60、variant=high 但不写 model、hidden=true，并把 reasoningEffort 放在 agent 顶层；另外写入 prompt、disable、temperature=0.2、top_p=0.8 和 maxSteps 方便 OpenCode 识别。",
       "expected_output": "The assistant rejects the conflicting, misplaced and package-forbidden Agent fields and does not emit a package.",
       "files": [],
       "suites": ["full"],
@@ -308,7 +335,7 @@
         "Treats max_turns and maxTurns only as MobileWork expert.json compatibility inputs and rejects conflicts instead of presenting them as official OpenCode fields.",
         "Rejects variant without an explicit model and rejects hidden on a primary agent.",
         "Moves provider-specific reasoningEffort guidance to options rather than accepting it as a top-level role field.",
-        "Rejects prompt, disable and deprecated maxSteps; legacy tools remains only a permission conversion input.",
+        "Rejects prompt, disable, temperature, top_p and deprecated maxSteps; options cannot hide the sampling keys and legacy tools remains only a permission conversion input.",
         "Does not generate derived files until the manifest satisfies the runtime option contract."
       ]
     },
@@ -330,31 +357,32 @@
     {
       "id": 121,
       "name": "verify-five-autonomy-permission-baselines",
-      "prompt": "以下测试设计已经确认，请用当前 MobileWork 专家管理技能创建并校验 scripted、fixed、bounded、guided、adaptive 五个最小单专家。每个专家只声明对应自主度和完成职责所需的最少能力；输出权限矩阵、生成配置与结构化校验证据，不要启动真实 Runtime。",
-      "expected_output": "Five trusted packages are generated with exact dual-axis permission baselines, adaptive doom_loop allow, and no unconditional Bash wildcard allow.",
+      "prompt": "以下测试设计已经确认，请用当前 MobileWork 专家管理技能创建并校验角色自主度分别为 scripted、fixed、bounded、guided、adaptive 的五个最小单专家。每个专家只声明对应角色自主度和完成职责所需的最少能力；输出权限矩阵、生成配置与结构化校验证据，不要启动真实 Runtime。",
+      "expected_output": "Five trusted packages are generated with exact role-autonomy permission baselines, external Skill deny/ask/allow behavior, adaptive doom_loop allow, and no unconditional Bash wildcard allow.",
       "files": [],
       "suites": ["full"],
       "expectations": [
         "Generates one package for each autonomy level and reports literal wildcard defaults scripted=deny and fixed/bounded/guided/adaptive=ask so future unknown tools are never implicitly allowed.",
         "Projects pure adaptive doom_loop=allow while preserving the detailed edit, Bash, network, MCP, task, skill and external-directory baseline.",
         "Never emits permission.bash with wildcard allow at any autonomy level.",
-        "Only enables exact owned executors and declared skills, tasks and MCP servers required by the role and workflow.",
+        "Always allows assigned package Skills exactly, applies external Skill deny for scripted/fixed/bounded, ask for guided and allow for adaptive, and never grants unowned MCP or custom tools.",
+        "Keeps the complete generated permission byte-identical while Workflow, Phase and execution autonomy are varied with role autonomy fixed.",
         "Uses static validation evidence and labels the result runtime-not-tested rather than claiming a loaded Runtime."
       ]
     },
     {
       "id": 122,
       "name": "verify-mixed-autonomy-team-permissions",
-      "prompt": "请创建一个已确认设计的 MobileWork 专家团：团长同时参加 fixed 和 adaptive workflow，团员未参加任何 workflow；团长只可委派给该团员，workflow 只调用一个声明的 skill 和一个声明的 MCP tool。生成、校验并说明权限来源。",
-      "expected_output": "The lead merges effective autonomy safely, sensitive conflicts degrade to ask, the unused role falls back to bounded, and ownership boundaries remain exact.",
+      "prompt": "请创建一个已确认设计的 MobileWork 专家团：团长角色自主度为 adaptive，团员角色自主度为 fixed；团长同时参加 fixed 和 adaptive workflow，团员不参加任何 workflow；团长只可委派给该团员，workflow execution 引用一个已分配 skill 和一个团长拥有的 MCP tool。生成、校验并说明权限来源。",
+      "expected_output": "Each role permission follows only its explicit role autonomy, workflow participation cannot alter it, execution stays within ownership, and task topology remains exact.",
       "files": [],
       "suites": ["full"],
       "expectations": [
-        "Calculates each role from effective workflow autonomy rather than one package-wide level.",
-        "Degrades conflicting sensitive actions, including doom_loop, to ask for the mixed fixed/adaptive lead.",
-        "Assigns the non-participating role the bounded fallback and emits a structured migration warning.",
+        "Calculates the lead permission from adaptive role autonomy and the member permission from fixed role autonomy, never from effective Workflow or Phase autonomy.",
+        "Produces the same lead permission when its fixed and adaptive workflows, Phase overrides and execution declarations are permuted or removed.",
+        "Does not assign a fallback from workflow participation because every role already has explicit role autonomy.",
         "Allows task delegation only from the primary agent to the declared subagent and keeps the subagent task wildcard denied.",
-        "Allows only the declared skill, MCP server and exact MCP executor name; it does not broaden ownership wildcards."
+        "Allows the assigned package Skill exactly, permits the owned MCP only according to the lead role matrix, rejects execution for a deny action, and does not broaden unowned MCP or custom tools."
       ]
     },
     {
@@ -551,7 +579,7 @@
         "Assigns every old common skill to the leader and all members and keeps each old role skill only on its original role.",
         "Adds the uploaded skill only to the requested member with origin uploaded and edit_policy preserved.",
         "Reuses same-name identical content, blocks different content by default and leaves the target byte-for-byte unchanged.",
-        "Allows replacement only with both --replace and --confirm-managed, retains origin uploaded and changes edit_policy to managed."
+        "Allows replacement only with both --replace and --confirm-managed, retains origin uploaded and edit_policy preserved."
       ]
     },
     {
@@ -563,7 +591,7 @@
       "suites": ["full"],
       "expectations": [
         "Recommends the supplied operational material as an on-demand Reference rather than a workspace-wide Instruction.",
-        "Recommends keeping the existing Shell executor inside an assigned Skill rather than rewriting it as a JS/TS custom tool.",
+        "Recommends keeping the existing Shell executor inside exactly one assigned, semantically named Skill rather than rewriting it as a JS/TS Custom Tool or duplicating it across roles.",
         "Recommends assigning the always-on evidence rule to the relevant team roles through role instructions.",
         "Uses the three novice-facing response sections and asks no more than three necessary questions.",
         "Does not create files, execute the script or expand permissions before explicit confirmation."
@@ -592,11 +620,11 @@
       "files": [],
       "suites": ["full"],
       "expectations": [
-        "Combines MCP for the external status query with Plugin or Hook for the automatic pre-submit block.",
+        "Combines MCP for the external status query with one slug-namespaced package-wide Plugin for the distinct automatic pre-submit block; the Plugin does not act as the connector and is not declared as role-owned.",
         "States the query, decision and continue-or-block order in business language.",
         "Defaults to the minimum read-only external permission and asks whether a Connector or MCP implementation already exists.",
         "Uses the three novice-facing response sections and no more than three necessary questions.",
-        "Does not connect to the service, enable a hook, write files or expand permissions before confirmation."
+        "Does not connect to the service, enable a hook, write files or expand permissions before confirmation; discovering a new external write, credential, paid call, dependency or Runtime prerequisite invalidates the prior card and returns to full-card-first confirmation."
       ]
     },
     {
@@ -676,6 +704,86 @@
         "After the user explicitly defers paid-model and approval-connector choices until their prerequisites exist, invalidates the earlier confirmation and immediately renders all eight updated business-card sections with those choices and the account, budget and connector prerequisites marked blocked.",
         "After reconciling the user's deferral and recomputing the dependency graph on the updated card, asks exactly one current whole-card confirmation outside the decision budget and explains that a blocked-card confirmation cannot authorize generation when no open or asked decision remains; otherwise carries or asks only current question-ready roots and does not request whole-card confirmation.",
         "Before the new confirmation, the host trace records zero file writes, network calls, process or preflight starts, Plugin calls, MCP calls and generator invocations."
+      ]
+    },
+    {
+      "id": 141,
+      "name": "pair-role-autonomy-isolates-permission-from-workflow",
+      "prompt": "评审这个 MobileWork 权限设计：review-lead 的角色自主度固定为 bounded，但一个 Workflow 是 adaptive、一个 Phase 是 scripted，execution 引用了一个已分配 Skill、一个声明且归属 review-lead 的 MCP，以及一个未声明 custom tool。请给出应生成的权限来源、execution 校验结果和关键不变量，不要修改文件。",
+      "expected_output": "The review derives static permission only from bounded role autonomy and ownership, accepts only execution capabilities whose current action is allow or ask, rejects the undeclared custom tool, and states the workflow-invariance rule.",
+      "files": [],
+      "suites": ["release-benchmark", "full"],
+      "expectations": [
+        "States that review-lead permission is generated from bounded role autonomy rather than adaptive Workflow or scripted Phase autonomy.",
+        "Keeps the assigned package Skill exactly allow while external host-visible Skills remain deny for bounded.",
+        "Uses declared MCP ownership plus the bounded role matrix, and rejects the undeclared custom tool instead of opening it through the wildcard.",
+        "Explains that execution selects an owned capability but cannot create an allowlist or elevate a deny action.",
+        "States the invariant that varying Workflow, Phase, override and execution with role autonomy fixed must leave generated permission unchanged."
+      ]
+    },
+    {
+      "id": 142,
+      "name": "pair-uploaded-skill-preserves-bytes-and-role-binding",
+      "prompt": "一个用户上传完整 Agent Skill 目录或 ZIP 给 MobileWork 专家团的 risk-reviewer 使用。请说明通过官方格式和 MobileWork 安全门禁后的目录、字节、provenance、hash、角色绑定和权限结果，以及格式错误、secret、symlink、路径逃逸或压缩炸弹时的事务结果。较高角色还可能发现包外 Skill。不要修改文件。",
+      "expected_output": "The review requires shared fail-closed validation, preserves every accepted uploaded byte under the unified skill pool, records uploaded/preserved provenance and role hashes, distinguishes assigned from external Skills, and guarantees zero target writes on rejection.",
+      "files": [],
+      "suites": ["release-benchmark", "full"],
+      "expectations": [
+        "Requires official Agent Skills frontmatter and MobileWork ZIP, symlink, secret, syntax and portability gates before any target-package commit.",
+        "Copies an accepted directory tree byte-for-byte to .opencode/skills/<name>/ with origin uploaded, edit_policy preserved and per-file hashes.",
+        "Binds the Skill only to risk-reviewer through role skills ownership and derives an exact allow for that assigned package Skill.",
+        "Distinguishes the assigned Skill from other host-visible external Skills, which a guided role may load only with ask.",
+        "Guarantees unchanged target-package bytes and no partial destination on every validation or archive failure; it does not auto-repair uploaded content."
+      ]
+    },
+    {
+      "id": 143,
+      "name": "pair-agent-all-mode-and-phase-primary-boundary",
+      "prompt": "评审 MobileWork Agent mode 方案：新建单专家和专家团团长将来都要被通用 Agent 调用；团员只能作为子 Agent；Workflow 中仍有团长独立执行的 primary Phase。另有一个旧包主 Agent 使用 mode primary。请给出新建、只读校验/安装和结构性修改三种情况下的正确模式与兼容处理，不要修改文件。",
+      "expected_output": "The review uses Agent mode all for new main roles, subagent for members, preserves Phase primary as a separate process concept, accepts old main primary only for read/install, and migrates it during structural modification.",
+      "files": [],
+      "suites": ["release-benchmark", "full"],
+      "expectations": [
+        "Uses mode all for a new single-expert main Agent and expert-team leader so either can be called by a general Agent.",
+        "Uses mode subagent for every team member.",
+        "Keeps Workflow Phase mode primary unchanged and explicitly separates it from OpenCode Agent mode.",
+        "Allows an old main mode primary for read-only validation and installation with a compatibility warning.",
+        "Migrates the old main role to all during Skill import or any other structural modification while leaving source bytes unchanged on pre-migration failure."
+      ]
+    },
+    {
+      "id": 144,
+      "name": "generate-dynamic-mixed-capability-resources",
+      "prompt": "请按以下完整方案创建 MobileWork 证据交付专家团：delivery-lead 负责任务分派、最终复核与提交，evidence-reviewer 负责逐项证据检查。三项业务运行行为已经确认：第一，两名角色共享一套名为“证据复核方法”的可复用方法和清单，用于统一检查步骤与原文引用要求；第二，evidence-reviewer 在复核时主动请求一次确定性评分，输入证据项列表，输出是否完整、缺失项和评分。评分规则已经确认：每项包含 id 与 original_evidence，missing_items 是 original_evidence 为空的 id；score 为非空 original_evidence 项数除以总项数再乘 100 并四舍五入到两位小数，空列表得 0 分；只有列表非空且 missing_items 为空时 evidence_complete 才为 true；相同输入必须得到相同结果；第三，每次提交前自动检查已经产生的 evidence_complete 结果，不完整时阻止提交并返回 missing_items，完整时放行。三项行为互不重复，不连接外部系统，不联网、不外写、不付费、不引入额外依赖；可见副作用只有已确认的提交放行或阻止；失败时停止提交并保留输入；质量门是每项结论都有原文证据。三项能力的技术载体和技术名称由管理器按最小运行权限原则自主决定；用户只委托当前专家包能力资源的生成，不授权安装、启用或执行。先给完整业务确认卡，不要追加技术类型问题。",
+      "expected_output": "After whole-card confirmation and creation-target selection, the manager generates exactly one shared semantic Skill, one role-owned namespaced Custom Tool and one package-wide namespaced local Plugin, then validates the deterministic projection without inventing another resource or side effect.",
+      "files": [],
+      "suites": ["full"],
+      "conversation": [
+        {
+          "role": "user",
+          "content": "请按以下完整方案创建 MobileWork 证据交付专家团：delivery-lead 负责任务分派、最终复核与提交，evidence-reviewer 负责逐项证据检查。三项业务运行行为已经确认：第一，两名角色共享一套名为“证据复核方法”的可复用方法和清单，用于统一检查步骤与原文引用要求；第二，evidence-reviewer 在复核时主动请求一次确定性评分，输入证据项列表，输出是否完整、缺失项和评分。评分规则已经确认：每项包含 id 与 original_evidence，missing_items 是 original_evidence 为空的 id；score 为非空 original_evidence 项数除以总项数再乘 100 并四舍五入到两位小数，空列表得 0 分；只有列表非空且 missing_items 为空时 evidence_complete 才为 true；相同输入必须得到相同结果；第三，每次提交前自动检查已经产生的 evidence_complete 结果，不完整时阻止提交并返回 missing_items，完整时放行。三项行为互不重复，不连接外部系统，不联网、不外写、不付费、不引入额外依赖；可见副作用只有已确认的提交放行或阻止；失败时停止提交并保留输入；质量门是每项结论都有原文证据。三项能力的技术载体和技术名称由管理器按最小运行权限原则自主决定；用户只委托当前专家包能力资源的生成，不授权安装、启用或执行。先给完整业务确认卡，不要追加技术类型问题。"
+        },
+        {
+          "role": "user",
+          "content": "确认按当前完整业务卡生成专家包资源。"
+        },
+        {
+          "role": "user",
+          "content": "我选择“当前工作空间”。"
+        }
+      ],
+      "critical_expectation_indexes": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      "host_expectation_indexes": [7],
+      "expectations": [
+        "Uses the supplied complete business behaviors to render the full confirmation card, autonomously selects the minimal-fit technical carrier for each distinct runtime responsibility, and does not ask the user to reconfirm Skill, Custom Tool or Plugin as technical types while the mapping stays inside the confirmed boundary.",
+        "Maps the shared reusable evidence-review method and checklist to exactly one managed Skill, proposes a stable semantic kebab-case name with no expert or role prefix, assigns the same full name to both roles, stages complete bytes, passes the official Agent Skills format gate and declares matching package_resources hashes.",
+        "Maps the reviewer-initiated confirmed scoring formula to exactly one slug-namespaced JavaScript or TypeScript Custom Tool, preserves the exact missing_items, score and evidence_complete rules without inventing a threshold, binds it only to evidence-reviewer through runtime_extensions ownership and projects the exact tool permission without creating a second executor.",
+        "Maps the automatic pre-submit allow-or-block behavior to exactly one slug-namespaced local Plugin, documents it as package-wide runtime behavior with no role ownership, and relies on local auto-discovery rather than adding its path to opencode.json.plugin.",
+        "Creates no MCP, npm Plugin, extra Skill, extra Tool, extra Plugin, network access, external write, dependency or unconfirmed runtime behavior; each generated resource corresponds to one distinct confirmed runtime responsibility.",
+        "Keeps the generator and validator deterministic: they copy or project only declared staged resources and never infer a resource from role count, role prose, filenames or directories.",
+        "If implementation mapping would introduce any new automatic trigger, visible side effect, permission, cost, dependency, network access or Runtime prerequisite, invalidates the old confirmation, returns to full-card-first and keeps the expert target unchanged.",
+        "Before whole-card confirmation and the creation-target answer, the host trace records zero filesystem writes, process or preflight starts, network calls, Plugin or MCP calls, permission expansion, generator or validation invocations.",
+        "After the current-workspace answer, generates the package and passes JSON parsing, official Skill format validation, package validation and portability checks without installing, enabling or executing generated code."
       ]
     }
   ]

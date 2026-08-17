@@ -23,7 +23,8 @@
     "id": "delivery-director",
     "name": "Delivery Director",
     "description": "Orchestrates delivery workflow, delegates specialist steps, accepts or rejects handoffs, and owns final quality.",
-    "mode": "primary",
+    "mode": "all",
+    "autonomy": "bounded",
     "color": "#2563eb",
     "avatar_url": "avatars/delivery-director.png",
     "skills": [
@@ -50,9 +51,7 @@
       "read": "allow",
       "edit": "allow",
       "bash": {
-        "*": "ask",
-        "git status*": "allow",
-        "git diff*": "allow"
+        "*": "ask"
       },
       "webfetch": "allow",
       "skill": {
@@ -85,6 +84,7 @@
       "name": "Product Strategist",
       "description": "Turns user intent into scope, user value, acceptance criteria, and out-of-scope boundaries.",
       "mode": "subagent",
+      "autonomy": "bounded",
       "color": "accent",
       "avatar_url": "avatars/product-strategist.png",
       "skills": [
@@ -104,9 +104,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow"
+          "*": "ask"
         },
         "webfetch": "allow",
         "skill": {
@@ -131,6 +129,7 @@
       "name": "Architect",
       "description": "Designs implementation boundaries, integration shape, and technical risk controls.",
       "mode": "subagent",
+      "autonomy": "bounded",
       "color": "warning",
       "avatar_url": "avatars/architect.png",
       "skills": [
@@ -150,9 +149,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow"
+          "*": "ask"
         },
         "webfetch": "allow",
         "skill": {
@@ -177,6 +174,7 @@
       "name": "Engineer",
       "description": "Produces the scoped artifact or code change with minimal impact and reports exact verification.",
       "mode": "subagent",
+      "autonomy": "bounded",
       "color": "success",
       "avatar_url": "avatars/engineer.png",
       "skills": [
@@ -198,11 +196,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow",
-          "pnpm test*": "allow",
-          "python -m pytest*": "allow"
+          "*": "ask"
         },
         "webfetch": "allow",
         "skill": {
@@ -228,6 +222,7 @@
       "name": "QA Reviewer",
       "description": "Verifies accepted criteria, checks edge cases, and decides whether delivery evidence is complete.",
       "mode": "subagent",
+      "autonomy": "bounded",
       "color": "info",
       "avatar_url": "avatars/qa-reviewer.png",
       "skills": [
@@ -248,11 +243,7 @@
         "read": "allow",
         "edit": "allow",
         "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow",
-          "pnpm test*": "allow",
-          "python -m pytest*": "allow"
+          "*": "ask"
         },
         "webfetch": "allow",
         "skill": {

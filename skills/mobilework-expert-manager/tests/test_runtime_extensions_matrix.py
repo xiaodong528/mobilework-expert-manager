@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from generator_test_support import managed_generator_env
 from spec_templates import load_spec_text
+import validate_expert
 
 
 class RuntimeExtensionsMatrixTests(unittest.TestCase):
@@ -47,6 +48,7 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
         *,
         runtime_extensions: dict[str, object] | None = None,
         mcp_servers: list[dict[str, object]] | None = None,
+        role_custom_tools: list[str] | None = None,
     ) -> Path:
         data = copy.deepcopy(self.base)
         data["runtime_extensions"] = runtime_extensions or {}
@@ -59,6 +61,8 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
             data["agent"].pop("instructions", None)
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
+        if role_custom_tools is not None:
+            data["agent"]["custom_tools"] = role_custom_tools
         source = self.root / name
         source.mkdir()
         manifest = source / "expert.json"
@@ -85,7 +89,15 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
             ),
             (
                 "custom-tools",
-                {"custom_tools": [{"path": "score.ts", "content": "export default {}\n"}]},
+                {
+                    "custom_tools": [
+                        {
+                            "path": "score.ts",
+                            "purpose": "按已确认规则计算确定性分数。",
+                            "content": "export default {}\n",
+                        }
+                    ]
+                },
                 None,
                 ".opencode/tools/score.ts",
                 None,
@@ -250,11 +262,146 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
                         (package / ".env.example").read_text(encoding="utf-8"),
                         "API_TOKEN=<required>\n",
                     )
+                if name == "custom-tools":
+                    readme = (package / "README.md").read_text(encoding="utf-8")
+                    self.assertIn("按已确认规则计算确定性分数", readme)
+                    self.assertIn("使用角色 未分配", readme)
+
+    def test_owned_namespaced_custom_tool_is_role_visible_and_allowed(self) -> None:
+        path = "contract-review-expert-score.ts"
+        package = self.generate(
+            "owned-custom-tool",
+            runtime_extensions={
+                "custom_tools": [
+                    {
+                        "path": path,
+                        "purpose": "按已确认条款规则计算确定性分数。",
+                        "content": (
+                            'import { tool } from "@opencode-ai/plugin"\n'
+                            "export default tool({ description: \"Score confirmed clauses\", "
+                            "args: {}, async execute() { return \"ok\" } })\n"
+                        ),
+                    }
+                ]
+            },
+            role_custom_tools=[path],
+        )
+        runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
+        permission = runtime["agent"]["contract-reviewer"]["permission"]
+        self.assertEqual(permission["contract-review-expert-score"], "allow")
+        agent = (package / ".opencode/agents/contract-reviewer.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "`contract-review-expert-score`"
+            "（`.opencode/tools/contract-review-expert-score.ts`）",
+            agent,
+        )
+        self.assertIn("按已确认条款规则计算确定性分数", agent)
+        self.assertNotIn("Score confirmed clauses", agent)
+        self.assertNotIn("这些工具只由当前角色", agent)
+        self.assertIn("主动调用", agent)
+        self.assertNotIn("自动触发", agent.split("主动调用的 Custom Tool", 1)[0])
+        readme = (package / "README.md").read_text(encoding="utf-8")
+        self.assertIn("按已确认条款规则计算确定性分数", readme)
+        self.assertNotIn("Score confirmed clauses", readme)
+        self.assertIn("使用角色 `contract-reviewer`", readme)
+
+    def test_custom_tool_purpose_is_required_for_generation_and_legacy_read_warns(self) -> None:
+        legacy_package = self.generate(
+            "legacy-tool-purpose",
+            runtime_extensions={
+                "custom_tools": [
+                    {
+                        "path": "contract-review-expert-score.ts",
+                        "purpose": "按已确认条款规则计算确定性分数。",
+                        "content": "export default {}\n",
+                    }
+                ]
+            },
+            role_custom_tools=["contract-review-expert-score.ts"],
+        )
+        legacy_manifest_path = legacy_package / "expert.json"
+        legacy_manifest = json.loads(legacy_manifest_path.read_text(encoding="utf-8"))
+        legacy_manifest["runtime_extensions"]["custom_tools"][0].pop("purpose")
+        legacy_manifest_path.write_text(
+            json.dumps(legacy_manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        legacy_result = validate_expert.validate_package(legacy_package)
+        self.assertTrue(legacy_result.ok)
+        self.assertIn(
+            "LEGACY_CUSTOM_TOOL_PURPOSE_MISSING",
+            [finding.code for finding in legacy_result.findings],
+        )
+
+        data = copy.deepcopy(self.base)
+        data["runtime_extensions"] = {
+            "custom_tools": [
+                {"path": "contract-review-expert-score.ts", "content": "export default {}\n"}
+            ]
+        }
+        data["agent"]["references"] = []
+        data["agent"].pop("instructions", None)
+        data["agent"]["custom_tools"] = ["contract-review-expert-score.ts"]
+        source = self.root / "missing-tool-purpose"
+        source.mkdir()
+        manifest = source / "expert.json"
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        output = source / "out"
+        completed = subprocess.run(
+            [sys.executable, str(CREATE), "--manifest", str(manifest), "--output-dir", str(output)],
+            env=managed_generator_env(output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("custom_tools[0].purpose must be non-empty", completed.stderr)
+        self.assertFalse((output / data["slug"]).exists())
+
+    def test_namespaced_local_plugin_is_package_wide_not_role_owned(self) -> None:
+        package = self.generate(
+            "package-wide-plugin",
+            runtime_extensions={
+                "plugins": {
+                    "local": [
+                        {
+                            "path": "contract-review-expert-before-tool.ts",
+                            "content": (
+                                "export const BeforeTool = async () => "
+                                "({ 'tool.execute.before': async () => {} })\n"
+                            ),
+                        }
+                    ]
+                }
+            },
+        )
+        agent = (package / ".opencode/agents/contract-reviewer.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("contract-review-expert-before-tool", agent)
+        readme = (package / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Plugin 是 package-wide 运行行为", readme)
+        self.assertIn("contract-review-expert-before-tool.ts", readme)
+        self.assertIn("供满足 capability contract 的目标 Runtime 发现并加载", readme)
+        self.assertIn("静态校验不证明 Plugin 已被真实 Runtime 加载", readme)
+        self.assertIn("`not-tested`", readme)
+        self.assertNotIn("会由 Runtime 加载", readme)
 
     def test_full_extension_package_installs_every_projection(self) -> None:
         runtime_extensions: dict[str, object] = {
             "commands": [{"name": "review-scope", "template": "Review scope."}],
-            "custom_tools": [{"path": "score.ts", "content": "export default {}\n"}],
+            "custom_tools": [
+                {
+                    "path": "score.ts",
+                    "purpose": "按已确认规则计算确定性分数。",
+                    "content": "export default {}\n",
+                }
+            ],
             "plugins": {
                 "npm": ["opencode-example-plugin@1.0.0"],
                 "local": [{"path": "notify.ts", "content": "export const plugin = {}\n"}],
@@ -386,6 +533,13 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
                 set(agent_config),
                 {"mode", "description", "steps", "permission"},
             )
+
+        agent_markdown = (
+            package / ".opencode/agents/contract-reviewer.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("`score`（`.opencode/tools/score.ts`）", agent_markdown)
+        readme = (package / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Plugin 是 package-wide 运行行为", readme)
         workspace = self.root / "workspace"
         workspace.mkdir()
         installed = subprocess.run(
@@ -514,9 +668,12 @@ class RuntimeExtensionsMatrixTests(unittest.TestCase):
         )
         self.assertIn("description: 执行范围审查 workflow", review_command)
         self.assertIn("agent: contract-reviewer", review_command)
+        self.assertIn("subtask: true", review_command)
         self.assertIn("用户要求：$ARGUMENTS", review_command)
         self.assertIn("图片、PDF 或其他附件", review_command)
         self.assertIn("执行“修改建议”workflow", revision_command)
+        self.assertIn("agent: contract-reviewer", revision_command)
+        self.assertIn("subtask: true", revision_command)
         self.assertIn("用户要求：$ARGUMENTS", revision_command)
 
         readme = (package / "README.md").read_text(encoding="utf-8")

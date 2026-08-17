@@ -26,6 +26,7 @@ import package_contract
 import safe_input
 import skill_contract
 import validate_expert
+import workflow_autonomy
 
 
 class ImportSkillError(RuntimeError):
@@ -55,6 +56,31 @@ def package_roles(manifest: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     if not roles:
         raise ImportSkillError("expert.json does not declare valid roles")
     return roles
+
+
+def require_structural_role_autonomy(manifest: dict[str, Any]) -> None:
+    missing: list[str] = []
+    invalid: list[str] = []
+    for field, role in package_roles(manifest):
+        autonomy = role.get("autonomy")
+        if autonomy is None:
+            missing.append(field)
+        elif autonomy not in workflow_autonomy.AUTONOMY_LEVELS:
+            invalid.append(f"{field}={autonomy!r}")
+    if missing:
+        raise ImportSkillError(
+            "ROLE_AUTONOMY_REQUIRED: structural Skill import requires explicit "
+            "autonomy for every role; missing: " + ", ".join(missing)
+        )
+    if invalid:
+        raise ImportSkillError(
+            "ROLE_AUTONOMY_INVALID: unsupported role autonomy: " + ", ".join(invalid)
+        )
+
+
+def migrate_structural_agent_modes(manifest: dict[str, Any]) -> None:
+    for field, role in package_roles(manifest):
+        role["mode"] = "subagent" if field.startswith("subagents[") else "all"
 
 
 def assignment_ids(
@@ -188,6 +214,7 @@ def import_skill(
             ignore=shutil.ignore_patterns(".git"),
         )
         manifest = load_manifest(temp_package)
+        require_structural_role_autonomy(manifest)
         assigned = assignment_ids(
             manifest,
             requested=assign_to,
@@ -198,6 +225,7 @@ def import_skill(
                 temp_package,
                 manifest,
             )
+        migrate_structural_agent_modes(manifest)
 
         skill_name = source_root.name
         source_tree = skill_contract.tree_sha256(source_root)
@@ -224,7 +252,8 @@ def import_skill(
                     )
                 shutil.rmtree(destination)
                 shutil.copytree(source_root, destination)
-                existing["edit_policy"] = "managed"
+                existing["origin"] = "uploaded"
+                existing["edit_policy"] = "preserved"
                 action = "replaced"
         else:
             if destination.exists():

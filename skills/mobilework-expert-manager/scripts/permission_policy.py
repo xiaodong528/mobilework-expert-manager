@@ -16,6 +16,14 @@ AUTONOMY_ORDER = {
     "guided": 3,
     "adaptive": 4,
 }
+ROLE_AUTONOMY_DEFAULT = "bounded"
+ROLE_AUTONOMY_LABELS = {
+    "scripted": "低",
+    "fixed": "较低",
+    "bounded": "中",
+    "guided": "较高",
+    "adaptive": "高",
+}
 BASELINES = {
     "scripted": {
         "*": "deny",
@@ -177,95 +185,6 @@ def _merge_mapping(base: dict[str, Any], override: dict[str, Any]) -> dict[str, 
     return result
 
 
-def _legacy_permission(
-    role: dict[str, Any],
-    *,
-    mcp_names: list[str],
-    subagent_ids: list[str],
-    is_primary: bool,
-) -> dict[str, Any]:
-    permission: dict[str, Any] = {
-        "read": "allow",
-        "edit": "allow",
-        "bash": {"*": "allow", "git status*": "allow", "git diff*": "allow"},
-        "webfetch": "allow",
-        "skill": {"*": "deny", **{skill: "allow" for skill in role["allowed_skills"]}},
-        "task": {"*": "deny"},
-    }
-    if is_primary:
-        permission["task"].update({agent_id: "allow" for agent_id in subagent_ids})
-    for name in mcp_names:
-        permission[f"{name}_*"] = "allow" if name in role["mcp"] else "deny"
-    return permission
-
-
-def _assignments_for_role(
-    workflows: Iterable[dict[str, Any]], role_id: str
-) -> list[tuple[str, dict[str, Any] | None]]:
-    assignments: list[tuple[str, dict[str, Any] | None]] = []
-    for workflow in workflows:
-        if not workflow.get("contract_enabled"):
-            continue
-        for phase in workflow.get("phases", []):
-            if role_id not in phase.get("participants", []):
-                continue
-            override = phase.get("agent_overrides", {}).get(role_id)
-            if isinstance(override, dict):
-                assignments.append((override["effective_autonomy"], override.get("execution")))
-            else:
-                assignments.append((phase["effective_autonomy"], phase.get("execution")))
-    return assignments
-
-
-def _merged_action(levels: list[str], key: str) -> str:
-    actions = {BASELINES[level][key] for level in levels}
-    return actions.pop() if len(actions) == 1 else "ask"
-
-
-def _executor_allowlists(
-    assignments: Iterable[tuple[str, dict[str, Any] | None]],
-    *,
-    declared_custom_tools: set[str],
-    declared_mcp: set[str],
-    owned_mcp: set[str],
-) -> tuple[set[str], set[str], set[str]]:
-    bash: set[str] = set()
-    tools: set[str] = set()
-    mcp_tools: set[str] = set()
-    for _level, execution in assignments:
-        if not isinstance(execution, dict):
-            continue
-        for executor in execution.get("executors", []):
-            if not isinstance(executor, dict):
-                continue
-            kind = executor.get("kind")
-            ref = executor.get("ref")
-            if not isinstance(ref, str) or not ref:
-                continue
-            if kind == "programming-tool":
-                validate_bash_pattern(ref)
-                bash.add(ref)
-            elif kind == "custom-tool":
-                if ref not in declared_custom_tools:
-                    raise PermissionPolicyError(
-                        f"custom-tool executor references undeclared custom tool {ref}"
-                    )
-                tools.add(Path(ref).stem)
-            elif kind == "mcp-tool":
-                server, separator, tool = ref.partition("/")
-                if separator and server and tool:
-                    if server not in declared_mcp:
-                        raise PermissionPolicyError(
-                            f"mcp-tool executor references undeclared MCP {server}"
-                        )
-                    if server not in owned_mcp:
-                        raise PermissionPolicyError(
-                            f"mcp-tool executor references MCP not owned by role: {server}"
-                        )
-                    mcp_tools.add(f"{server}_{tool}")
-    return bash, tools, mcp_tools
-
-
 def _action_for_path(permission: dict[str, Any], key: str, pattern: str | None = None) -> str:
     value = permission.get(key, permission.get("*", "deny"))
     if isinstance(value, str):
@@ -291,7 +210,6 @@ def _validate_explicit(
     calculated: dict[str, Any],
     explicit: dict[str, Any],
     *,
-    permission_reason: str,
     allowed_skills: set[str],
     owned_mcp: set[str],
     all_mcp: set[str],
@@ -337,10 +255,10 @@ def _validate_explicit(
                     f"permission.{key} grants undeclared tool or MCP capability"
                 )
         baseline = _action_for_path(calculated, key, pattern)
-        if ACTION_RANK[action] > ACTION_RANK[baseline] and not permission_reason.strip():
+        if ACTION_RANK[action] > ACTION_RANK[baseline]:
             dotted = ".".join(path)
             raise PermissionPolicyError(
-                f"permission_reason is required because permission.{dotted} raises {baseline} to {action}"
+                f"permission.{dotted} cannot raise role autonomy baseline from {baseline} to {action}"
             )
 
 
@@ -364,12 +282,26 @@ def build_role_permission(
     expected_task = {"*": "deny"}
     if is_primary:
         expected_task.update({agent_id: "allow" for agent_id in subagent_ids})
-    explicit = role.get("permission", {})
-    if not isinstance(explicit, dict):
+    # Kept in the signature for caller compatibility and invariant testing. Static
+    # Agent permission is intentionally independent from Workflow/Phase autonomy.
+    del workflows
+    autonomy = role.get("autonomy")
+    autonomy_defaulted = autonomy is None
+    if autonomy_defaulted:
+        autonomy = ROLE_AUTONOMY_DEFAULT
+    if autonomy not in AUTONOMY_ORDER:
+        raise PermissionPolicyError(
+            "autonomy must be one of " + ", ".join(AUTONOMY_ORDER)
+        )
+
+    raw_explicit = role.get("permission", {})
+    if not isinstance(raw_explicit, dict):
         raise PermissionPolicyError("permission must be a mapping")
-    _reject_system_managed_declarations(explicit, "permission")
-    legacy_permission = legacy_tools_permission or {}
-    _reject_system_managed_declarations(legacy_permission, "tools")
+    _reject_system_managed_declarations(raw_explicit, "permission")
+    raw_legacy_permission = legacy_tools_permission or {}
+    _reject_system_managed_declarations(raw_legacy_permission, "tools")
+    explicit = {} if autonomy_defaulted else raw_explicit
+    legacy_permission = {} if autonomy_defaulted else raw_legacy_permission
     permission_reason = role.get("permission_reason", "")
     if not isinstance(permission_reason, str):
         raise PermissionPolicyError("permission_reason must be a string")
@@ -380,39 +312,16 @@ def build_role_permission(
         f"{role.get('id', 'role')}.custom_tools",
     )
 
-    contract_enabled = any(item.get("contract_enabled") for item in workflows)
-    if not contract_enabled and manifest_mode == "legacy":
-        permission = _legacy_permission(
-            role,
-            mcp_names=mcp_names,
-            subagent_ids=subagent_ids,
-            is_primary=is_primary,
-        )
-        permission = _merge_mapping(permission, legacy_tools_permission or {})
-        permission = _merge_mapping(permission, explicit)
-        if explicit.get("task") is not None and explicit["task"] != expected_task:
-            raise PermissionPolicyError(
-                f"permission.task must equal generated task topology {expected_task}"
-            )
-        permission["task"] = expected_task
-        permission["todowrite"] = "allow"
-        return permission, {
-            "source": "legacy",
-            "levels": [],
-            "effective": "legacy",
-            "warning": "legacy-permission-baseline",
-            "permission_reason": permission_reason,
-        }
-
-    assignments = _assignments_for_role(workflows, role["id"])
-    no_workflow_default = not contract_enabled
-    unused_role_fallback = contract_enabled and not assignments
-    if no_workflow_default or unused_role_fallback:
-        assignments = [("bounded", None)]
-    levels = [level for level, _execution in assignments]
-    highest = max(levels, key=AUTONOMY_ORDER.__getitem__)
+    baseline = BASELINES[autonomy]
+    external_skill_action = {
+        "scripted": "deny",
+        "fixed": "deny",
+        "bounded": "deny",
+        "guided": "ask",
+        "adaptive": "allow",
+    }[autonomy]
     permission: dict[str, Any] = {
-        "*": BASELINES[highest]["*"],
+        "*": baseline["*"],
         "read": {
             "*": "allow",
             ".env": "deny",
@@ -423,51 +332,42 @@ def build_role_permission(
         "grep": "allow",
         "list": "allow",
         "lsp": "allow",
-        "edit": _merged_action(levels, "edit"),
-        "bash": {"*": _merged_action(levels, "bash")},
-        "webfetch": _merged_action(levels, "webfetch"),
-        "external_directory": {"*": _merged_action(levels, "external_directory")},
-        "doom_loop": _merged_action(levels, "doom_loop"),
-        "skill": {"*": "deny", **{skill: "allow" for skill in role["allowed_skills"]}},
+        "edit": baseline["edit"],
+        "bash": {"*": baseline["bash"]},
+        "webfetch": baseline["webfetch"],
+        "external_directory": {"*": baseline["external_directory"]},
+        "doom_loop": baseline["doom_loop"],
+        "skill": {
+            "*": external_skill_action,
+            **{skill: "allow" for skill in role["allowed_skills"]},
+        },
         "task": expected_task,
     }
     owned_mcp = set(role["mcp"])
-    bash_allow, tool_allow, mcp_tool_allow = _executor_allowlists(
-        assignments,
-        declared_custom_tools=set(declared_custom_tool_paths),
-        declared_mcp=set(mcp_names),
-        owned_mcp=owned_mcp,
-    )
-    tool_allow.update(owned_custom_tools)
-    permission["bash"].update({pattern: "allow" for pattern in sorted(bash_allow)})
-    permission.update({name: "allow" for name in sorted(tool_allow)})
-
-    all_high = all(AUTONOMY_ORDER[level] >= AUTONOMY_ORDER["bounded"] for level in levels)
+    permission.update({name: "allow" for name in sorted(owned_custom_tools)})
+    mcp_allowed = AUTONOMY_ORDER[autonomy] >= AUTONOMY_ORDER["bounded"]
     for name in mcp_names:
-        permission[f"{name}_*"] = "allow" if name in owned_mcp and all_high else "deny"
-    permission.update({name: "allow" for name in sorted(mcp_tool_allow)})
+        permission[f"{name}_*"] = "allow" if name in owned_mcp and mcp_allowed else "deny"
 
     _validate_explicit(
         permission,
         explicit,
-        permission_reason=permission_reason,
         allowed_skills=set(role["allowed_skills"]),
         owned_mcp=owned_mcp,
         all_mcp=set(mcp_names),
-        owned_custom_tools=owned_custom_tools | tool_allow,
+        owned_custom_tools=owned_custom_tools,
         expected_task=expected_task,
     )
     _validate_explicit(
         permission,
-        legacy_tools_permission or {},
-        permission_reason=permission_reason,
+        legacy_permission,
         allowed_skills=set(role["allowed_skills"]),
         owned_mcp=owned_mcp,
         all_mcp=set(mcp_names),
-        owned_custom_tools=owned_custom_tools | tool_allow,
+        owned_custom_tools=owned_custom_tools,
         expected_task=expected_task,
     )
-    permission = _merge_mapping(permission, legacy_tools_permission or {})
+    permission = _merge_mapping(permission, legacy_permission)
     permission = _merge_mapping(permission, explicit)
     permission["task"] = expected_task
     if permission.get("bash") == "allow" or (
@@ -475,19 +375,11 @@ def build_role_permission(
     ):
         raise PermissionPolicyError('generated permission.bash must not contain "*": "allow"')
     permission["todowrite"] = "allow"
-    source = "workflow-autonomy"
-    if no_workflow_default:
-        source = "no-workflow-bounded-default"
-    elif unused_role_fallback:
-        source = "bounded-fallback"
     return permission, {
-        "source": source,
-        "levels": sorted(set(levels), key=AUTONOMY_ORDER.__getitem__),
-        "effective": highest,
-        "warning": (
-            "unused-role-bounded-fallback"
-            if unused_role_fallback
-            else ""
-        ),
+        "source": "legacy-role-autonomy-defaulted" if autonomy_defaulted else "role-autonomy",
+        "levels": [autonomy],
+        "effective": autonomy,
+        "label": ROLE_AUTONOMY_LABELS[autonomy],
+        "warning": "legacy-role-autonomy-defaulted" if autonomy_defaulted else "",
         "permission_reason": permission_reason,
     }

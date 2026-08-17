@@ -4,11 +4,11 @@
 
 | 枚举 | 直观名称 | Agent 可以做什么 | 禁止行为 |
 |---|---|---|---|
-| `scripted` | 极低：全程照脚本执行，不能自行换方法 | 组装输入、调用声明的确定性执行器、检查输出 | 更换方法、临时写替代代码、口算、目测或纯文字替代执行 |
-| `fixed` | 低：按固定步骤执行，只能处理预设分支 | 按 SOP 及预设条件分支或重试；仅在用户明确批准后执行 break-glass 例外 | 发明新方法、更换执行器、跳过步骤，或未记录 break-glass 偏离原因 |
+| `scripted` | 低：全程照脚本执行，不能自行换方法 | 组装输入、调用声明的确定性执行器、检查输出 | 更换方法、临时写替代代码、口算、目测或纯文字替代执行 |
+| `fixed` | 较低：按固定步骤执行，只能处理预设分支 | 按 SOP 及预设条件分支或重试；仅在用户明确批准后执行 break-glass 例外 | 发明新方法、更换执行器、跳过步骤，或未记录 break-glass 偏离原因 |
 | `bounded` | 中：可在明确边界内选择方法 | 在声明的执行器、方法和标准内选择 | 越出允许清单、自创标准 |
-| `guided` | 高：可根据目标灵活安排，但关键决定需确认 | 探索方法、分析异常 | 未确认就执行例外或高影响决定 |
-| `adaptive` | 极高：可自主规划、调整和返工，仍受安全与验收标准约束 | 在职责、权限和验收内规划和调整 | 绕过权威脚本、安全规则或质量门 |
+| `guided` | 较高：可根据目标灵活安排，但关键决定需确认 | 探索方法、分析异常 | 未确认就执行例外或高影响决定 |
+| `adaptive` | 高：可自主规划、调整和返工，仍受安全与验收标准约束 | 在职责、权限和验收内规划和调整 | 绕过权威脚本、安全规则或质量门 |
 
 已有可靠脚本或 custom tool 推荐 `scripted`；固定 SOP 推荐 `fixed`；多个批准方法推荐
 `bounded`；探索但关键决定要确认时推荐 `guided`；开放研究或创意才推荐 `adaptive`。
@@ -46,8 +46,9 @@ Phase 的 `effective_autonomy` 表示 Phase 默认值；`max_effective_autonomy`
 包含非空 `acceptance[]`；不得混合现代与无自主度 Workflow。
 
 Phase 是执行与验收边界。派发消息、结果返回、返工请求和团员到团长的普通 handoff 都不是独立
-Phase。单专家可以有多个 Phase，但不能使用 `parallel` 或克隆主 Agent；新设计使用
-`mode: primary`，兼容单角色 `serial`。
+Phase。单专家可以有多个 Phase，但不能使用 `parallel` 或克隆主 Agent；Phase 可使用
+`mode: primary` 或兼容单角色 `serial`。这里的 `primary` 是流程模式，不是 Agent frontmatter
+模式；新建单专家和专家团团长的 Agent mode 均为 `all`。
 
 专家团：
 
@@ -76,7 +77,9 @@ execution 对象不接受其他字段；每个 executor 对象只接受 `kind` �
 | `agent` | 已声明 Agent id；`scripted` 禁止 |
 
 `scripted`、`fixed`、`bounded` 必须有 executors 和 standards；`guided` 必须有关键确认点 standards，
-executors 可选；`adaptive` 可不声明 execution。角色权限明确拒绝执行器时必须失败。
+executors 可选；`adaptive` 可不声明 execution。execution 只能引用角色已经拥有的能力：当前角色
+动作 allow 时直接执行，ask 时保留确认，deny 时校验失败。execution 不能生成 allowlist、不能
+提高静态权限；改变 Workflow/Phase/override autonomy 不得改变 Agent permission。
 
 ## 5. 最少约束发现
 
@@ -93,7 +96,7 @@ executors 可选；`adaptive` 可不声明 execution。角色权限明确拒绝�
 和不带自主度前缀的业务 `description`；源 description 不得以保留前缀 `【自主度：` 或
 `【最高生效自主度：` 开头。
 generator 生成 `.opencode/commands/<name>.md` 并路由到单专家或团长：frontmatter description
-自动以 workflow 最高生效自主度开头，例如 `【最高生效自主度：高】 原始说明`；正文分别显示
+自动以 workflow 最高生效自主度开头，例如 `【最高生效自主度：较高】 原始说明`；正文分别显示
 Workflow 声明默认自主度与最高生效自主度，每个 Phase 标题使用其最高生效自主度。Phase 内每个
 参与角色只出现一次，显示该角色生效自主度、自主度来源和 execution 来源；运行时实例不重复写入
 静态 command。
@@ -108,11 +111,11 @@ workflow，README、Agent 和 Skill 继续使用原有详细投影，不增加�
 - unified manifest 的顶层 Workflow 可整体省略；只要声明任一 Workflow，它就必须有 autonomy。
 - legacy manifest 可以保留全部无自主度 Workflow；有/无自主度 Workflow 混合时失败。
 - 启用自主度的 workflow 至少有一个 phase，每个 phase 都有非空 `acceptance[]`。
-- 旧 schema manifest 没有自主度字段时，generator 和 validator 保持旧行为和旧派生结构。
+- 旧 Workflow 没有流程自主度字段时保持旧流程投影；这与角色 autonomy 缺失的兼容投影分开处理。
 - `runtime_extensions.commands[]` 是普通 command，description 和正文不增加自主度前缀。
 - `scripted` 缺输入、执行器、标准或执行失败时停止；不得走替代路线。
 - `fixed` 只走声明分支；break-glass 必须先获用户批准并记录偏离原因；`bounded` 穷尽批准方法后升级；`guided` 到确认点先询问；`adaptive`
   可调整方法，但验证失败不得宣称完成。
 - 所有等级都禁止静默降低验收标准。
-- Agent 静态 permission 由全部 effective autonomy 合并，完整矩阵、冲突降级和提权规则见
-  `references/permission-policy-spec.md`。
+- Agent 静态 permission 只由角色 `autonomy` 生成；Workflow/Phase 的 effective autonomy 只进入
+  流程提示、风险摘要和验收语义。完整规则见 `references/permission-policy-spec.md`。

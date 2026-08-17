@@ -355,7 +355,6 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
                 {
                     "name": "review-contract",
                     "template": "Review the contract.",
-                    "agent": "contract-reviewer",
                     "model": "openai/gpt-5",
                 }
             ]
@@ -364,7 +363,14 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
         self.assertEqual(created.returncode, 0, created.stderr)
         command = read_frontmatter(package / ".opencode/commands/review-contract.md")
         self.assertEqual(command["agent"], "contract-reviewer")
+        self.assertIs(command["subtask"], True)
         self.assertEqual(command["model"], "openai/gpt-5")
+        generated_manifest = json.loads(
+            (package / "expert.json").read_text(encoding="utf-8")
+        )
+        normalized_command = generated_manifest["runtime_extensions"]["commands"][0]
+        self.assertEqual(normalized_command["agent"], "contract-reviewer")
+        self.assertIs(normalized_command["subtask"], True)
         self.assertEqual(self.validate(package).returncode, 0)
 
         invalid_agent = copy.deepcopy(data)
@@ -372,6 +378,40 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
         rejected_agent, _ = self.generate(invalid_agent, name="command-agent-invalid")
         self.assertNotEqual(rejected_agent.returncode, 0)
         self.assertIn("references undeclared agent missing-agent", rejected_agent.stderr)
+
+        invalid_subtask = copy.deepcopy(data)
+        invalid_subtask["runtime_extensions"]["commands"][0]["subtask"] = False
+        rejected_subtask, _ = self.generate(
+            invalid_subtask,
+            name="command-subtask-invalid",
+        )
+        self.assertNotEqual(rejected_subtask.returncode, 0)
+        self.assertIn("subtask must be true", rejected_subtask.stderr)
+
+        team = copy.deepcopy(self.base)
+        source_role = team.pop("agent")
+        team["type"] = "team"
+        primary = copy.deepcopy(source_role)
+        primary.update({"id": "review-lead", "mode": "all"})
+        member = copy.deepcopy(source_role)
+        member.update({"id": "risk-reviewer", "mode": "subagent"})
+        team["primary_agent"] = primary
+        team["subagents"] = [member]
+        team["runtime_extensions"] = {
+            "commands": [
+                {
+                    "name": "review-risk",
+                    "template": "Review risk.",
+                    "agent": "risk-reviewer",
+                }
+            ]
+        }
+        rejected_member, _ = self.generate(team, name="command-member-invalid")
+        self.assertNotEqual(rejected_member.returncode, 0)
+        self.assertIn(
+            "agent must reference the mode all Agent review-lead",
+            rejected_member.stderr,
+        )
 
         for index, model in enumerate(["gpt-5", "/gpt-5", "openai/", " openai/gpt-5", "openai/gpt 5"]):
             with self.subTest(model=model):
@@ -392,12 +432,96 @@ class LspAndManifestStrictnessTests(unittest.TestCase):
         self.assertIn("references undeclared agent missing-agent", rejected_manifest.stdout)
         self.assertIn("provider/model string", rejected_manifest.stdout)
 
+    def test_legacy_runtime_command_routing_warns_and_regenerates(self) -> None:
+        data = copy.deepcopy(self.base)
+        data["runtime_extensions"] = {
+            "commands": [
+                {
+                    "name": "legacy-review",
+                    "template": "Review legacy input.",
+                    "model": "openai/gpt-5",
+                }
+            ]
+        }
+        created, package = self.generate(data, name="legacy-command")
+        self.assertEqual(created.returncode, 0, created.stderr)
+
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        legacy_command = manifest["runtime_extensions"]["commands"][0]
+        legacy_command.pop("agent")
+        legacy_command.pop("subtask")
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        command_path = package / ".opencode/commands/legacy-review.md"
+        command_text = command_path.read_text(encoding="utf-8")
+        command_path.write_text(
+            command_text.replace("agent: contract-reviewer\n", "").replace(
+                "subtask: true\n", ""
+            ),
+            encoding="utf-8",
+        )
+
+        validated = self.validate(package)
+        self.assertEqual(validated.returncode, 0, validated.stdout)
+        self.assertIn("legacy command routing remains readable", validated.stdout)
+
+        regenerated, regenerated_package = self.generate(
+            manifest,
+            name="legacy-command-regenerated",
+        )
+        self.assertEqual(regenerated.returncode, 0, regenerated.stderr)
+        routing = read_frontmatter(
+            regenerated_package / ".opencode/commands/legacy-review.md"
+        )
+        self.assertEqual(routing["agent"], "contract-reviewer")
+        self.assertIs(routing["subtask"], True)
+
+    def test_previous_false_subtask_remains_readable_but_cannot_regenerate(self) -> None:
+        data = copy.deepcopy(self.base)
+        data["runtime_extensions"] = {
+            "commands": [
+                {
+                    "name": "legacy-false-subtask",
+                    "template": "Review legacy input.",
+                }
+            ]
+        }
+        created, package = self.generate(data, name="legacy-false-subtask")
+        self.assertEqual(created.returncode, 0, created.stderr)
+
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["runtime_extensions"]["commands"][0]["subtask"] = False
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        command_path = package / ".opencode/commands/legacy-false-subtask.md"
+        command_path.write_text(
+            command_path.read_text(encoding="utf-8").replace(
+                "subtask: true\n",
+                "subtask: false\n",
+            ),
+            encoding="utf-8",
+        )
+
+        validated = self.validate(package)
+        self.assertEqual(validated.returncode, 0, validated.stdout)
+        self.assertIn("legacy command routing remains readable", validated.stdout)
+
+        rejected, _ = self.generate(manifest, name="legacy-false-regeneration")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("subtask must be true", rejected.stderr)
+
     def test_agent_title_is_legacy_name_fallback_and_is_not_projected(self) -> None:
         data = copy.deepcopy(self.base)
         source = data.pop("agent")
         data["type"] = "team"
         primary = copy.deepcopy(source)
-        primary.update({"id": "review-lead", "mode": "primary", "title": "审查负责人"})
+        primary.update({"id": "review-lead", "mode": "all", "title": "审查负责人"})
         primary.pop("name", None)
         primary.pop("display_name", None)
         primary["permission"] = {}

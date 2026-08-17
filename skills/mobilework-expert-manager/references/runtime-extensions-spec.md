@@ -7,6 +7,11 @@ LSP、MCP 或环境变量时读取本文件。所有配置都从 `expert.json` �
 `opencode.json` 的官方 schema、包级支持字段和 workspace/user 配置边界见
 `opencode-json-spec.md`；本文件只描述已支持扩展如何从 manifest 投影到运行时。
 
+能力资源选型发生在设计与生成阶段。管理器只在已确认的稳定业务名称、可观察运行行为和可信
+provenance 边界内选择最小适配实现；角色或职责不会直接创建运行时扩展，generator 也不自动补建。
+同一运行职责只生成一个资源，不同且已确认的职责才允许组合。生成后的业务 Agent 普通运行只
+消费这些资源，不得修改专家包或重新选择载体。
+
 ## 目录
 
 1. [包内落位](#1-包内落位)
@@ -31,8 +36,8 @@ LSP、MCP 或环境变量时读取本文件。所有配置都从 `expert.json` �
 ├── .env.example                 # 仅存在 env 引用时生成
 └── .opencode/
     ├── commands/
-    ├── tools/
-    ├── plugins/
+    ├── tools/                       # 仅声明 custom tool 时生成
+    ├── plugins/                     # 仅声明 local Plugin 时生成
     ├── references/<slug>/<alias>/
     ├── instructions/<slug>/
     │   └── roles/
@@ -65,15 +70,15 @@ LSP、MCP 或环境变量时读取本文件。所有配置都从 `expert.json` �
     ],
     "custom_tools": [
       {
-        "path": "score.ts",
+        "path": "contract-review-expert-score.ts",
+        "purpose": "按已确认条款规则计算确定性风险分数。",
         "content": "export default {}"
       }
     ],
     "plugins": {
-      "npm": ["opencode-example-plugin@1.0.0"],
       "local": [
         {
-          "path": "notify.ts",
+          "path": "contract-review-expert-notify.ts",
           "content": "export const NotifyPlugin = async () => ({})"
         }
       ],
@@ -173,7 +178,8 @@ LSP、MCP 或环境变量时读取本文件。所有配置都从 `expert.json` �
   "agent": {
     "id": "contract-reviewer",
     "references": ["playbook", "upstream"],
-    "instructions": ["evidence-policy"]
+    "instructions": ["evidence-policy"],
+    "custom_tools": ["contract-review-expert-score.ts"]
   }
 }
 ```
@@ -185,9 +191,18 @@ Workflow command 优先声明在 `workflows[].command`，只包含 `name` 与 `d
 五档自主度、全部 phase、全部 Agent override、执行器、标准、验收和停止条件。不得手写第二份
 workflow template。
 
-`runtime_extensions.commands[]` 只用于额外的非 workflow command，继续支持自定义 template、
-agent、subtask 和 model。两种来源最终都生成到 `.opencode/commands/`，名称不得冲突，也都不写入
-`opencode.json` 根级 `command`。
+`runtime_extensions.commands[]` 只用于额外的非 workflow command，继续支持自定义 template 和
+model。两种来源最终都生成到 `.opencode/commands/`，名称不得冲突，也都不写入 `opencode.json`
+根级 `command`。generator 为两类 command 固定写入唯一 `mode: all` 智能体 id 和
+`subtask: true`。
+
+同一包内两类 Command `name`、所有 Agent `id` 和完整 Skill 名必须两两互斥，Skill 集合覆盖统一
+`skills[]` 和旧 schema 派生名称。Command 与 Skill 冲突报
+`<command-field>.name: conflicts with skill <name>`，Command 与 Agent 冲突报
+`<command-field>.name: conflicts with agent <name>`，Agent 与 Skill 冲突报
+`<agent-field>.id: conflicts with skill <name>`。创建、重建、Skill 导入、校验、打包和安装在写入或
+替换目标前硬拒绝，不自动重命名、追加后缀或定义覆盖优先级；展示名称不受限。
+本条只约束单个专家包内这三类标识，不扩展到 `custom_tools[]`；跨包冲突继续按 5.1 节审计。
 
 `runtime_extensions.commands[]` 生成 `.opencode/commands/<name>.md`。
 OpenCode 官方同时支持根级 `command` 与 Markdown 文件；MobileWork 专家包固定采用文件投影，
@@ -199,16 +214,18 @@ OpenCode 官方同时支持根级 `command` 与 Markdown 文件；MobileWork 专
 | `name` | 必填 kebab-case，决定文件名。 |
 | `template` | 必填命令正文。 |
 | `description` | 可选说明。 |
-| `agent` | 可选默认 agent；必须引用本包已声明的 Agent id。 |
-| `subtask` | 可选 OpenCode subtask 配置。 |
+| `agent` | 可省略输入；generator 固定为本包唯一 `mode: all` Agent。显式值必须与其一致。 |
+| `subtask` | 可省略输入；generator 固定为 `true`。显式值只能是 `true`。 |
 | `model` | 可选模型选择；必须至少采用非空 `provider/model` 形式。 |
 
 command 是面向用户的 workflow 快捷入口，不是 workflow 本体的第二份真相源：
 
 - 为每个可由用户直接触发、会重复使用的稳定 workflow 默认推荐一个 `workflows[].command`；多个 workflow
   使用多个独立的 kebab-case 名称。内部 handoff、单个 phase 和一次性流程不单独创建。
-- 单专家默认把 `agent` 指向该专家；专家团默认指向团长，由团长按已确认 workflow 编排。只有用户
-  明确要求直达某个团员时，才指向 subagent 并按需要显式设置 `subtask`。
+- 单专家把 `agent` 指向该专家；专家团指向团长，由团长按已确认 workflow 编排。command 不直达
+  团员，但固定以 subtask 方式运行；团员调用继续由团长使用 `task`/`subagent_type` 管理。
+- 旧包缺少上述字段或使用旧路由时只读校验和安装产生 `LEGACY_COMMAND_ROUTING`；任何结构性修改
+  必须按当前固定路由重新生成。
 - 模板使用 `$ARGUMENTS` 接收 `/command 用户提示词` 的动态文字；需要稳定位置参数时可用 `$1`、
   `$2`，固定项目文件可用 OpenCode 官方 `@path` 引用。
 - 图片、PDF、音频或其他多模态输入由用户在同一次调用中附加，属于宿主消息层，不属于
@@ -232,24 +249,36 @@ command 是面向用户的 workflow 快捷入口，不是 workflow 本体的第�
 
 当用户需要智能体直接调用的 JavaScript/TypeScript 执行能力时推荐 custom tool；如果需求是
 监听事件、拦截既有工具或修改运行时行为，则改用 plugin。
+[OpenCode Custom Tools](https://opencode.ai/docs/custom-tools/) 是上游语义依据；能否加载及具体
+配置仍由目标 OpenCode capability contract 决定。
 
 - `path` 只接受 `.js` 或 `.ts` 包内相对路径。
+- `purpose` 必须用非空业务语句记录已确认的具体调用用途；Agent Markdown 和
+  README 从该字段投影，不解析或推断 `content`。历史包缺失时只读校验产生
+  `LEGACY_CUSTOM_TOOL_PURPOSE_MISSING` warning；下次结构性修改必须补齐。
 - `content` 必须内嵌非空文本；生成器按声明重建真实文件。
 - Todo 由系统托管，禁止声明 `todowrite.ts`、`todoread.ts` 或任何 stem 为 `todowrite` /
   `todoread` 的 custom tool。
 - 工具产生业务文件时，接收 workspace root 或等价参数，不把业务产物写进 `.opencode/`。
 - 权限通过角色 `permission` 声明，不把 custom tool 塞入 legacy `tools` 布尔映射。
 - `.opencode/tools/` 由 OpenCode 自动发现，`opencode.json` 不生成根级 `tools`。
+- custom tool 只有被角色通过 `custom_tools[]` 精确拥有后，才投影到该角色 Agent 与 permission；
+  不得因为工具是包内文件就自动分配给单专家、团长或全部团员。
 
 ## 5. Plugins 与依赖
 
 当用户需要类似 hook 的事件监听、工具执行前后拦截或运行时行为修改时推荐 local plugin；
 主动读写外部软件、服务或数据库使用 MCP。不要用 plugin 代替一个只需被智能体直接调用的普通
 custom tool。
+[OpenCode Plugins](https://opencode.ai/docs/plugins/) 是上游语义依据；能否加载及具体配置仍由
+目标 OpenCode capability contract 决定。Plugin 是 package-wide 运行行为，不存在角色私有所有权，
+Agent Markdown 也不得把它列为某个角色拥有的工具。
 
 - `plugins.npm[]` 合并到 `opencode.json.plugin`；新生成包必须使用精确 SemVer，且按规范化后的
   `name@selector` 判重。历史包中的 bare、range 或 dist-tag 仍可验证，但会产生
   `PLUGIN_NPM_SPEC_UNPINNED` warning。
+- 新生成 npm Plugin 必须来自可信且已核验真实存在的包；不得根据候选名称虚构 package name 或
+  version。精确版本声明不等于授权联网下载、安装或启用。
 - `plugins.local[]` 生成 `.opencode/plugins/<path>`，只接受内嵌 `content` 的 `.js` 或 `.ts`。
 - `plugins.package_json` 只接受 `dependencies` 与 `devDependencies`，生成 `.opencode/package.json`。
 - 包内不得携带 `node_modules`、lock 缓存或安装产物。
@@ -265,6 +294,11 @@ custom tool 路径。local plugin 与 custom tool 的 `path` 应使用 `<slug>-<
 `<slug>-<name>.js` 或 `<slug>/<name>.*`，并同步更新 workflow executor ref 与 `permission` 中的
 工具名。MCP、LSP、Agent 和 command 不能复用另一个包已拥有的 key；看似相同的配置也不能绕过
 receipt 所有权边界。
+
+没有能力映射到 custom tool 或 Plugin 时，不生成 `.opencode/tools/`、`.opencode/plugins/`、
+`.opencode/package.json` 或 `opencode.json.plugin` 占位。整卡确认只授权当前专家包内已确认资源的
+生成，不授权安装、启用、联网下载、外部连接、发布或执行生成代码；映射发现新的自动触发、外写、
+联网、权限、依赖、成本或 Runtime 前提时按 `full-card-first` 失效旧确认，并在重确认前零写入。
 
 验收至少包含三次安装：每个包分别安装，以及全部包在同一干净 workspace 顺序安装。共存安装后
 读回所有 receipts、owned file hashes 和 `opencode.jsonc`；若仅共存失败且投影与 receipt

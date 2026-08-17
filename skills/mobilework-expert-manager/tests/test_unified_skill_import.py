@@ -24,6 +24,7 @@ PACKAGE = SCRIPTS / "package_expert.py"
 TEAM_EXAMPLE = SKILL_ROOT / "evals" / "files" / "software-dev-team.expert.json"
 
 sys.path.insert(0, str(SCRIPTS))
+import create_expert
 import diagnose_skill
 import import_skill
 import package_contract
@@ -57,7 +58,12 @@ class UnifiedSkillImportTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def create_package(self, *, team: bool = False) -> Path:
+    def create_package(
+        self,
+        *,
+        team: bool = False,
+        command_name: str | None = None,
+    ) -> Path:
         manifest = (
             self.root
             / ("team-source" if team else "expert-source")
@@ -69,7 +75,16 @@ class UnifiedSkillImportTests(unittest.TestCase):
             if team
             else load_spec_text("legacy-expert-json")
         )
-        manifest.write_text(source, encoding="utf-8")
+        data = json.loads(source)
+        if command_name is not None:
+            runtime = data.setdefault("runtime_extensions", {})
+            runtime["commands"] = [
+                {"name": command_name, "template": "Review the uploaded material."}
+            ]
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         completed = subprocess.run(
             [
                 sys.executable,
@@ -174,6 +189,242 @@ class UnifiedSkillImportTests(unittest.TestCase):
             runtime["agent"]["contract-reviewer"]["permission"]["skill"],
             {"*": "deny"},
         )
+        self.assertTrue(validate_expert.validate_package(package).ok)
+
+    def test_managed_semantic_skill_is_staged_once_and_shared_by_team(self) -> None:
+        source = self.root / "managed-team"
+        skill_dir = source / ".opencode/skills/clause-extraction"
+        skill_dir.mkdir(parents=True)
+        skill_bytes = (
+            b"---\n"
+            b"name: clause-extraction\n"
+            b"description: Extract clauses with a reusable checklist. Use when "
+            b"structured clause extraction is required.\n"
+            b"---\n\n"
+            b"# Clause extraction\n\n"
+            b"Apply the confirmed clause extraction checklist and report evidence.\n"
+        )
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_bytes(skill_bytes)
+        resource_path = ".opencode/skills/clause-extraction/SKILL.md"
+        manifest_data = {
+            "slug": "managed-clause-team",
+            "type": "team",
+            "name": "条款提取专家团",
+            "description": "验证一个语义命名 managed Skill 可由多个角色共享。",
+            "skills": [
+                {
+                    "name": "clause-extraction",
+                    "origin": "managed",
+                    "edit_policy": "managed",
+                }
+            ],
+            "primary_agent": {
+                "id": "review-lead",
+                "name": "审查团长",
+                "mode": "all",
+                "autonomy": "bounded",
+                "description": "整合条款提取结果。",
+                "skills": ["clause-extraction"],
+            },
+            "subagents": [
+                {
+                    "id": "clause-reviewer",
+                    "name": "条款审查员",
+                    "mode": "subagent",
+                    "autonomy": "bounded",
+                    "description": "按清单提取条款。",
+                    "skills": ["clause-extraction"],
+                }
+            ],
+            "package_resources": [
+                {
+                    "path": resource_path,
+                    "kind": "text",
+                    "sha256": hashlib.sha256(skill_bytes).hexdigest(),
+                }
+            ],
+        }
+        manifest = source / "expert.json"
+        manifest.write_text(
+            json.dumps(manifest_data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(self.output),
+            ],
+            env=managed_generator_env(self.output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        package = self.output / "managed-clause-team"
+        generated = json.loads((package / "expert.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            generated["skills"],
+            [
+                {
+                    "name": "clause-extraction",
+                    "origin": "managed",
+                    "edit_policy": "managed",
+                }
+            ],
+        )
+        self.assertEqual(generated["primary_agent"]["skills"], ["clause-extraction"])
+        self.assertEqual(generated["subagents"][0]["skills"], ["clause-extraction"])
+        generated_skills = [
+            path.name
+            for path in (package / ".opencode/skills").iterdir()
+            if path.is_dir()
+        ]
+        self.assertEqual(generated_skills, ["clause-extraction"])
+        self.assertEqual((package / resource_path).read_bytes(), skill_bytes)
+        self.assertFalse(any(name.startswith("managed-clause-team-") for name in generated_skills))
+        runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
+        for role_id in ("review-lead", "clause-reviewer"):
+            self.assertEqual(
+                runtime["agent"][role_id]["permission"]["skill"],
+                {"*": "deny", "clause-extraction": "allow"},
+            )
+        self.assertTrue(validate_expert.validate_package(package).ok)
+
+    def test_distinct_confirmed_duties_project_exactly_three_resource_types(self) -> None:
+        source = self.root / "dynamic-resource-team"
+        skill_dir = source / ".opencode/skills/evidence-checklist"
+        skill_dir.mkdir(parents=True)
+        skill_bytes = (
+            b"---\n"
+            b"name: evidence-checklist\n"
+            b"description: Apply a reusable evidence checklist. Use when a "
+            b"confirmed review requires consistent evidence collection.\n"
+            b"---\n\n# Evidence checklist\n\nApply the confirmed checklist.\n"
+        )
+        (skill_dir / "SKILL.md").write_bytes(skill_bytes)
+        resource_path = ".opencode/skills/evidence-checklist/SKILL.md"
+        tool_path = "dynamic-resource-team-score.ts"
+        plugin_path = "dynamic-resource-team-before-tool.ts"
+        manifest_data = {
+            "slug": "dynamic-resource-team",
+            "type": "team",
+            "name": "动态能力资源专家团",
+            "description": "验证三个不同且已确认的运行职责只映射三个最小资源。",
+            "skills": [
+                {
+                    "name": "evidence-checklist",
+                    "origin": "managed",
+                    "edit_policy": "managed",
+                }
+            ],
+            "primary_agent": {
+                "id": "dynamic-lead",
+                "name": "动态资源团长",
+                "mode": "all",
+                "autonomy": "bounded",
+                "description": "按清单整合证据并主动调用确定性评分。",
+                "skills": ["evidence-checklist"],
+                "custom_tools": [tool_path],
+            },
+            "subagents": [
+                {
+                    "id": "evidence-reviewer",
+                    "name": "证据审查员",
+                    "mode": "subagent",
+                    "autonomy": "bounded",
+                    "description": "按清单收集证据。",
+                    "skills": ["evidence-checklist"],
+                    "custom_tools": [],
+                }
+            ],
+            "runtime_extensions": {
+                "custom_tools": [
+                    {
+                        "path": tool_path,
+                        "purpose": "按已确认证据规则计算确定性分数。",
+                        "content": (
+                            'import { tool } from "@opencode-ai/plugin"\n'
+                            "export default tool({ description: \"Score confirmed evidence\", "
+                            "args: {}, async execute() { return \"ok\" } })\n"
+                        ),
+                    }
+                ],
+                "plugins": {
+                    "local": [
+                        {
+                            "path": plugin_path,
+                            "content": (
+                                "export const BeforeTool = async () => "
+                                "({ 'tool.execute.before': async () => {} })\n"
+                            ),
+                        }
+                    ]
+                },
+            },
+            "package_resources": [
+                {
+                    "path": resource_path,
+                    "kind": "text",
+                    "sha256": hashlib.sha256(skill_bytes).hexdigest(),
+                }
+            ],
+        }
+        manifest = source / "expert.json"
+        manifest.write_text(
+            json.dumps(manifest_data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(self.output),
+            ],
+            env=managed_generator_env(self.output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        package = self.output / "dynamic-resource-team"
+        self.assertEqual(
+            [path.name for path in (package / ".opencode/skills").iterdir()],
+            ["evidence-checklist"],
+        )
+        self.assertEqual(
+            [path.name for path in (package / ".opencode/tools").iterdir()],
+            [tool_path],
+        )
+        self.assertEqual(
+            [path.name for path in (package / ".opencode/plugins").iterdir()],
+            [plugin_path],
+        )
+        runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
+        self.assertNotIn("plugin", runtime)
+        self.assertEqual(
+            runtime["agent"]["dynamic-lead"]["permission"]["dynamic-resource-team-score"],
+            "allow",
+        )
+        self.assertNotIn(
+            "dynamic-resource-team-score",
+            runtime["agent"]["evidence-reviewer"]["permission"],
+        )
+        lead_agent = (package / ".opencode/agents/dynamic-lead.md").read_text(
+            encoding="utf-8"
+        )
+        reviewer_agent = (
+            package / ".opencode/agents/evidence-reviewer.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("dynamic-resource-team-score", lead_agent)
+        self.assertNotIn(plugin_path, lead_agent + reviewer_agent)
         self.assertTrue(validate_expert.validate_package(package).ok)
 
     def test_unified_skill_pool_and_role_refs_may_be_omitted(self) -> None:
@@ -282,6 +533,69 @@ class UnifiedSkillImportTests(unittest.TestCase):
         self.assertIn("uploaded-review", readme)
         self.assertTrue(validate_expert.validate_package(package).ok)
 
+    def test_structural_import_requires_explicit_role_autonomy_without_target_writes(self) -> None:
+        package = self.create_package()
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["agent"].pop("autonomy")
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        source = self.create_skill()
+        before = package_digest(package)
+        with self.assertRaisesRegex(
+            import_skill.ImportSkillError,
+            "ROLE_AUTONOMY_REQUIRED",
+        ):
+            self.import_into(package, source)
+        self.assertEqual(package_digest(package), before)
+        self.assertFalse((package / ".opencode/skills/uploaded-review").exists())
+
+    def test_structural_import_migrates_legacy_main_mode_to_all(self) -> None:
+        package = self.create_package()
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["agent"]["mode"] = "primary"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        runtime_path = package / "opencode.json"
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+        runtime["agent"]["contract-reviewer"]["mode"] = "primary"
+        runtime_path.write_text(
+            json.dumps(runtime, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        agent_path = package / ".opencode/agents/contract-reviewer.md"
+        agent_text = agent_path.read_text(encoding="utf-8")
+        agent_path.write_text(
+            agent_text.replace("mode: all\n", "mode: primary\n", 1),
+            encoding="utf-8",
+        )
+        validation = validate_expert.validate_package(package)
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertIn(
+            "LEGACY_PRIMARY_AGENT_MODE",
+            {item.code for item in validation.findings},
+        )
+
+        self.import_into(package, self.create_skill())
+        migrated = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["agent"]["mode"], "all")
+        migrated_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            migrated_runtime["agent"]["contract-reviewer"]["mode"],
+            "all",
+        )
+        self.assertEqual(
+            yaml.safe_load(agent_path.read_text(encoding="utf-8").split("---", 2)[1])[
+                "mode"
+            ],
+            "all",
+        )
+
     def test_preserved_skill_drift_is_rejected_by_hash_validation(self) -> None:
         package = self.create_package()
         source = self.create_skill()
@@ -293,6 +607,47 @@ class UnifiedSkillImportTests(unittest.TestCase):
         self.assertTrue(
             any("sha256" in message and "expected" in message for message in validation.errors),
             validation.errors,
+        )
+
+    def test_import_rejects_a_skill_named_like_an_existing_command_without_writes(
+        self,
+    ) -> None:
+        package = self.create_package(command_name="uploaded-review")
+        source = self.create_skill()
+        before_digest = package_digest(package)
+        before_revision = create_expert.calculate_package_revision(package)
+
+        with self.assertRaisesRegex(
+            import_skill.ImportSkillError,
+            "runtime_extensions.commands\\[0\\]\\.name: "
+            "conflicts with skill uploaded-review",
+        ):
+            self.import_into(package, source)
+
+        self.assertEqual(package_digest(package), before_digest)
+        self.assertEqual(
+            create_expert.calculate_package_revision(package),
+            before_revision,
+        )
+
+    def test_import_rejects_a_skill_named_like_an_agent_without_writes(
+        self,
+    ) -> None:
+        package = self.create_package()
+        source = self.create_skill("contract-reviewer")
+        before_digest = package_digest(package)
+        before_revision = create_expert.calculate_package_revision(package)
+
+        with self.assertRaisesRegex(
+            import_skill.ImportSkillError,
+            r"agent\.id: conflicts with skill contract-reviewer",
+        ):
+            self.import_into(package, source)
+
+        self.assertEqual(package_digest(package), before_digest)
+        self.assertEqual(
+            create_expert.calculate_package_revision(package),
+            before_revision,
         )
 
     def test_team_requires_assignment_and_failed_calls_are_byte_preserving(self) -> None:
@@ -386,7 +741,7 @@ class UnifiedSkillImportTests(unittest.TestCase):
         )
         self.assertEqual(replaced["action"], "replaced")
         self.assertEqual(replaced["origin"], "uploaded")
-        self.assertEqual(replaced["editPolicy"], "managed")
+        self.assertEqual(replaced["editPolicy"], "preserved")
         self.assertEqual(
             (package / ".opencode/skills/uploaded-review/SKILL.md").read_bytes(),
             (replacement / "SKILL.md").read_bytes(),
@@ -500,7 +855,9 @@ class UnifiedSkillImportTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 import_skill.ImportSkillError,
-                "INPUT_SYMLINK_FORBIDDEN",
+                "INPUT_REPARSE_POINT_FORBIDDEN"
+                if os.name == "nt"
+                else "INPUT_SYMLINK_FORBIDDEN",
             ):
                 self.import_into(package, source)
 
@@ -634,7 +991,11 @@ class UnifiedSkillImportTests(unittest.TestCase):
 
         self.assertEqual(
             [finding.code for finding in result.findings],
-            ["INPUT_SYMLINK_FORBIDDEN"],
+            [
+                "INPUT_REPARSE_POINT_FORBIDDEN"
+                if os.name == "nt"
+                else "INPUT_SYMLINK_FORBIDDEN"
+            ],
         )
         self.assertFalse(result.execution["attempted"])
 
@@ -888,6 +1249,188 @@ class UnifiedSkillImportTests(unittest.TestCase):
         )
         self.assertNotEqual(installed.returncode, 0)
         self.assertEqual(skill_md.read_bytes(), invalid_bytes)
+
+    def test_historical_command_skill_conflict_blocks_all_package_gates_without_writes(
+        self,
+    ) -> None:
+        package = self.create_package(command_name="manual-check")
+        self.import_into(package, self.create_skill())
+        self.assertTrue(validate_expert.validate_package(package).ok)
+
+        positive_dist = self.root / "positive-dist"
+        packaged = subprocess.run(
+            [
+                sys.executable,
+                str(PACKAGE),
+                "--package-dir",
+                str(package),
+                "--output-dir",
+                str(positive_dist),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(packaged.returncode, 0, packaged.stderr)
+        self.assertTrue((positive_dist / f"{package.name}.zip").is_file())
+
+        positive_workspace = self.root / "positive-workspace"
+        positive_workspace.mkdir()
+        installed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--package-dir",
+                str(package),
+                "--workspace-dir",
+                str(positive_workspace),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        self.assertTrue(
+            (positive_workspace / ".opencode/commands/manual-check.md").is_file()
+        )
+        self.assertTrue(
+            (
+                positive_workspace
+                / ".opencode/skills/uploaded-review/SKILL.md"
+            ).is_file()
+        )
+
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["runtime_extensions"]["commands"][0]["name"] = "uploaded-review"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        expected = (
+            "runtime_extensions.commands[0].name: "
+            "conflicts with skill uploaded-review"
+        )
+        package_before = package_digest(package)
+
+        validation = validate_expert.validate_package(package)
+        self.assertFalse(validation.ok)
+        self.assertIn(expected, validation.errors)
+
+        dist = self.root / "conflict-dist"
+        packaged = subprocess.run(
+            [
+                sys.executable,
+                str(PACKAGE),
+                "--package-dir",
+                str(package),
+                "--output-dir",
+                str(dist),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(packaged.returncode, 0)
+        self.assertIn(expected, packaged.stderr)
+        self.assertFalse(dist.exists())
+
+        workspace = self.root / "conflict-workspace"
+        workspace.mkdir()
+        installed = subprocess.run(
+            [
+                sys.executable,
+                str(INSTALL),
+                "--package-dir",
+                str(package),
+                "--workspace-dir",
+                str(workspace),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(installed.returncode, 0)
+        self.assertIn(expected, installed.stderr)
+        self.assertEqual(list(workspace.iterdir()), [])
+        self.assertEqual(package_digest(package), package_before)
+
+    def test_historical_agent_name_conflicts_block_all_package_gates_without_writes(
+        self,
+    ) -> None:
+        package = self.create_package(command_name="manual-check")
+        self.import_into(package, self.create_skill())
+        self.assertTrue(validate_expert.validate_package(package).ok)
+        manifest_path = package / "expert.json"
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        scenarios = [
+            (
+                "command-agent",
+                "runtime_extensions.commands[0].name: "
+                "conflicts with agent contract-reviewer",
+            ),
+            (
+                "agent-skill",
+                "agent.id: conflicts with skill uploaded-review",
+            ),
+        ]
+        for name, expected in scenarios:
+            with self.subTest(name=name):
+                manifest = json.loads(json.dumps(original))
+                if name == "command-agent":
+                    manifest["runtime_extensions"]["commands"][0]["name"] = (
+                        "contract-reviewer"
+                    )
+                else:
+                    manifest["agent"]["id"] = "uploaded-review"
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                package_before = package_digest(package)
+
+                validation = validate_expert.validate_package(package)
+                self.assertFalse(validation.ok)
+                self.assertIn(expected, validation.errors)
+
+                dist = self.root / f"{name}-dist"
+                packaged = subprocess.run(
+                    [
+                        sys.executable,
+                        str(PACKAGE),
+                        "--package-dir",
+                        str(package),
+                        "--output-dir",
+                        str(dist),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(packaged.returncode, 0)
+                self.assertIn(expected, packaged.stderr)
+                self.assertFalse(dist.exists())
+
+                workspace = self.root / f"{name}-workspace"
+                workspace.mkdir()
+                installed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(INSTALL),
+                        "--package-dir",
+                        str(package),
+                        "--workspace-dir",
+                        str(workspace),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(installed.returncode, 0)
+                self.assertIn(expected, installed.stderr)
+                self.assertEqual(list(workspace.iterdir()), [])
+                self.assertEqual(package_digest(package), package_before)
 
     def test_diagnose_skill_cli_blocks_runtime_and_import_cli_reports_errors(
         self,

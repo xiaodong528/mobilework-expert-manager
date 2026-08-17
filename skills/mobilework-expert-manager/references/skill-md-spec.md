@@ -1,8 +1,13 @@
 # Skill Markdown 与旧包生成兼容规范
 
-新统一技能池不生成、重命名或改写技能内容。用户上传技能经 `diagnose_skill.py` 静态诊断后，
+新统一技能池的 generator 不生成、重命名或改写技能内容。用户上传技能经 `diagnose_skill.py` 静态诊断后，
 包括 `SKILL.md` 在内的所有文件按原字节复制到 `.opencode/skills/<name>/`；`name` 必须与目录名
-一致。管理器自建的 `managed` 技能也使用完整自选名称，不套用专家或角色名称前缀。
+一致。管理器只有在能力映射选择 Skill 后，才在可信 staging 中编写 `managed` 技能，并使用完整
+语义名称，不套用专家或角色名称前缀。角色、职责、流程、输出格式和质量门本身都不触发 Skill
+创建；同一能力只创建一份，多角色引用同一完整名称。
+
+完整 Skill 名不得与本包任一 Command `name` 或 Agent `id` 重名；统一 `skills[]` 与旧 schema
+派生名称使用同一硬门。冲突时保留原名并在目标写入前失败，不自动追加前后缀。
 
 ## Agent Skills 官方格式门
 
@@ -10,6 +15,12 @@
 [Agent Skills Specification](https://agentskills.io/specification) 的强制格式规则。MobileWork
 可以因安全、路径、静态语法或便携性规则拒绝其他官方格式有效的技能，但不能接受官方格式无效
 的技能。
+
+官方页面是规范真源；官方仓库快照
+[`69ef37e9424c0a7ea9dd2293b559e43ec8176379`](https://github.com/agentskills/agentskills/tree/69ef37e9424c0a7ea9dd2293b559e43ec8176379)
+与 `skills-ref` 只作可复现交叉校验。若 quick validator、`skills-ref` 或本地说明与官方页面冲突，
+以官方页面为准并记录差异回归。官方强制项失败即阻断；500 行、渐进披露、浅层引用等建议项只
+产生 warning，不得升级成官方格式错误。
 
 `SKILL.md` 必须以 YAML frontmatter 开始，且只能使用以下顶层字段：
 
@@ -24,9 +35,15 @@
 
 未知顶层字段直接失败；自定义字符串信息放入 `metadata`。上传技能的校验失败只返回稳定 finding，
 不补字段、不改类型、不重排 YAML。`SKILL.md` 正文没有强制章节；超过 500 行只报告渐进披露
-warning，不作为官方格式错误。引用随包文件时使用相对 skill root 的路径，并避免深层引用链。
+warning，不作为官方格式错误。引用随包文件时使用相对 skill root 的路径；深层引用链只报告
+建议性 warning。
 管理器要求 PyYAML 解析和生成 block-style YAML；缺少依赖时创建、诊断和校验失败关闭，不回退
 为官方参考校验器不接受的 JSON flow mapping。
+
+managed Skill 生成链路固定为：管理器在可信 staging 写完整目录 → 运行官方强制格式门 → 记录
+建议项 warning → 计算全部文件 SHA-256 → 写入 `package_resources[]` →
+`create_expert.normalize_manifest` 校验声明 → `write_package_resources` 逐字节复制。任何一步失败都
+不得把部分 Skill 写入专家目录；generator 不能根据职责或文件名补写内容。
 
 历史专家包只要包含非合规 Skill，就立即阻断 validate、package 和 install，不保留宽松兼容分支。
 修复原始 Skill 后在干净包中重新导入或重建；管理器不会为解除阻断而原地改写 `preserved` 字节。

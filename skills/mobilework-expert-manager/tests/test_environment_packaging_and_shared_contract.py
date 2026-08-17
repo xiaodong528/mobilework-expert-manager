@@ -19,6 +19,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import check_environment
+import cli_contract
 import create_expert
 import execution_context
 import manifest_contract
@@ -118,23 +119,109 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         self.assertEqual(result["missing"], ["yaml"])
         self.assertEqual(result["hostMode"], "workspace")
 
-    def test_environment_reports_mobilework_managed_output(self) -> None:
+    def test_environment_reports_packaged_and_dev_mobilework_managed_output(self) -> None:
         workspace = self.root / "workspace"
         workspace.mkdir()
-        managed = self.root / "real-home" / ".mobilework" / "my-experts"
-        result = check_environment.check_environment(
-            ["core"],
-            env={
-                execution_context.HOST_ENV: "mobilework",
-                execution_context.MY_EXPERTS_ENV: str(managed),
-            },
-            workspace_root=workspace,
+        system_home = self.root / "system-home"
+        managed_roots = (
+            system_home / ".mobilework" / "experts" / "personal",
+            system_home
+            / ".mobilework"
+            / "electron-dev"
+            / "openwork-dev-data"
+            / "home"
+            / ".mobilework"
+            / "experts"
+            / "personal",
         )
+        for managed in managed_roots:
+            with self.subTest(managed=managed):
+                result = check_environment.check_environment(
+                    ["core"],
+                    env={
+                        execution_context.HOST_ENV: "mobilework",
+                        execution_context.MY_EXPERTS_ENV: str(managed),
+                    },
+                    workspace_root=workspace,
+                )
 
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["hostMode"], "mobilework")
-        self.assertEqual(Path(result["outputRoot"]), managed.resolve())
-        self.assertEqual(result["pathSource"], "mobilework-main-process")
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["hostMode"], "mobilework")
+                self.assertEqual(Path(result["outputRoot"]), managed.resolve())
+                self.assertEqual(result["pathSource"], "mobilework-main-process")
+                self.assertEqual(result["targetMode"], "host-resolved")
+                self.assertEqual(result["executionContext"]["version"], 2)
+
+    def test_environment_reports_each_explicit_creation_target(self) -> None:
+        workspace = self.root / "workspace"
+        workspace.mkdir()
+        custom = self.root / "custom"
+        custom.mkdir()
+        home = self.root / "home"
+        home.mkdir()
+        cases = (
+            ("workspace", None, workspace, "user-selected-workspace"),
+            ("custom", custom, custom, "user-selected-custom"),
+            (
+                "my-experts",
+                None,
+                home / ".mobilework" / "experts" / "personal",
+                "user-home",
+            ),
+        )
+        for target_mode, output_dir, expected_root, path_source in cases:
+            with self.subTest(target_mode=target_mode):
+                result = check_environment.check_environment(
+                    ["core"],
+                    env={"HOME": str(home)},
+                    workspace_root=workspace,
+                    creation_target=target_mode,
+                    output_dir=output_dir,
+                )
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["targetMode"], target_mode)
+                self.assertEqual(Path(result["outputRoot"]), expected_root.resolve())
+                self.assertEqual(result["pathSource"], path_source)
+
+    def test_environment_rejects_invalid_custom_target_before_preflight(self) -> None:
+        missing = self.root / "missing"
+        with patch.object(
+            check_environment,
+            "module_status",
+            side_effect=AssertionError("preflight must not run"),
+        ):
+            result = check_environment.check_environment(
+                ["core"],
+                env={},
+                workspace_root=self.root,
+                creation_target="custom",
+                output_dir=missing,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["checks"], [])
+        self.assertEqual(result["errors"][0]["code"], "CREATION_TARGET_PATH_INVALID")
+
+    def test_environment_cli_accepts_creation_target_alias_and_custom_pair(self) -> None:
+        parsed = check_environment.parse_args(["--creation-target", "workspace"])
+        self.assertEqual(parsed.creation_target, "workspace")
+
+        parsed_alias = check_environment.parse_args(["--my-experts"])
+        self.assertEqual(parsed_alias.creation_target, "my-experts")
+
+        custom = self.root / "custom"
+        custom.mkdir()
+        parsed_custom = check_environment.parse_args(
+            ["--creation-target", "custom", "--output-dir", str(custom)]
+        )
+        self.assertEqual(parsed_custom.creation_target, "custom")
+        self.assertEqual(parsed_custom.output_dir, custom)
+
+        with self.assertRaises(cli_contract.CliArgumentError) as caught:
+            check_environment.parse_args(
+                ["--my-experts", "--creation-target", "workspace"]
+            )
+        self.assertEqual(caught.exception.code, "CREATION_TARGET_ANSWER_AMBIGUOUS")
 
     def test_environment_fails_closed_for_partial_or_workspace_managed_contract(self) -> None:
         workspace = self.root / "workspace"
@@ -144,7 +231,9 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
             (
                 {
                     execution_context.HOST_ENV: "mobilework",
-                    execution_context.MY_EXPERTS_ENV: str(workspace / "my-experts"),
+                    execution_context.MY_EXPERTS_ENV: str(
+                        workspace / "experts" / "personal"
+                    ),
                 },
                 "TARGET_OUTSIDE_ROOT",
             ),
@@ -283,9 +372,10 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         }
         self.assertEqual(
             frontmatter_keys,
-            {"name", "description", "compatibility"},
+            {"name", "description"},
         )
-        self.assertTrue((SKILL / "agents" / "openai.yaml").is_file())
+        self.assertFalse((SKILL / "agents").exists())
+        self.assertIn("Python 3.10+ 和 PyYAML", skill_text)
         self.assertIn("<skill-root>/scripts/create_expert.py", skill_text)
         self.assertNotIn("~/.agents/skills/mobilework-expert-manager/scripts", skill_text)
         self.assertIn("references/requirements-discovery.md", skill_text)
@@ -330,18 +420,19 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         self.assertIn("属于宿主消息层", runtime)
         self.assertIn("不新增附件", runtime)
         self.assertIn("不生成根级 `command`", runtime)
-        self.assertIn("专家团默认路由到团长", authoring)
+        self.assertIn("专家团指向团长", authoring)
+        self.assertIn("固定 `subtask: true`", authoring)
 
     def test_workflow_autonomy_reference_is_direct_and_complete(self) -> None:
         autonomy = (SKILL / "references" / "workflow-autonomy-spec.md").read_text(
             encoding="utf-8"
         )
         for required in (
-            "极低：全程照脚本执行，不能自行换方法",
-            "低：按固定步骤执行，只能处理预设分支",
+            "低：全程照脚本执行，不能自行换方法",
+            "较低：按固定步骤执行，只能处理预设分支",
             "中：可在明确边界内选择方法",
-            "高：可根据目标灵活安排，但关键决定需确认",
-            "极高：可自主规划、调整和返工，仍受安全与验收标准约束",
+            "较高：可根据目标灵活安排，但关键决定需确认",
+            "高：可自主规划、调整和返工，仍受安全与验收标准约束",
             "Agent override > phase.autonomy > workflow.autonomy",
             "口算、目测或纯文字替代执行",
             "每个用户可直接触发、会重复使用的稳定 workflow",
@@ -388,26 +479,25 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         ):
             self.assertIn(required, runtime)
 
-    def test_skill_and_ui_metadata_cover_expert_contract_design_requests(self) -> None:
+    def test_skill_and_preset_metadata_cover_expert_contract_design_requests(self) -> None:
         skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-        openai = (SKILL / "agents" / "openai.yaml").read_text(encoding="utf-8")
         for marker in (
-            "自主度",
-            "Workflow",
-            "Phase",
-            "Todo",
-            "权限",
-            "custom command",
             "设计",
-            "分析",
             "创建",
             "修改",
-            "诊断",
+            "检查",
+            "安装",
+            "打包",
+            "发布",
+            "角色分工",
+            "工作步骤",
+            "技能",
+            "工具",
+            "外部连接",
+            "安全检查",
         ):
             self.assertIn(marker, skill_text.split("---", 2)[1])
         preset_manifest_path = SKILL.parents[1] / "manifest.json"
-        self.assertIn("用白话推荐", openai)
-        self.assertIn("先让我确认", openai)
         if preset_manifest_path.is_file():
             preset_manifest = preset_manifest_path.read_text(encoding="utf-8")
             self.assertIn("可选 Workflow", preset_manifest)
@@ -518,7 +608,7 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
 
     def test_eval_fixtures_and_trigger_balance_are_complete(self) -> None:
         evals = json.loads((SKILL / "evals" / "evals.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(evals["evals"]), 40)
+        self.assertEqual(len(evals["evals"]), 44)
         names = {item["name"] for item in evals["evals"]}
         self.assertEqual(
             names,
@@ -563,13 +653,21 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
                 "route-novice-external-check-and-event-block",
                 "multiturn-single-expert-ledger-budget-and-delegation",
                 "multiturn-team-technical-mapping-return",
+                "pair-role-autonomy-isolates-permission-from-workflow",
+                "pair-uploaded-skill-preserves-bytes-and-role-binding",
+                "pair-agent-all-mode-and-phase-primary-boundary",
+                "generate-dynamic-mixed-capability-resources",
             },
         )
         for item in evals["evals"]:
             self.assertTrue(item["expectations"])
             for file_name in item["files"]:
                 self.assertTrue((SKILL / file_name).is_file(), file_name)
-        for item in evals["evals"][-2:]:
+        for item in [
+            item
+            for item in evals["evals"]
+            if item["name"].startswith("multiturn-")
+        ]:
             self.assertIn("pr-smoke", item["suites"])
             self.assertIn("multi-turn", item["suites"])
             self.assertGreaterEqual(len(item["conversation"]), 3)
@@ -684,7 +782,8 @@ class EnvironmentPackagingAndSharedContractTests(unittest.TestCase):
         self.assertTrue(
             {
                 "LEGACY_README_PERMISSION_SECTION_MISSING",
-                "LEGACY_README_PERMISSION_PROJECTION_MISMATCH",
+                "LEGACY_ROLE_AUTONOMY_DEFAULTED",
+                "LEGACY_PRIMARY_AGENT_MODE",
             }.issubset({item.code for item in result.findings if item.severity == "warning"})
         )
         self.assertFalse(any(error.startswith("subagents: must contain") for error in result.errors))

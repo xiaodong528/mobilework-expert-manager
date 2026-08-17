@@ -213,10 +213,58 @@ contract 1/2 receipt 不能
 
 ## 需求发现合同
 
-`scripts/manager-contract.json.requirementsDiscovery` schema 10 是 question ledger 字段、状态、提问渠道、
+`scripts/manager-contract.json.requirementsDiscovery` schema 14 是 question ledger 字段、状态、提问渠道、
 业务确认卡区段、轮次/决定预算、唯一例外轮、确认前禁用副作用、任务到 feature 映射及
-`full-card-first` 响应顺序的机器可读真源。Python 只验证该对象的结构、类型与跨字段不变量，不复制
-这些语义值；中文模板与领域内容保留在 `requirements-discovery.md`，不能写入机器合同。
+`full-card-first` 响应顺序的机器可读真源。一般业务模板与领域内容保留在
+`requirements-discovery.md`。创建位置门是有意的窄例外：其宿主 API payload、固定用户文案、label
+映射、fallback 和零副作用集合都属于安全边界，必须完整保存在 JSON 合同；Python validator 和回归
+测试是该 JSON 的严格 enforcement mirror，不是第二个可独立编辑的来源。`roleAutonomySelection`
+规定新建和结构性修改逐角色选择低、较低、中、较高、高，保存内部值并让角色自主度成为权限唯一
+基线；只读诊断、校验、安装和打包排除在强制选择之外。旧角色在这些只读/安装路径临时按中投影并
+产生 `LEGACY_ROLE_AUTONOMY_DEFAULTED`，结构性修改前必须补齐。任何字段变化必须在同一
+提交中同步 JSON、validator、SDK contract test、Reference 与 Eval，直至宿主提供可直接消费 JSON
+合同的统一 adapter 后再删除镜像校验。
+Follow-up owner 是 `apps/desktop/electron/mobilework` 的 Skill Runtime/host-adapter 维护者；对应任务是让
+宿主 adapter 直接消费 `creationTargetSelection` JSON 并删除 Python/测试中的逐字段 enforcement
+mirror。该任务以统一 adapter 成为 MobileWork 与 OpenCode 固定 sidecar 的唯一提问入口为完成条件。
+
+顶层 `agentSkillsSpecification` 是 Skill 规范来源合同：官方页面
+`https://agentskills.io/specification` 权威，官方仓库快照固定为
+`69ef37e9424c0a7ea9dd2293b559e43ec8176379`，`skills-ref` 与 quick validator 只作
+cross-check oracle。官方强制项失败必须阻断；500 行、渐进披露和浅层引用等建议项只报告 warning。
+CI 和 `test_official_skills_ref.py` 从此对象读取快照 SHA，不能在各处维护第二份常量；validator 与
+页面冲突时以页面为准并记录差异回归。MobileWork 可以增加更严格的安全、路径、语法和便携性门，
+但不得接受官方页面判定无效的 Skill。
+
+顶层 `expertRuntimeProjection` 是专家 command 与 Agent 运行字段的机器真源。所有 command 的
+`agent` 固定指向唯一 `mode: all` 智能体，`subtask` 固定为 `true`。Agent 步数正式字段只有
+`steps`；`max_turns`、`maxTurns` 仅作旧 manifest 输入兼容，`maxSteps` 已弃用并拒绝。新生成包
+拒绝 `temperature`、`top_p`（包括藏入 `options` 的同名键）；旧包只在未结构性修改时兼容读取并
+报告 warning。generator、validator、Reference 与 Eval 必须消费或严格镜像该对象，不能各自扩展。
+
+`requirementsDiscovery.capabilityImplementationMapping` 是能力资源动态选型真源，
+`defaultMode` 固定为 `manager-selects-minimal-fit`，`rolePresenceCreatesResource` 固定为 `false`。
+管理器可从用户目标、角色职责、流程、质量要求或可信资料提出候选，但职责、流程和质量门只能是
+候选证据，不能直接投影资源。每项候选必须有稳定业务名称、可观察运行行为和可信 provenance；
+不得发明业务规则、阈值、外部读写或副作用。结果为 `none`、`skill`、`custom-tool` 或
+`opencode-plugin`：Skill 承载可复用方法、清单、SOP、指导材料和 Python/Shell 脚本包；custom tool
+是 Agent 主动调用的确定性 JS/TS；Plugin 用于事件监听、工具执行前后拦截或运行时行为修改，并且
+是 package-wide 资源；外部系统访问继续使用 MCP。
+
+该映射优先选择运行权限最小的形态；同一运行职责只生成一个资源，不同且均已确认的运行职责才
+能组合。同一能力只创建一份，多角色通过完整名称或所有权引用。Skill 使用语义 kebab-case，不
+强制专家或角色前缀；custom tool 和本地 Plugin 使用包 slug 命名空间。npm Plugin 必须来自可信、
+真实存在且精确锁定版本的包，不能虚构名称或版本。没有适合固化的能力时，顶层和角色 `skills[]`
+为空或省略、保留空 `.opencode/skills/`、业务 `SKILL.md` 为零，且不生成 tool、Plugin 或
+`opencode.json.plugin`。旧 purpose schema 的前缀与内部 `<slug>-reference-<alias>` fallback 继续
+保留，不能把业务 Skill 的语义命名策略反向套到兼容资源。
+
+业务确认卡确认能力名称、使用范围、触发或调用方式、输入输出、可见副作用、权限/成本/运行前提、
+质量门和当前实现状态。用户委托管理器选择技术载体；映射完全落在已确认边界内时不增加技术类型
+确认。若映射发现新的自动触发、外写、联网、权限、依赖、成本或 Runtime 前提，
+`materialMappingChangeAction` 使旧确认失效并执行 `full-card-first`，此前零写入。整卡确认只授权
+生成当前专家包资源，不授权安装、启用、联网下载、外部连接、发布或执行生成代码。生成后的业务
+Agent 在普通运行中不得修改专家包。
 
 `decisionIntroduction` 在依赖收敛和 question frontier 之前限定何时可以新增 material decision。单纯“付费推理”、用户技术词或假想未来
 外部能力不足以派生新的外发问题；需要用户明确现在决定该边界，或可信证据证明具体当前候选/执行
@@ -268,11 +316,15 @@ URL、配置、凭据、字段映射等实现绑定。`candidateEvidence` 要求
 阈值。`authorityAnswerWithoutComputableRule` 要求来源回答后若材料仍无可计算规则，来源保持 answered，
 原规则值保持 open/asked；重算前沿后只询问获授权的显式数值、比例、公式或可计算规则，不重问来源、
 不请求整卡确认，也不改变目标。`presentationBoundary` 把业务卡、provenance 和当前整卡确认前的卡后提问统一限制为业务展示面：
-question-ready 的可信业务候选可使用稳定业务标签和可观察差异，但内部权限/自主度枚举、翻译后的
-等级标签、机器标识以及 provider ID、URL、配置、凭据、字段映射等实现绑定细节都延后。业务卡仍须
+question-ready 的可信业务候选可使用稳定业务标签和可观察差异，但内部权限/自主度枚举、机器标识
+以及 provider ID、URL、配置、凭据、字段映射等实现绑定细节都延后。逐角色选择权限自主度时显示
+低、较低、中、较高、高及其可观察影响，是翻译后等级标签的唯一默认例外。业务卡仍须
 写清决策权、固定与可选步骤、确认点、副作用以及停止/返工/升级条件。用户已经给出的技术词只可作为
-provenance 事实保留，不得借此提前展开实现细节。`capabilityDisclosure` 要求业务卡写清业务能力名称
-与角色归属，而机器 Skill 标识只进入当前整卡确认后的开发细节。
+provenance 事实保留，不得借此提前展开实现细节。`capabilityDisclosure.businessCard` 必须与
+`capabilityImplementationMapping.authorization.cardMustConfirm` 完全一致，写清能力名称、使用范围、
+触发/调用、输入输出、可见副作用、权限/成本/运行前提、质量门和实现状态。Skill、Custom Tool、
+Plugin 的机器标识与技术载体类型只进入当前整卡确认后的开发细节；边界不变时由管理器选型，无需追加
+一次技术类型确认。
 `presentationBoundary.externalEntryDiscovery` 将“是否存在真实、可用且经核验的业务入口”和入口的
 实现渠道分开：当前整卡确认前，Agent 编写的问题只询问业务入口是否存在，不枚举 Connector、MCP、
 URL 或启动命令；用户已经提供的技术词仍只能作为 provenance 事实保留。具体渠道选择和参数收集必须
@@ -287,6 +339,22 @@ URL 或启动命令；用户已经提供的技术词仍只能作为 provenance �
 `questionChannelEvidence` 明确区分 Agent 记账与宿主证据：`asked_via` 只说明会话内计划使用的渠道；
 “每个决定只走一个提问渠道”必须由覆盖完整的 host question-channel ledger 证明。宿主未提供完整事件
 时结果只能是 `not-verified`，Skill 文本或 assistant 自述都不能替代 host evidence。
+
+`creationTargetSelection` 是当前整卡确认后的独立创建位置门，只适用于新建单专家、专家团和资料转
+新专家。它不进入 question ledger、不消耗发现轮次或决定预算，并绑定当前整卡确认版本；设计变化
+同时使旧确认和旧位置选择失效。优先使用宿主的 `AskUserQuestion`、`question` 或其他等价单选+自定义
+输入能力；OpenCode/MobileWork 请求形状与固定 `QuestionInfo` 一致，`question.replied` 从
+`properties.answers[0][0]` 取唯一 label 后映射 target。所有等价提问能力均不可用时，必须在正文提出同一个问题、
+两个固定选项和其他绝对父目录入口并等待回复，不能默认选择。唯一有效回答前环境检查、进程、文件
+写入、联网/数据外发、Plugin/MCP、权限扩大、generator 和 validation 均被阻止；多选、自定义父目录
+无效与最终目标逃逸分别返回 `CREATION_TARGET_ANSWER_AMBIGUOUS`、
+`CREATION_TARGET_PATH_INVALID` 与 `TARGET_OUTSIDE_ROOT`。自定义值是已存在的绝对父
+目录，最终目标为 `<parent>/<slug>`，根、symlink、Windows reparse point、特殊文件和路径逃逸均被
+拒绝，覆盖已有 slug 仍需独立 `--force` 确认。`ExecutionContext` version 2 以 `targetMode` 记录显式
+选择，同时保留 `workspaceRoot`、`outputRoot` 和 `pathSource`；没有显式 target 时保持旧宿主解析语义。
+`my-experts` 是兼容接口名，不是旧目录名：MobileWork 使用宿主注入的
+`MOBILEWORK_MY_EXPERTS_DIR`，独立宿主默认使用 `<home>/.mobilework/experts/personal`；旧
+`<home>/.mobilework/my-experts` 仅用于 MobileWork 迁移，不接受新建写入。
 
 `reservedCommands` 是命令保留名真源。生成器和 validator 从经验证的 host capability 解释命令注册表，
 缺少该证据时至少拒绝合同列出的已知 server built-in；不得在 Python 模块中维护另一份名称副本或把
@@ -321,6 +389,11 @@ command、execution-context 检查前返回 schema v2 `ENVIRONMENT_SIDECAR_REQUI
 
 以下退出码是 schema v2 全入口迁移完成后的目标合同。当前 Candidate 只在已经集中迁移的入口
 执行该映射；未迁移入口不得据此宣称统一 CLI 合同已完成。
+
+集中 CLI emitter 在写入真实 `sys.stdout` 或 `sys.stderr` 前按机器合同将流重新配置为 UTF-8，
+使 human/JSON 输出及脱敏诊断不依赖 Windows ambient code page。测试或嵌入调用方显式传入的
+`TextIO` 不会被重配置，其编码与解码仍由该调用方负责。CI 的 `PYTHONUTF8=1` 固定文件读取和
+子进程默认编码，是宿主环境门，不替代 emitter 的标准流合同。
 
 - `0`：请求的 gate 通过；
 - `1`：合同或安全 finding；

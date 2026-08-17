@@ -9,6 +9,7 @@ import math
 import os
 import re
 import xml.etree.ElementTree as ET
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlparse
@@ -22,19 +23,25 @@ OPENCODE_SCHEMA = "https://opencode.ai/config.json"
 OPENCODE_PACKAGE_ROOT_KEYS = frozenset(
     {"$schema", "agent", "mcp", "plugin", "references", "instructions", "lsp"}
 )
+CUSTOM_TOOL_ENTRY_KEYS = frozenset({"path", "content", "purpose"})
 AGENT_STEP_KEYS = ("steps", "max_turns", "maxTurns")
 AGENT_OPTIONAL_RUNTIME_KEYS = (
     "model",
     "variant",
-    "temperature",
-    "top_p",
     "hidden",
     "options",
+)
+LEGACY_AGENT_SAMPLING_KEYS = ("temperature", "top_p")
+AGENT_READ_RUNTIME_KEYS = (
+    *AGENT_OPTIONAL_RUNTIME_KEYS,
+    *LEGACY_AGENT_SAMPLING_KEYS,
 )
 AGENT_MANIFEST_KEYS = frozenset(
     {
         "id",
         "mode",
+        # MobileWork role contract; projected only through generated permission.
+        "autonomy",
         "name",
         # MobileWork legacy input fallback only; never projected as an Agent key.
         "title",
@@ -44,7 +51,7 @@ AGENT_MANIFEST_KEYS = frozenset(
         "avatar_url",
         "color",
         *AGENT_STEP_KEYS,
-        *AGENT_OPTIONAL_RUNTIME_KEYS,
+        *AGENT_READ_RUNTIME_KEYS,
         "responsibilities",
         "workflow",
         "quality_gates",
@@ -66,7 +73,7 @@ OPENCODE_PACKAGE_AGENT_KEYS = frozenset(
         "mode",
         "description",
         "steps",
-        *AGENT_OPTIONAL_RUNTIME_KEYS,
+        *AGENT_READ_RUNTIME_KEYS,
         "permission",
     }
 )
@@ -80,7 +87,7 @@ AGENT_MARKDOWN_KEYS = frozenset(
         "color",
         "avatar_url",
         "steps",
-        *AGENT_OPTIONAL_RUNTIME_KEYS,
+        *AGENT_READ_RUNTIME_KEYS,
         "permission",
     }
 )
@@ -199,20 +206,70 @@ def _validate_json_value(value: Any, field: str) -> None:
     raise ContractError(f"{field}: must contain only JSON values")
 
 
+@lru_cache(maxsize=1)
+def expert_runtime_projection_policy() -> dict[str, Any]:
+    """Read the strict Agent/command projection policy from its machine SSOT."""
+
+    import manager_contract
+
+    return manager_contract.load_policy()["expertRuntimeProjection"]
+
+
+def agent_sampling_option_paths(
+    value: Any,
+    field: str,
+) -> list[str]:
+    """Return nested options paths that try to reintroduce sampling controls."""
+
+    forbidden = set(
+        expert_runtime_projection_policy()["agent"]["forbiddenSamplingFields"]
+    )
+    paths: list[str] = []
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            paths.extend(agent_sampling_option_paths(item, f"{field}[{index}]"))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            path = f"{field}.{key}"
+            if key in forbidden:
+                paths.append(path)
+            paths.extend(agent_sampling_option_paths(item, path))
+    return paths
+
+
 def normalize_agent_runtime_options(
     role: dict[str, Any],
     field: str,
     *,
     expected_mode: str,
     default_steps: int,
+    allow_legacy_sampling: bool = False,
 ) -> dict[str, Any]:
     """Validate and normalize package-owned OpenCode Agent runtime options."""
 
-    forbidden = sorted(set(role) & FORBIDDEN_AGENT_MANIFEST_KEYS)
+    agent_policy = expert_runtime_projection_policy()["agent"]
+    step_keys = (
+        agent_policy["canonicalStepField"],
+        *agent_policy["legacyStepInputFields"],
+    )
+    sampling_keys = tuple(agent_policy["forbiddenSamplingFields"])
+    forbidden = sorted(
+        set(role)
+        & (
+            set(FORBIDDEN_AGENT_MANIFEST_KEYS)
+            | set(agent_policy["deprecatedStepFields"])
+        )
+    )
     if forbidden:
         raise ContractError(
             f"{field}: unsupported Agent fields {', '.join(forbidden)}; "
             "MobileWork owns prompt and enablement through generated package content"
+        )
+    sampling_fields = sorted(set(role) & set(sampling_keys))
+    if sampling_fields and not allow_legacy_sampling:
+        raise ContractError(
+            f"{field}: unsupported Agent fields {', '.join(sampling_fields)}; "
+            "MobileWork expert packages inherit sampling behavior from the model/provider"
         )
     unexpected = sorted(set(role) - AGENT_MANIFEST_KEYS)
     if unexpected:
@@ -222,7 +279,7 @@ def normalize_agent_runtime_options(
         )
 
     declared_steps: list[tuple[str, int]] = []
-    for key in AGENT_STEP_KEYS:
+    for key in step_keys:
         if key not in role:
             continue
         value = role[key]
@@ -247,7 +304,7 @@ def normalize_agent_runtime_options(
             raise ContractError(f"{field}.variant: requires model")
         result["variant"] = variant
 
-    for key in ("temperature", "top_p"):
+    for key in sampling_keys:
         if key not in role:
             continue
         value = role[key]
@@ -272,6 +329,13 @@ def normalize_agent_runtime_options(
         if not isinstance(options, dict) or not options:
             raise ContractError(f"{field}.options: must be a non-empty JSON object")
         _validate_json_value(options, f"{field}.options")
+        sampling_paths = agent_sampling_option_paths(options, f"{field}.options")
+        if sampling_paths and not allow_legacy_sampling:
+            raise ContractError(
+                f"{field}.options: sampling fields are unsupported at "
+                + ", ".join(sampling_paths)
+                + "; MobileWork expert packages inherit sampling behavior from the model/provider"
+            )
         result["options"] = options
     return result
 

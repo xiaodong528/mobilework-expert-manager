@@ -211,7 +211,11 @@ class PackageContractTests(unittest.TestCase):
             }
         ]
         extensions["custom_tools"] = [
-            {"path": "runtime-check.ts", "content": "export default {}"}
+            {
+                "path": "runtime-check.ts",
+                "purpose": "执行 runtime canary 的确定性检查。",
+                "content": "export default {}",
+            }
         ]
         extensions["plugins"] = {
             "local": [
@@ -763,7 +767,12 @@ class PackageContractTests(unittest.TestCase):
             )
             result = self.run_validate(package)
             self.assertEqual(result.returncode, 1)
-            self.assertIn("symlink is not allowed", result.stdout)
+            expected = (
+                "INPUT_REPARSE_POINT_FORBIDDEN"
+                if os.name == "nt"
+                else "symlink is not allowed"
+            )
+            self.assertIn(expected, result.stdout)
 
     def test_avatar_content_and_svg_safety_are_enforced(self) -> None:
         for name, content, expected in [
@@ -860,11 +869,16 @@ class PackageContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         package = self.root / "out" / "contract-review-expert"
         if hasattr(os, "symlink"):
+            expected = (
+                "INPUT_REPARSE_POINT_FORBIDDEN"
+                if os.name == "nt"
+                else "symlink is not allowed"
+            )
             outside = self.root / "outside.txt"
             outside.write_text("outside\n", encoding="utf-8")
             link = package / ".opencode/skills/contract-review-expert-common-delivery-quality/link.txt"
             link.symlink_to(outside)
-            with self.assertRaisesRegex(SystemExit, "symlink is not allowed"):
+            with self.assertRaisesRegex(SystemExit, expected):
                 PACKAGER.make_zip(package, self.root / "dist-symlink")
             link.unlink()
             package_link = self.root / "package-link"
@@ -883,7 +897,7 @@ class PackageContractTests(unittest.TestCase):
                 check=False,
             )
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("symlink is not allowed", rejected.stdout)
+            self.assertIn(expected, rejected.stdout)
         extra = package / ".opencode/tools/undeclared.ts"
         extra.parent.mkdir(parents=True, exist_ok=True)
         extra.write_text("unexpected\n", encoding="utf-8")

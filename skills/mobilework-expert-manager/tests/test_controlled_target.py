@@ -51,7 +51,9 @@ class ControlledTargetTests(unittest.TestCase):
         env = os.environ.copy()
         env["HOME"] = str(self.home)
         env["MOBILEWORK_EXPERT_MANAGER_HOST"] = "mobilework"
-        env["MOBILEWORK_MY_EXPERTS_DIR"] = str(self.home / ".mobilework" / "my-experts")
+        env["MOBILEWORK_MY_EXPERTS_DIR"] = str(
+            self.home / ".mobilework" / "experts" / "personal"
+        )
         return subprocess.run(
             [sys.executable, str(CREATE), "--manifest", str(self.manifest), *extra],
             env=env,
@@ -90,7 +92,13 @@ class ControlledTargetTests(unittest.TestCase):
     def generate_target(self) -> Path:
         result = self.run_generator()
         self.assertEqual(result.returncode, 0, result.stderr)
-        return self.home / ".mobilework" / "my-experts" / "contract-review-expert"
+        return (
+            self.home
+            / ".mobilework"
+            / "experts"
+            / "personal"
+            / "contract-review-expert"
+        )
 
     def temporary_manifest(self, name: str, data: dict[str, object]) -> Path:
         directory = self.root / name
@@ -100,7 +108,13 @@ class ControlledTargetTests(unittest.TestCase):
         return path
 
     def test_controlled_target_rejects_source_manifest_in_place(self) -> None:
-        target = self.home / ".mobilework" / "my-experts" / "contract-review-expert"
+        target = (
+            self.home
+            / ".mobilework"
+            / "experts"
+            / "personal"
+            / "contract-review-expert"
+        )
         target.mkdir(parents=True)
         source_manifest = target / "expert.json"
         source_manifest.write_text(
@@ -122,7 +136,13 @@ class ControlledTargetTests(unittest.TestCase):
         self.assertIn("temporary manifest outside the source package", result.stderr)
 
     def test_controlled_target_rejects_a_different_output_parent(self) -> None:
-        target = self.home / ".mobilework" / "my-experts" / "contract-review-expert"
+        target = (
+            self.home
+            / ".mobilework"
+            / "experts"
+            / "personal"
+            / "contract-review-expert"
+        )
         env = os.environ.copy()
         env["HOME"] = str(self.home)
         env["MOBILEWORK_EXPERT_MANAGER_HOST"] = "mobilework"

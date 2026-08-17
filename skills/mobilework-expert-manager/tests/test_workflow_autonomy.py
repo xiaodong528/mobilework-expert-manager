@@ -17,6 +17,8 @@ TEAM_EXAMPLE = SKILL_ROOT / "evals" / "files" / "software-dev-team.expert.json"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(TESTS))
 
+import create_expert
+import manifest_contract
 import validate_expert
 import workflow_autonomy
 from generator_test_support import managed_generator_env
@@ -32,10 +34,25 @@ class WorkflowAutonomyTests(unittest.TestCase):
         self.temp.cleanup()
 
     def single_manifest(self) -> dict[str, object]:
-        return json.loads(load_spec_text("legacy-expert-json"))
+        data = json.loads(load_spec_text("legacy-expert-json"))
+        data["agent"]["mode"] = "all"
+        data["agent"]["autonomy"] = "bounded"
+        data["agent"]["permission"] = {}
+        data["agent"].pop("tools", None)
+        return data
 
     def team_manifest(self) -> dict[str, object]:
-        return json.loads(TEAM_EXAMPLE.read_text(encoding="utf-8"))
+        data = json.loads(TEAM_EXAMPLE.read_text(encoding="utf-8"))
+        data["primary_agent"]["mode"] = "all"
+        data["primary_agent"]["autonomy"] = "bounded"
+        data["primary_agent"]["permission"] = {}
+        data["primary_agent"].pop("tools", None)
+        for role in data["subagents"]:
+            role["mode"] = "subagent"
+            role["autonomy"] = "bounded"
+            role["permission"] = {}
+            role.pop("tools", None)
+        return data
 
     def make_unified(self, data: dict[str, object]) -> None:
         data.pop("common_skills", None)
@@ -58,12 +75,14 @@ class WorkflowAutonomyTests(unittest.TestCase):
         agent = data["agent"]
         assert isinstance(agent, dict)
         agent["permission"] = {}
+        agent["custom_tools"] = ["validate.ts"]
         agent.pop("tools", None)
         runtime = data.setdefault("runtime_extensions", {})
         assert isinstance(runtime, dict)
         runtime.setdefault("custom_tools", []).append(
             {
                 "path": "validate.ts",
+                "purpose": "按已确认合同规则返回确定性校验结果。",
                 "content": "export default async () => ({ ok: true })\n",
             }
         )
@@ -288,11 +307,11 @@ class WorkflowAutonomyTests(unittest.TestCase):
         self.assertEqual(
             [workflow_autonomy.autonomy_prefix(level) for level in workflow_autonomy.AUTONOMY_LEVELS],
             [
-                "【自主度：极低】",
                 "【自主度：低】",
+                "【自主度：较低】",
                 "【自主度：中】",
+                "【自主度：较高】",
                 "【自主度：高】",
-                "【自主度：极高】",
             ],
         )
         override = normalized[0]["phases"][2]["agent_overrides"]["contract-reviewer"]
@@ -309,25 +328,26 @@ class WorkflowAutonomyTests(unittest.TestCase):
         command = (package / ".opencode/commands/review-contract.md").read_text(encoding="utf-8")
         for expected in (
             "agent: contract-reviewer",
-            "【最高生效自主度：高】 按照合同审查 workflow 完成校验和风险判断",
+            "subtask: true",
+            "【最高生效自主度：较高】 按照合同审查 workflow 完成校验和风险判断",
             "用户要求：$ARGUMENTS",
             "Workflow 声明默认自主度：中：可在明确边界内选择方法 (`bounded`)",
-            "Workflow 最高生效自主度：高：可根据目标灵活安排，但关键决定需确认 (`guided`)",
-            "**【最高生效自主度：低】 确定性校验**",
-            "Phase 默认生效自主度：极低：全程照脚本执行，不能自行换方法 (`scripted`)",
-            "Phase 最高生效自主度：低：按固定步骤执行，只能处理预设分支 (`fixed`)",
-            "Agent `contract-reviewer`：【自主度：低】",
-            "生效自主度：低：按固定步骤执行，只能处理预设分支 (`fixed`)",
+            "Workflow 最高生效自主度：较高：可根据目标灵活安排，但关键决定需确认 (`guided`)",
+            "**【最高生效自主度：较低】 确定性校验**",
+            "Phase 默认生效自主度：低：全程照脚本执行，不能自行换方法 (`scripted`)",
+            "Phase 最高生效自主度：较低：按固定步骤执行，只能处理预设分支 (`fixed`)",
+            "Agent `contract-reviewer`：【自主度：较低】",
+            "生效自主度：较低：按固定步骤执行，只能处理预设分支 (`fixed`)",
             "仅在用户明确批准后才可执行 break-glass 例外",
             "记录偏离原因",
             "自主度来源：Agent override",
             "execution 来源：Phase",
             "custom-tool",
             "validate.ts",
-            "**【最高生效自主度：高】 风险判断**",
-            "Agent `contract-reviewer`：【自主度：高】",
+            "**【最高生效自主度：较高】 风险判断**",
+            "Agent `contract-reviewer`：【自主度：较高】",
             "自主度来源：Phase",
-            "高：可根据目标灵活安排，但关键决定需确认 (`guided`)",
+            "较高：可根据目标灵活安排，但关键决定需确认 (`guided`)",
             "验收标准",
             "停止、升级与确认",
         ):
@@ -348,12 +368,38 @@ class WorkflowAutonomyTests(unittest.TestCase):
             self.assertIn("中：可在明确边界内选择方法", text)
             self.assertIn("确定性校验", text)
             self.assertNotIn("【自主度：", text)
-        self.assertIn("低：按固定步骤执行，只能处理预设分支", role_skill)
+        self.assertIn("较低：按固定步骤执行，只能处理预设分支", role_skill)
         self.assertIn("确定性校验", role_skill)
         self.assertNotIn("【自主度：", role_skill)
         config = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
         self.assertNotIn("autonomy", config)
         self.assertNotIn("command", config)
+
+    def test_previous_false_workflow_subtask_remains_readable(self) -> None:
+        data = self.single_manifest()
+        self.add_single_contract(data)
+        package, generated = self.generate("legacy-false-workflow", data)
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+
+        command_path = package / ".opencode/commands/review-contract.md"
+        command_path.write_text(
+            command_path.read_text(encoding="utf-8").replace(
+                "subtask: true\n",
+                "subtask: false\n",
+            ),
+            encoding="utf-8",
+        )
+
+        validated = validate_expert.validate_package(package)
+        self.assertTrue(validated.ok, validated.errors)
+        self.assertTrue(
+            any(
+                item.code == "LEGACY_COMMAND_ROUTING"
+                and item.evidence == "subtask=false"
+                for item in validated.findings
+            ),
+            validated.findings,
+        )
 
     def test_team_projects_effective_autonomy_to_primary_and_members(self) -> None:
         data = self.team_manifest()
@@ -367,6 +413,8 @@ class WorkflowAutonomyTests(unittest.TestCase):
         architect = (package / ".opencode/agents/architect.md").read_text(encoding="utf-8")
         qa = (package / ".opencode/agents/qa-reviewer.md").read_text(encoding="utf-8")
         command = (package / ".opencode/commands/review-solution.md").read_text(encoding="utf-8")
+        self.assertIn("agent: delivery-director", command)
+        self.assertIn("subtask: true", command)
         self.assertIn("Agent override `architect`", primary)
         self.assertIn("prompt 必须包含该 Agent 的生效自主度", primary)
         self.assertIn("每位团员在自己的子任务会话中维护 Todo", primary)
@@ -381,18 +429,18 @@ class WorkflowAutonomyTests(unittest.TestCase):
         self.assertIn("创建自己的会话 Todo", product)
         self.assertIn("同一角色可能在一个 parallel Phase 中有多个独立实例", product)
         self.assertIn("所有实例共享本角色的自主度、权限和", product)
-        self.assertIn("高：可根据目标灵活安排，但关键决定需确认 (`guided`)", product)
-        self.assertIn("低：按固定步骤执行，只能处理预设分支 (`fixed`)", architect)
-        self.assertIn("高：可根据目标灵活安排，但关键决定需确认 (`guided`)", qa)
-        self.assertIn("**【最高生效自主度：高】 并行评审**", command)
+        self.assertIn("较高：可根据目标灵活安排，但关键决定需确认 (`guided`)", product)
+        self.assertIn("较低：按固定步骤执行，只能处理预设分支 (`fixed`)", architect)
+        self.assertIn("较高：可根据目标灵活安排，但关键决定需确认 (`guided`)", qa)
+        self.assertIn("**【最高生效自主度：较高】 并行评审**", command)
         self.assertIn("Workflow 最高生效自主度", command)
         self.assertIn("每个角色至少创建一个实例", command)
         self.assertIn("分别决定每个角色的实例数与任务范围", command)
         self.assertIn("两级 fan-in", command)
         for agent_id, prefix in (
-            ("product-strategist", "【自主度：高】"),
-            ("architect", "【自主度：低】"),
-            ("qa-reviewer", "【自主度：高】"),
+            ("product-strategist", "【自主度：较高】"),
+            ("architect", "【自主度：较低】"),
+            ("qa-reviewer", "【自主度：较高】"),
         ):
             marker = f"Agent `{agent_id}`：{prefix}"
             self.assertEqual(command.count(marker), 1, command)
@@ -768,6 +816,298 @@ class WorkflowAutonomyTests(unittest.TestCase):
                     result.stderr,
                 )
 
+    def test_command_and_skill_names_are_disjoint_for_both_schemas_and_sources(
+        self,
+    ) -> None:
+        legacy_skill = "contract-review-expert-common-delivery-quality"
+        cases: list[tuple[str, dict[str, object], str]] = []
+
+        legacy_workflow = self.single_manifest()
+        self.add_single_contract(legacy_workflow)
+        legacy_workflow["workflows"][0]["command"]["name"] = legacy_skill
+        cases.append(
+            (
+                "legacy-workflow",
+                legacy_workflow,
+                f"workflows[0].command.name: conflicts with skill {legacy_skill}",
+            )
+        )
+
+        legacy_runtime = self.single_manifest()
+        legacy_extensions = legacy_runtime["runtime_extensions"]
+        assert isinstance(legacy_extensions, dict)
+        legacy_extensions["commands"] = [
+            {"name": legacy_skill, "template": "Review the contract."}
+        ]
+        cases.append(
+            (
+                "legacy-runtime",
+                legacy_runtime,
+                "runtime_extensions.commands[0].name: "
+                f"conflicts with skill {legacy_skill}",
+            )
+        )
+
+        for source in ("workflow", "runtime"):
+            unified = self.single_manifest()
+            self.make_unified(unified)
+            unified["skills"] = [
+                {
+                    "name": "review-method",
+                    "origin": "managed",
+                    "edit_policy": "managed",
+                }
+            ]
+            agent = unified["agent"]
+            assert isinstance(agent, dict)
+            agent["skills"] = ["review-method"]
+            if source == "workflow":
+                self.add_single_contract(unified)
+                unified["workflows"][0]["command"]["name"] = "review-method"
+                field = "workflows[0].command.name"
+            else:
+                runtime = unified["runtime_extensions"]
+                assert isinstance(runtime, dict)
+                runtime["commands"] = [
+                    {"name": "review-method", "template": "Review the contract."}
+                ]
+                field = "runtime_extensions.commands[0].name"
+            cases.append(
+                (
+                    f"unified-{source}",
+                    unified,
+                    f"{field}: conflicts with skill review-method",
+                )
+            )
+
+        for name, data, expected in cases:
+            with self.subTest(name=name):
+                issues = [
+                    str(issue)
+                    for issue in manifest_contract.collect_manifest_issues(data)
+                ]
+                self.assertIn(expected, issues)
+
+        distinct = self.single_manifest()
+        self.make_unified(distinct)
+        distinct["skills"] = [
+            {
+                "name": "review-method",
+                "origin": "managed",
+                "edit_policy": "managed",
+            }
+        ]
+        agent = distinct["agent"]
+        assert isinstance(agent, dict)
+        agent["skills"] = ["review-method"]
+        agent["name"] = "review-method"
+        agent["display_name"] = "manual-check"
+        self.add_single_contract(distinct)
+        runtime = distinct["runtime_extensions"]
+        assert isinstance(runtime, dict)
+        runtime["commands"] = [
+            {"name": "manual-check", "template": "Review the contract."}
+        ]
+        self.assertFalse(
+            manifest_contract.collect_runtime_name_issues(distinct)
+        )
+
+        for name, data, expected in cases:
+            with self.subTest(generator=name):
+                package, result = self.generate(f"command-skill-{name}", data)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse(package.exists())
+
+        rebuild_data = self.single_manifest()
+        rebuild_extensions = rebuild_data["runtime_extensions"]
+        assert isinstance(rebuild_extensions, dict)
+        rebuild_extensions["commands"] = [
+            {"name": "manual-check", "template": "Review the contract."}
+        ]
+        rebuilt_package, result = self.generate("rebuild-command-skill", rebuild_data)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        revision = create_expert.calculate_package_revision(rebuilt_package)
+        source_manifest = self.root / "rebuild-command-skill/expert.json"
+        rebuild_extensions["commands"][0]["name"] = legacy_skill
+        source_manifest.write_text(
+            json.dumps(rebuild_data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        environment = managed_generator_env(rebuilt_package.parent)
+        environment[create_expert.CONTROLLED_TARGET_ENV] = str(rebuilt_package)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(source_manifest),
+                "--output-dir",
+                str(rebuilt_package.parent),
+                "--force",
+                "--expected-revision",
+                revision,
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(cases[1][2], result.stderr)
+        self.assertEqual(
+            create_expert.calculate_package_revision(rebuilt_package),
+            revision,
+        )
+
+    def test_agent_ids_are_disjoint_from_command_and_skill_names(self) -> None:
+        agent_id = "contract-reviewer"
+        cases: list[tuple[str, dict[str, object], str]] = []
+
+        workflow_command = self.single_manifest()
+        self.add_single_contract(workflow_command)
+        workflow_command["workflows"][0]["command"]["name"] = agent_id
+        cases.append(
+            (
+                "workflow-command-agent",
+                workflow_command,
+                f"workflows[0].command.name: conflicts with agent {agent_id}",
+            )
+        )
+
+        runtime_command = self.single_manifest()
+        runtime = runtime_command["runtime_extensions"]
+        assert isinstance(runtime, dict)
+        runtime["commands"] = [
+            {"name": agent_id, "template": "Review the contract."}
+        ]
+        cases.append(
+            (
+                "runtime-command-agent",
+                runtime_command,
+                "runtime_extensions.commands[0].name: "
+                f"conflicts with agent {agent_id}",
+            )
+        )
+
+        unified_agent_skill = self.single_manifest()
+        self.make_unified(unified_agent_skill)
+        unified_agent_skill["skills"] = [
+            {
+                "name": agent_id,
+                "origin": "managed",
+                "edit_policy": "managed",
+            }
+        ]
+        agent = unified_agent_skill["agent"]
+        assert isinstance(agent, dict)
+        agent["skills"] = [agent_id]
+        cases.append(
+            (
+                "unified-agent-skill",
+                unified_agent_skill,
+                f"agent.id: conflicts with skill {agent_id}",
+            )
+        )
+
+        legacy_skill = "contract-review-expert-common-delivery-quality"
+        legacy_agent_skill = self.single_manifest()
+        legacy_agent = legacy_agent_skill["agent"]
+        assert isinstance(legacy_agent, dict)
+        legacy_agent["id"] = legacy_skill
+        permission = legacy_agent.get("permission")
+        assert isinstance(permission, dict)
+        permission["skill"] = {
+            "*": "deny",
+            legacy_skill: "allow",
+            f"contract-review-expert-{legacy_skill}-role-guidelines": "allow",
+            f"contract-review-expert-{legacy_skill}-clause-checklist": "allow",
+        }
+        cases.append(
+            (
+                "legacy-agent-skill",
+                legacy_agent_skill,
+                f"agent.id: conflicts with skill {legacy_skill}",
+            )
+        )
+
+        team_agent_skill = self.team_manifest()
+        self.make_unified(team_agent_skill)
+        subagents = team_agent_skill["subagents"]
+        assert isinstance(subagents, list)
+        subagent = subagents[0]
+        assert isinstance(subagent, dict)
+        subagent_id = subagent["id"]
+        assert isinstance(subagent_id, str)
+        team_agent_skill["skills"] = [
+            {
+                "name": subagent_id,
+                "origin": "managed",
+                "edit_policy": "managed",
+            }
+        ]
+        subagent["skills"] = [subagent_id]
+        cases.append(
+            (
+                "subagent-skill",
+                team_agent_skill,
+                f"subagents[0].id: conflicts with skill {subagent_id}",
+            )
+        )
+
+        for name, data, expected in cases:
+            with self.subTest(name=name):
+                issues = [
+                    str(issue)
+                    for issue in manifest_contract.collect_manifest_issues(data)
+                ]
+                self.assertIn(expected, issues)
+                package, result = self.generate(f"runtime-name-{name}", data)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse(package.exists())
+
+        rebuild_data = self.single_manifest()
+        rebuild_extensions = rebuild_data["runtime_extensions"]
+        assert isinstance(rebuild_extensions, dict)
+        rebuild_extensions["commands"] = [
+            {"name": "manual-check", "template": "Review the contract."}
+        ]
+        rebuilt_package, result = self.generate("rebuild-agent-name", rebuild_data)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        revision = create_expert.calculate_package_revision(rebuilt_package)
+        source_manifest = self.root / "rebuild-agent-name/expert.json"
+        rebuild_extensions["commands"][0]["name"] = agent_id
+        source_manifest.write_text(
+            json.dumps(rebuild_data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        environment = managed_generator_env(rebuilt_package.parent)
+        environment[create_expert.CONTROLLED_TARGET_ENV] = str(rebuilt_package)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE),
+                "--manifest",
+                str(source_manifest),
+                "--output-dir",
+                str(rebuilt_package.parent),
+                "--force",
+                "--expected-revision",
+                revision,
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(cases[1][2], result.stderr)
+        self.assertEqual(
+            create_expert.calculate_package_revision(rebuilt_package),
+            revision,
+        )
+
     def test_mcp_executor_requires_agent_ownership(self) -> None:
         data = self.single_manifest()
         self.add_single_contract(data)
@@ -835,7 +1175,7 @@ class WorkflowAutonomyTests(unittest.TestCase):
             "permission denies programming tool",
         ):
             self.normalize(data)
-        data["agent"]["permission"]["bash"] = {f"python3 {script_path} *": "allow"}
+        data["agent"]["permission"].pop("bash")
         self.assertEqual(self.normalize(data)[0]["phases"][0]["effective_autonomy"], "fixed")
 
     def test_programming_tool_requires_owned_resource_and_rejects_shell_controls(self) -> None:
@@ -862,19 +1202,19 @@ class WorkflowAutonomyTests(unittest.TestCase):
         targets = {
             "command description": (
                 ".opencode/commands/review-contract.md",
-                "【最高生效自主度：高】 按照合同审查 workflow 完成校验和风险判断",
+                "【最高生效自主度：较高】 按照合同审查 workflow 完成校验和风险判断",
             ),
             "command phase": (
                 ".opencode/commands/review-contract.md",
-                "【最高生效自主度：低】 确定性校验",
+                "【最高生效自主度：较低】 确定性校验",
             ),
             "command Agent": (
                 ".opencode/commands/review-contract.md",
-                "Agent `contract-reviewer`：【自主度：低】",
+                "Agent `contract-reviewer`：【自主度：较低】",
             ),
             "agent": (".opencode/agents/contract-reviewer.md", "中：可在明确边界内选择方法"),
             "common skill": (".opencode/skills/contract-review-expert-common-delivery-quality/SKILL.md", "中：可在明确边界内选择方法"),
-            "role skill": (".opencode/skills/contract-review-expert-contract-reviewer-role-guidelines/SKILL.md", "低：按固定步骤执行，只能处理预设分支"),
+            "role skill": (".opencode/skills/contract-review-expert-contract-reviewer-role-guidelines/SKILL.md", "较低：按固定步骤执行，只能处理预设分支"),
             "readme": ("README.md", "中：可在明确边界内选择方法"),
         }
         for index, (name, (relative, marker)) in enumerate(targets.items()):
@@ -894,6 +1234,66 @@ class WorkflowAutonomyTests(unittest.TestCase):
                     validation.errors,
                 )
 
+    def test_legacy_v2_projection_is_recomputed_and_tamper_checked(self) -> None:
+        data = self.single_manifest()
+        self.make_unified(data)
+        self.add_single_contract(data)
+        agent = data["agent"]
+        assert isinstance(agent, dict)
+        agent["mode"] = "primary"
+        agent.pop("autonomy")
+
+        workflows = validate_expert.normalized_autonomy_workflows(data)
+        all_projection = validate_expert.render_legacy_v2_workflow_projection(
+            workflow_autonomy.render_all_workflows(workflows)
+        )
+        role_projection = validate_expert.render_legacy_v2_workflow_projection(
+            workflow_autonomy.render_role_workflows(workflows, agent["id"])
+        )
+        workflow = workflows[0]
+        command = workflow["command"]
+        assert isinstance(command, dict)
+        command_projection = validate_expert.render_legacy_v2_workflow_projection(
+            validate_expert.renderers.render_frontmatter(
+                {
+                    "description": workflow_autonomy.workflow_command_description(
+                        workflow
+                    ),
+                    "agent": agent["id"],
+                },
+                workflow_autonomy.render_workflow_command(workflow),
+            )
+        )
+
+        (self.root / ".opencode/agents").mkdir(parents=True)
+        (self.root / ".opencode/commands").mkdir(parents=True)
+        (self.root / "README.md").write_text(all_projection, encoding="utf-8")
+        (self.root / f".opencode/agents/{agent['id']}.md").write_text(
+            role_projection + "\n" + all_projection,
+            encoding="utf-8",
+        )
+        command_path = self.root / f".opencode/commands/{command['name']}.md"
+        command_path.write_text(command_projection, encoding="utf-8")
+
+        result = validate_expert.Result()
+        validate_expert.check_workflow_projection_parity(self.root, data, result)
+        self.assertTrue(validate_expert.uses_full_legacy_role_contract(data))
+        self.assertEqual(result.errors, [])
+        self.assertTrue(
+            any(item.code == "LEGACY_COMMAND_ROUTING" for item in result.findings)
+        )
+
+        command_path.write_text(
+            command_projection.replace("执行标准", "被篡改标准", 1),
+            encoding="utf-8",
+        )
+        tampered = validate_expert.Result()
+        validate_expert.check_workflow_projection_parity(self.root, data, tampered)
+        self.assertTrue(
+            any("workflow command projection differs" in error for error in tampered.errors),
+            tampered.errors,
+        )
+
     def test_runtime_extension_command_keeps_original_description(self) -> None:
         data = self.single_manifest()
         runtime = data["runtime_extensions"]
@@ -911,6 +1311,8 @@ class WorkflowAutonomyTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("普通 command 说明", command)
+        self.assertIn("agent: contract-reviewer", command)
+        self.assertIn("subtask: true", command)
         self.assertNotIn("【自主度：", command)
         self.assertTrue(validate_expert.validate_package(package).ok)
 

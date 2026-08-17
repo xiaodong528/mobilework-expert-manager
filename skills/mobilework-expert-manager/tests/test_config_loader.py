@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -664,6 +665,45 @@ class ConfigLoaderTests(unittest.TestCase):
             "private sidecar materialization failed",
         )
         self.assertNotIn("sidecar-copy-canary", str(raised.exception))
+
+    def test_windows_sidecar_identity_ignores_ctime_alias_only(self) -> None:
+        expected = (1, 2, stat.S_IFREG, 3, 4, 5, 0x20)
+        same_file = (1, 2, stat.S_IFREG, 3, 4, 99, 0)
+        changed_file = (1, 2, stat.S_IFREG, 3, 5, 99, 0)
+        reparse_file = (
+            1,
+            2,
+            stat.S_IFREG,
+            3,
+            4,
+            99,
+            config_loader.safe_input.REPARSE_POINT_ATTRIBUTE,
+        )
+        with patch.object(config_loader.os, "name", "nt"):
+            self.assertFalse(
+                config_loader._sidecar_metadata_matches(expected, same_file)
+            )
+            self.assertTrue(
+                config_loader._sidecar_metadata_matches(
+                    expected,
+                    same_file,
+                    allow_windows_ctime_alias=True,
+                )
+            )
+            self.assertFalse(
+                config_loader._sidecar_metadata_matches(
+                    expected,
+                    changed_file,
+                    allow_windows_ctime_alias=True,
+                )
+            )
+            self.assertFalse(
+                config_loader._sidecar_metadata_matches(
+                    expected,
+                    reparse_file,
+                    allow_windows_ctime_alias=True,
+                )
+            )
 
 
 if __name__ == "__main__":

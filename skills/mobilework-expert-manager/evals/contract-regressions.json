@@ -9,7 +9,7 @@
       "files": [],
       "expectations": [
         "Runs check_environment.py, reads hostMode=workspace, and creates the package only under <cwd>/<slug>.",
-        "Does not modify root .opencode, opencode.json or mobilework.jsonc and does not write under <home>/.mobilework/my-experts.",
+        "Does not modify root .opencode, opencode.json or mobilework.jsonc and writes to neither <home>/.mobilework/experts/personal nor the legacy migration-only <home>/.mobilework/my-experts directory.",
         "Creates expert.json as the only package manifest.",
         "Creates exactly one primary agent and no subagent entries.",
         "Generated single expert Markdown frontmatter includes name, displayName, profession, steps, mode, color, and permission, and does not emit maxTurns.",
@@ -231,15 +231,15 @@
     },
     {
       "id": 15,
-      "name": "reject-arbitrary-custom-output-directory",
-      "prompt": "创建一个合同审查专家。我明确要求生成到临时目录 custom-output，不要放进 MobileWork 我的专家目录。",
-      "expected_output": "The skill refuses the arbitrary destination because --output-dir is assertion-only, reports OUTPUT_ROOT_MISMATCH, and does not generate a package until the user accepts the host-resolved root.",
+      "name": "require-explicit-safe-custom-output-selection",
+      "prompt": "在已确认业务卡和位置 question 回答之后测试自定义创建目录。先只传 --output-dir <existing-custom-parent>，再显式传 --creation-target custom --output-dir <existing-custom-parent>；同时覆盖相对路径、缺失目录、文件系统根、symlink、Windows reparse point 和特殊文件。",
+      "expected_output": "Assertion-only --output-dir remains rejected, while explicit custom mode accepts only an existing safe absolute parent and creates <parent>/<slug> after the location question reply.",
       "files": [],
       "expectations": [
-        "Runs the environment preflight instead of inferring a destination from the request.",
-        "Explains that --output-dir can only equal the resolved outputRoot and cannot select custom-output.",
-        "Reports OUTPUT_ROOT_MISMATCH and leaves custom-output, workspace root configuration and my-experts unchanged.",
-        "Does not fall back to HOME, cwd guessing or hand-written package files."
+        "With no --creation-target, treats --output-dir as assertion-only, reports OUTPUT_ROOT_MISMATCH for an arbitrary parent and performs no package write.",
+        "Accepts the same existing absolute directory only with --creation-target custom, maps the final target to <parent>/<slug>, and does not write to workspace or my-experts.",
+        "Reports CREATION_TARGET_PATH_INVALID and performs no preflight or generator write for a relative path, missing directory, filesystem root, symlink, Windows reparse point, special file or path escape.",
+        "Keeps overwrite authorization separate: an existing <parent>/<slug> still requires the independent --force confirmation."
       ]
     },
     {
@@ -359,13 +359,13 @@
     {
       "id": 24,
       "name": "agent-runtime-options-contract",
-      "prompt": "对单专家和专家团分别生成 steps、model、variant、temperature、top_p、hidden 与 options 投影；验证兼容步数别名、非法值、派生配置漂移、安装升级删除选项和干净解压复验。",
-      "expected_output": "One shared manifest contract controls generator and validator behavior, and declared Agent runtime options survive generation, installation and packaging without inferred defaults or stale values.",
+      "prompt": "对单专家和专家团分别生成 steps、model、variant、hidden 与 options 投影；验证 temperature/top_p 禁止规则、旧包只读 warning、兼容步数别名、非法值、派生配置漂移、安装升级删除选项和干净解压复验。",
+      "expected_output": "One shared manifest contract controls generator and validator behavior, supported Agent runtime options survive generation, installation and packaging, and sampling fields cannot enter newly generated packages.",
       "files": [],
       "expectations": [
         "Treats steps as the only official OpenCode field; accepts max_turns and maxTurns only as legacy MobileWork expert.json inputs when values agree, and never emits those names.",
-        "Validates model, variant, sampling ranges, subagent-only hidden and non-empty finite JSON options before generation.",
-        "Projects exactly the declared fields to Agent Markdown, opencode.json and the README summary while omitting inherited defaults and legacy tools.",
+        "Validates model, variant, subagent-only hidden and non-empty finite JSON options before generation; rejects temperature/top_p at role top level or nested in options.",
+        "Projects exactly the supported declared fields to Agent Markdown, opencode.json and the README summary while omitting inherited defaults, sampling fields and legacy tools; unchanged legacy sampling packages validate with a structured warning.",
         "Validator rejects missing, extra or changed runtime fields in either derived Agent representation.",
         "Same-slug force upgrade removes stale optional fields from installed config and receipt-owned Agent files, and packaged clean extraction validates again."
       ]
@@ -379,7 +379,7 @@
       "expectations": [
         "Accepts and exactly projects LSP true, false, and a non-empty server mapping while preserving omission when lsp is undeclared.",
         "Rejects an empty LSP mapping, empty command or extensions arrays, non-string env values, non-object initialization, disabled-only extras, and unknown server fields.",
-        "Rejects duplicate npm plugins, instructions and per-Agent MCP references; ordinary command.agent must name a declared package Agent and command.model must use provider/model form.",
+        "Rejects duplicate npm plugins, instructions and per-Agent MCP references; every ordinary command is normalized to agent=<unique mode all Agent> and subtask=true, rejects member routing or subtask=false, and command.model must use provider/model form.",
         "Treats role title only as a legacy name fallback and never emits a title key into Agent Markdown or opencode.json.",
         "Treats a non-empty Git repository as an opaque OpenCode materialization input, including controlled loopback HTTP fixtures, and validates exact derived parity."
       ]
@@ -402,7 +402,7 @@
       "id": 27,
       "name": "official-agent-skills-frontmatter-contract",
       "prompt": "创建 legacy Skill 并分别静态诊断、导入 unified 专家包：验证 name/description 边界，以及 license、compatibility、metadata、allowed-tools 和未知字段。所有成功产物必须符合 agentskills.io specification，上传内容不得自动改写。",
-      "expected_output": "One shared internal validator gates generation, diagnosis, import, package validation, packaging and installation, while a pinned official skills-ref independently validates successful outputs in CI.",
+      "expected_output": "The Agent Skills Specification page is authoritative, one shared internal validator gates production paths, and the contract-pinned skills-ref snapshot independently cross-checks successful outputs in CI.",
       "files": [],
       "expectations": [
         "Allows only name, description, license, compatibility, metadata and allowed-tools in SKILL.md frontmatter.",
@@ -410,21 +410,23 @@
         "Requires metadata to map strings to strings and allowed-tools to use a non-empty string without coercing YAML lists, mappings or numeric values.",
         "Rejects an invalid uploaded skill before package writes and preserves the target package plus uploaded bytes exactly.",
         "Blocks validation, packaging and installation for existing noncompliant skills without grandfathering or automatic repair.",
-        "Uses a pinned official skills-ref only as a CI oracle; production creation and import depend on the shared internal validator."
+        "Treats https://agentskills.io/specification as authoritative, blocks every official mandatory-rule failure, and reports recommendations such as progressive disclosure, a roughly 500-line SKILL.md limit and shallow references as warnings rather than mandatory failures.",
+        "Reads the official repository snapshot commit from manager-contract.json agentSkillsSpecification for the pinned skills-ref CI oracle instead of maintaining a second SHA; a validator disagreement is recorded as a regression and the official page wins.",
+        "Uses the shared internal validator for production creation and import while retaining stricter MobileWork safety and portability gates that never accept a Skill invalid under the official page."
       ]
     },
     {
       "id": 28,
       "name": "optional-modern-workflow-and-bounded-default",
-      "prompt": "分别创建没有顶层 workflows 的 unified 单专家和专家团，并保留一个普通 runtime_extensions command；再检查声明了 Workflow 但缺 autonomy、Phase 或 acceptance 的现代 manifest，以及未修改的 legacy 无自主度包。",
-      "expected_output": "Modern packages may omit Workflow and receive bounded safe permissions, while every declared modern Workflow is complete and legacy compatibility remains explicit.",
+      "prompt": "分别创建角色自主度为 bounded、没有顶层 workflows 的 unified 单专家和专家团，并保留一个普通 runtime_extensions command；再检查声明了 Workflow 但缺流程 autonomy、Phase 或 acceptance 的现代 manifest，以及角色缺 autonomy 的旧包。",
+      "expected_output": "Modern packages may omit Workflow while permissions still follow explicit role autonomy, every declared modern Workflow is complete, and missing legacy role autonomy has a bounded temporary projection only.",
       "files": [],
       "expectations": [
         "Accepts omitted or empty workflows for unified expert and team manifests without creating an implicit Phase.",
-        "Derives no-workflow-bounded-default permissions with unknown capabilities ask, role ownership and system todowrite allow, without LEGACY_PERMISSION_BASELINE.",
+        "Derives permissions from each explicit bounded role autonomy with unknown capabilities ask, role ownership and system todowrite allow, without using Workflow presence as a permission input.",
         "Keeps ordinary runtime_extensions commands available without a Workflow or autonomy prefix.",
         "Rejects every unified Workflow missing autonomy, at least one Phase or non-empty per-Phase acceptance, and rejects mixing autonomy-enabled with legacy workflows.",
-        "Preserves unchanged legacy no-autonomy generation and validation with a HIGH RISK LEGACY_PERMISSION_BASELINE warning."
+        "Rejects new creation without role autonomy; validates and installs an old missing-autonomy package with LEGACY_ROLE_AUTONOMY_DEFAULTED and an in-memory bounded projection that does not modify source bytes; blocks structural modification until every role is explicit."
       ]
     },
     {
@@ -458,15 +460,15 @@
     {
       "id": 31,
       "name": "derived-maximum-autonomy-without-cross-role-escalation",
-      "prompt": "给一个多角色 Workflow 配置 workflow 默认 bounded、Phase guided，以及某角色 fixed override。计算并展示 Phase 与 Workflow 最高生效自主度，同时验证角色权限没有被全局最高值反向抬升。",
-      "expected_output": "Generated projections distinguish declared defaults, per-role effective autonomy and derived maximum risk summaries without adding manifest fields or widening another role's permissions.",
+      "prompt": "给一个多角色 Workflow 配置 workflow 默认 bounded、Phase guided，以及某角色 fixed override；每个角色另有显式角色自主度。计算并展示 Phase 与 Workflow 最高生效流程自主度，同时验证角色权限只跟各自角色自主度对应。",
+      "expected_output": "Generated projections distinguish process-autonomy defaults and derived maximum risk summaries from role-autonomy permission baselines without adding runtime autonomy fields or widening any role permission.",
       "files": [],
       "expectations": [
         "Computes each Phase maximum from participating roles after Agent overrides and each Workflow maximum from its Phase maxima.",
         "Counts a role once for the maximum regardless of how many runtime instances it creates.",
         "Shows declared default and maximum effective autonomy separately in README, Agent and workflow command projections.",
-        "Uses the maximum for the generated command risk prefix but does not write autonomy fields to expert.json or opencode.json.",
-        "Derives each role permission only from that role's own assignments and never propagates another role's higher autonomy."
+        "Uses the maximum for the generated command risk prefix, keeps role autonomy only in expert.json, and writes no non-official autonomy field to opencode.json or Agent frontmatter.",
+        "Derives each role permission only from that role's own autonomy and ownership; changing Workflow, Phase, override or execution cannot alter it or propagate another role's higher process autonomy."
       ]
     },
     {
@@ -481,6 +483,37 @@
         "Binds confirmation to the complete captured content state, creates and reads back a 0700/0600 manifest-last backup from the same protected bytes, and writes a clean contract-3 receipt only after the final guard.",
         "Restores only an exact fixed-root backup id/hash/slug while the current contract-3 owned state, complete target state and receipt set still match the post-install guards; rejects tampering, later changes and replay.",
         "Reports restore as drift-restored with evidenceLevel valid and configLoad blocked, keeps Windows and crash/stale-lock recovery not-tested, and never exposes payload secrets in manifest, stdout or stderr."
+      ]
+    },
+    {
+      "id": 33,
+      "name": "dynamic-capability-implementation-mapping",
+      "prompt": "验证 capabilityImplementationMapping：只有角色与职责时不直接生成资源；在三个互不重复且整卡确认的运行职责中，复用方法映射到无角色前缀的共享 Skill，Agent 主动调用的确定性 TypeScript 映射到带包命名空间的 Custom Tool，提交前事件拦截映射到带包命名空间的本地 Plugin。再注入一个未确认的联网前提，检查 full-card-first 和零写入。",
+      "expected_output": "The manager selects the least-powerful fitting capability carrier inside the confirmed business boundary, shares one resource per capability, and invalidates confirmation before any write when mapping reveals material impact.",
+      "files": [],
+      "expectations": [
+        "Accepts none, skill, custom-tool and opencode-plugin as candidate mapping results and keeps zero resources valid when roles, responsibilities, workflow or quality gates do not justify a reusable or runtime capability.",
+        "Requires every manager-proposed capability to have a stable business label, observable runtime behavior and trusted provenance, and forbids inventing a business rule, threshold, external write or runtime side effect.",
+        "Maps reusable methods, checklists, SOP guidance and Python or Shell script bundles to one semantic Skill; maps agent-invoked deterministic JavaScript or TypeScript to one namespaced Custom Tool; maps event listening, tool interception and runtime behavior changes to one namespaced package-wide local Plugin.",
+        "Uses MCP for external-system access rather than treating a Plugin as a connector, and permits multiple resource types only for distinct confirmed runtime responsibilities.",
+        "Creates each capability resource exactly once, lets multiple roles reference the same complete Skill or ownership entry, and never projects one resource from every role, stage or responsibility.",
+        "Lets the manager select a technical carrier without a second type confirmation only when the mapping remains entirely inside the current whole-card boundary.",
+        "Invalidates the prior confirmation and returns to full-card-first before any package write when mapping reveals a new automatic trigger, visible side effect, external write, network access, permission, cost, dependency or Runtime prerequisite.",
+        "Limits whole-card authorization to generation of current-package resources; installation, enablement, downloads, external connections, permission expansion, release and execution remain separately unauthorized."
+      ]
+    },
+    {
+      "id": 34,
+      "name": "package-local-runtime-name-disjointness",
+      "prompt": "分别构造 Workflow command、普通 runtime command、Agent id 与 unified/legacy Skill 完整名称两两同名的专家包，并覆盖创建、重建、Skill 导入、校验、打包和临时安装；同时保留展示名称、不同运行时名称、command 间判重、/init、/review 与 /help 回归。",
+      "expected_output": "One shared manifest contract rejects every package-local Command, Skill, and Agent id collision before target writes while preserving display names and existing Command-only rules.",
+      "files": [],
+      "expectations": [
+        "Accepts distinct Command names, complete Skill names, and Agent ids through generation, validation, packaging and temporary installation.",
+        "Rejects every pairwise collision across both Command sources, all Agent ids, and unified or legacy-derived complete Skill names.",
+        "Reports field-specific conflicts with skill or agent errors without renaming, suffixing or precedence rules.",
+        "Leaves the expert package, revision, distribution directory and temporary workspace unchanged after import, package or install rejection.",
+        "Leaves Agent and package display names unconstrained while preserving duplicate Command rejection, /init and /review built-in rejection, and /help allowance."
       ]
     }
   ]

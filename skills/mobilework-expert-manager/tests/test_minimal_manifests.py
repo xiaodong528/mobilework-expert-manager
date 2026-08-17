@@ -31,8 +31,6 @@ class MinimalManifestTests(unittest.TestCase):
     def generate_and_validate(
         self,
         manifest: dict[str, object],
-        *,
-        expect_legacy: bool = True,
     ) -> Path:
         source = self.root / str(manifest["slug"]) / "expert.json"
         source.parent.mkdir()
@@ -58,15 +56,11 @@ class MinimalManifestTests(unittest.TestCase):
         )
         self.assertEqual(validated.returncode, 0, validated.stdout + validated.stderr)
         payload = json.loads(validated.stdout)
-        legacy = [
+        legacy_defaults = [
             item for item in payload["findings"]
-            if item["code"] == "LEGACY_PERMISSION_BASELINE"
+            if item["code"] == "LEGACY_ROLE_AUTONOMY_DEFAULTED"
         ]
-        if expect_legacy:
-            self.assertTrue(legacy)
-            self.assertTrue(all("HIGH RISK" in item["message"] for item in legacy))
-        else:
-            self.assertFalse(legacy)
+        self.assertFalse(legacy_defaults)
         return package
 
     def assert_minimal_projection(self, package: Path, expected_agents: set[str]) -> None:
@@ -105,6 +99,50 @@ class MinimalManifestTests(unittest.TestCase):
                 continue
             self.assertTrue(any(directory.iterdir()), f"orphan empty directory: {directory}")
 
+    def assert_zero_capability_resources(
+        self,
+        package: Path,
+        expected_role_ids: set[str],
+    ) -> None:
+        manifest = json.loads((package / "expert.json").read_text(encoding="utf-8"))
+        roles = (
+            [manifest["agent"]]
+            if manifest["type"] == "expert"
+            else [manifest["primary_agent"], *manifest["subagents"]]
+        )
+        self.assertEqual(manifest.get("skills", []), [])
+        self.assertEqual({role["id"] for role in roles}, expected_role_ids)
+        for role in roles:
+            self.assertEqual(role.get("skills", []), [])
+            self.assertEqual(role.get("custom_tools", []), [])
+
+        skills_dir = package / ".opencode/skills"
+        self.assertTrue(skills_dir.is_dir())
+        self.assertEqual(list(skills_dir.rglob("SKILL.md")), [])
+        self.assertFalse((package / ".opencode/tools").exists())
+        self.assertFalse((package / ".opencode/plugins").exists())
+
+        runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
+        self.assertNotIn("plugin", runtime)
+        for role_id in expected_role_ids:
+            self.assertEqual(
+                runtime["agent"][role_id]["permission"]["skill"],
+                {"*": "deny"},
+            )
+            agent = (package / f".opencode/agents/{role_id}.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("当前角色未分配包内业务 Skill", agent)
+            self.assertIn("普通任务运行只消费已生成的专家包资源", agent)
+            for protected_path in (
+                "expert.json",
+                "opencode.json",
+                ".opencode/skills/",
+                ".opencode/tools/",
+                ".opencode/plugins/",
+            ):
+                self.assertIn(protected_path, agent)
+
     def test_minimal_expert_manifest_omits_every_optional_projection(self) -> None:
         package = self.generate_and_validate(
             {
@@ -115,6 +153,8 @@ class MinimalManifestTests(unittest.TestCase):
                 "common_skills": [{"purpose": "delivery"}],
                 "agent": {
                     "id": "minimal-agent",
+                    "mode": "all",
+                    "autonomy": "bounded",
                     "description": "直接完成最小专家任务。",
                     "skills": [{"purpose": "method"}],
                 },
@@ -139,6 +179,38 @@ class MinimalManifestTests(unittest.TestCase):
         self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
         self.assertTrue((workspace / ".opencode/opencode.jsonc").is_file())
 
+    def test_new_expert_requires_explicit_role_autonomy(self) -> None:
+        manifest = {
+            "slug": "missing-role-autonomy",
+            "type": "expert",
+            "name": "缺自主度专家",
+            "description": "验证新建角色必须显式选择自主度。",
+            "skills": [],
+            "agent": {
+                "id": "missing-role-autonomy-agent",
+                "mode": "all",
+                "description": "缺少角色自主度。",
+                "skills": [],
+            },
+        }
+        source = self.root / "missing-role-autonomy" / "expert.json"
+        source.parent.mkdir()
+        source.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        output = self.root / "missing-output"
+        generated = subprocess.run(
+            [sys.executable, str(CREATE), "--manifest", str(source), "--output-dir", str(output)],
+            env=managed_generator_env(output),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(generated.returncode, 0)
+        self.assertIn("autonomy is required", generated.stderr)
+        self.assertFalse((output / "missing-role-autonomy").exists())
+
     def test_minimal_team_manifest_omits_every_optional_projection(self) -> None:
         package = self.generate_and_validate(
             {
@@ -149,6 +221,8 @@ class MinimalManifestTests(unittest.TestCase):
                 "common_skills": [{"purpose": "delivery"}],
                 "primary_agent": {
                     "id": "team-lead",
+                    "mode": "all",
+                    "autonomy": "bounded",
                     "name": "团长",
                     "description": "分派、验收并整合团员结果。",
                     "skills": [{"purpose": "routing"}],
@@ -156,6 +230,8 @@ class MinimalManifestTests(unittest.TestCase):
                 "subagents": [
                     {
                         "id": "team-member",
+                        "mode": "subagent",
+                        "autonomy": "bounded",
                         "name": "团员",
                         "description": "完成被分派的专业子任务。",
                         "skills": [{"purpose": "execution"}],
@@ -175,11 +251,12 @@ class MinimalManifestTests(unittest.TestCase):
                 "skills": [],
                 "agent": {
                     "id": "minimal-unified-agent",
+                    "mode": "all",
+                    "autonomy": "bounded",
                     "description": "直接完成开放式专家任务。",
                     "skills": [],
                 },
             },
-            expect_legacy=False,
         )
         self.assert_minimal_projection(package, {"minimal-unified-agent"})
         runtime = json.loads(
@@ -191,13 +268,18 @@ class MinimalManifestTests(unittest.TestCase):
         self.assertEqual(permission["bash"]["*"], "ask")
         self.assertEqual(permission["todowrite"], "allow")
         readme = (package / "README.md").read_text(encoding="utf-8")
-        self.assertIn("no-workflow-bounded-default", readme)
+        self.assertIn("role-autonomy", readme)
+        self.assertIn("`bounded`", readme)
         agent = (
             package / ".opencode/agents/minimal-unified-agent.md"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "Todo 只跟踪普通执行步骤；不得把临时步骤称为 manifest Phase",
             agent,
+        )
+        self.assert_zero_capability_resources(
+            package,
+            {"minimal-unified-agent"},
         )
 
     def test_unified_team_without_workflow_uses_bounded_default_and_task_topology(
@@ -212,6 +294,8 @@ class MinimalManifestTests(unittest.TestCase):
                 "skills": [],
                 "primary_agent": {
                     "id": "unified-lead",
+                    "mode": "all",
+                    "autonomy": "bounded",
                     "name": "统一团长",
                     "description": "动态分派、验收并整合团员结果。",
                     "skills": [],
@@ -219,13 +303,14 @@ class MinimalManifestTests(unittest.TestCase):
                 "subagents": [
                     {
                         "id": "unified-member",
+                        "mode": "subagent",
+                        "autonomy": "bounded",
                         "name": "统一团员",
                         "description": "完成被分派的专业子任务。",
                         "skills": [],
                     }
                 ],
             },
-            expect_legacy=False,
         )
         self.assert_minimal_projection(
             package,
@@ -241,6 +326,10 @@ class MinimalManifestTests(unittest.TestCase):
         self.assertEqual(
             runtime["agent"]["unified-member"]["permission"]["task"],
             {"*": "deny"},
+        )
+        self.assert_zero_capability_resources(
+            package,
+            {"unified-lead", "unified-member"},
         )
 
 

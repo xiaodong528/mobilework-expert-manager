@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import math
 import subprocess
 import sys
 import tempfile
@@ -92,7 +91,7 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
             check=False,
         )
 
-    def test_single_expert_projects_all_declared_options(self) -> None:
+    def test_single_expert_projects_supported_declared_options(self) -> None:
         data = copy.deepcopy(self.base)
         role = data["agent"]
         role.update(
@@ -100,8 +99,6 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
                 "steps": 64,
                 "model": "openai/gpt-5",
                 "variant": "high",
-                "temperature": 0.2,
-                "top_p": 0.9,
                 "options": {
                     "reasoningEffort": "high",
                     "textVerbosity": "low",
@@ -119,13 +116,17 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
         markdown_agent = read_frontmatter(package / f".opencode/agents/{role['id']}.md")
         expected = {
             key: role[key]
-            for key in ("steps", "model", "variant", "temperature", "top_p", "options")
+            for key in ("steps", "model", "variant", "options")
         }
         for key, value in expected.items():
             self.assertEqual(config_agent[key], value)
             self.assertEqual(markdown_agent[key], value)
         self.assertNotIn("hidden", config_agent)
         self.assertNotIn("hidden", markdown_agent)
+        self.assertNotIn("temperature", config_agent)
+        self.assertNotIn("top_p", config_agent)
+        self.assertNotIn("temperature", markdown_agent)
+        self.assertNotIn("top_p", markdown_agent)
         self.assertNotIn("tools", config_agent)
         self.assertNotIn("tools", markdown_agent)
         self.assertEqual(config_agent["permission"]["webfetch"], "deny")
@@ -145,10 +146,9 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
         primary.update(
             {
                 "id": "review-lead",
-                "mode": "primary",
+                "mode": "all",
                 "steps": 120,
                 "model": "openai/gpt-5",
-                "temperature": 0.1,
             }
         )
         primary["permission"].pop("skill", None)
@@ -159,7 +159,6 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
                 "mode": "subagent",
                 "steps": 45,
                 "model": "anthropic/claude-sonnet-4",
-                "top_p": 0.6,
                 "hidden": True,
                 "options": {"reasoningEffort": "medium"},
             }
@@ -172,10 +171,10 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
         self.assertEqual(created.returncode, 0, created.stderr)
         runtime = json.loads((package / "opencode.json").read_text(encoding="utf-8"))
         self.assertNotIn("hidden", runtime["agent"]["review-lead"])
-        self.assertEqual(runtime["agent"]["review-lead"]["temperature"], 0.1)
+        self.assertNotIn("temperature", runtime["agent"]["review-lead"])
         self.assertNotIn("top_p", runtime["agent"]["review-lead"])
         self.assertIs(runtime["agent"]["silent-reviewer"]["hidden"], True)
-        self.assertEqual(runtime["agent"]["silent-reviewer"]["top_p"], 0.6)
+        self.assertNotIn("top_p", runtime["agent"]["silent-reviewer"])
         self.assertNotIn("temperature", runtime["agent"]["silent-reviewer"])
         member = read_frontmatter(package / ".opencode/agents/silent-reviewer.md")
         self.assertIs(member["hidden"], True)
@@ -200,6 +199,13 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
                 for non_official_key in ("max_turns", "maxTurns", "maxSteps"):
                     self.assertNotIn(non_official_key, config_agent)
                     self.assertNotIn(non_official_key, markdown_agent)
+                generated_manifest = json.loads(
+                    (package / "expert.json").read_text(encoding="utf-8")
+                )
+                generated_role = generated_manifest["agent"]
+                self.assertEqual(generated_role["steps"], 72)
+                for legacy_key in ("max_turns", "maxTurns", "maxSteps"):
+                    self.assertNotIn(legacy_key, generated_role)
 
         data = copy.deepcopy(self.base)
         for alias in ("steps", "max_turns", "maxTurns"):
@@ -243,8 +249,23 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
             ("step-type", lambda role: role.update({"steps": True}), "positive integer"),
             ("model", lambda role: role.update({"model": "missing-provider"}), "provider/model"),
             ("variant", lambda role: role.update({"variant": "high"}), "requires model"),
-            ("temperature", lambda role: role.update({"temperature": 1.1}), "0.0 to 1.0"),
-            ("top-p", lambda role: role.update({"top_p": math.inf}), "finite number"),
+            (
+                "temperature",
+                lambda role: role.update({"temperature": 0.2}),
+                "unsupported Agent fields temperature",
+            ),
+            (
+                "top-p",
+                lambda role: role.update({"top_p": 0.8}),
+                "unsupported Agent fields top_p",
+            ),
+            (
+                "nested-temperature",
+                lambda role: role.update(
+                    {"options": {"provider": {"temperature": 0.2}}}
+                ),
+                "sampling fields are unsupported",
+            ),
             ("hidden", lambda role: role.update({"hidden": True}), "only allowed for subagents"),
             ("empty-options", lambda role: role.update({"options": {}}), "non-empty JSON object"),
             (
@@ -285,7 +306,6 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
             {
                 "model": "openai/gpt-5",
                 "variant": "high",
-                "temperature": 0.25,
                 "options": {"reasoningEffort": "high"},
             }
         )
@@ -293,10 +313,10 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
         self.assertEqual(created.returncode, 0, created.stderr)
         agent_path = package / ".opencode/agents/contract-reviewer.md"
 
-        mutate_frontmatter(agent_path, lambda value: value.pop("temperature"))
+        mutate_frontmatter(agent_path, lambda value: value.pop("model"))
         validated = self.validate(package)
         self.assertNotEqual(validated.returncode, 0)
-        self.assertIn("temperature must match expert.json", validated.stdout)
+        self.assertIn("model must match expert.json", validated.stdout)
 
         created, package = self.generate(data, name="drift", force=True)
         self.assertEqual(created.returncode, 0, created.stderr)
@@ -315,6 +335,44 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
         validated = self.validate(package)
         self.assertNotEqual(validated.returncode, 0)
         self.assertIn("unsupported frontmatter fields providerOption", validated.stdout)
+
+    def test_legacy_sampling_fields_validate_with_warning_but_cannot_regenerate(self) -> None:
+        data = copy.deepcopy(self.base)
+        created, package = self.generate(data, name="legacy-sampling")
+        self.assertEqual(created.returncode, 0, created.stderr)
+
+        manifest_path = package / "expert.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["agent"].update({"temperature": 0.2, "top_p": 0.8})
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        runtime_path = package / "opencode.json"
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+        runtime["agent"]["contract-reviewer"].update(
+            {"temperature": 0.2, "top_p": 0.8}
+        )
+        runtime_path.write_text(
+            json.dumps(runtime, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        agent_path = package / ".opencode/agents/contract-reviewer.md"
+        mutate_frontmatter(
+            agent_path,
+            lambda value: value.update({"temperature": 0.2, "top_p": 0.8}),
+        )
+
+        validated = self.validate(package)
+        self.assertEqual(validated.returncode, 0, validated.stdout)
+        self.assertIn("legacy sampling field remains readable", validated.stdout)
+
+        regenerated, _ = self.generate(
+            manifest,
+            name="legacy-sampling-regenerate",
+        )
+        self.assertNotEqual(regenerated.returncode, 0)
+        self.assertIn("unsupported Agent fields temperature, top_p", regenerated.stderr)
 
     def test_todo_permission_projects_to_runtime_and_agent_markdown(self) -> None:
         data = copy.deepcopy(self.base)
@@ -415,6 +473,7 @@ class AgentRuntimeOptionsTests(unittest.TestCase):
                 ).append(
                     {
                         "path": "todowrite.ts",
+                        "purpose": "故意冲突系统 Todo 工具的负向测试。",
                         "content": "export default {}",
                     }
                 ),

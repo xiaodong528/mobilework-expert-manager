@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -116,6 +118,36 @@ class CliContractTests(unittest.TestCase):
         self.assertIn("done", output.getvalue())
         self.assertNotIn("human-canary", output.getvalue())
 
+    def test_real_standard_streams_are_reconfigured_to_utf8(self) -> None:
+        output_bytes = io.BytesIO()
+        error_bytes = io.BytesIO()
+        output = io.TextIOWrapper(output_bytes, encoding="cp1252")
+        error = io.TextIOWrapper(error_bytes, encoding="cp1252")
+
+        with patch.object(sys, "stdout", output), patch.object(sys, "stderr", error):
+            code = cli_contract.emit(
+                self.result(),
+                output_format="human",
+                diagnostics=("诊断信息",),
+                human_renderer=lambda _result: "创建完成",
+            )
+            output.flush()
+            error.flush()
+            self.assertEqual(output.encoding.lower().replace("_", "-"), "utf-8")
+            self.assertEqual(error.encoding.lower().replace("_", "-"), "utf-8")
+
+        output.detach()
+        error.detach()
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            output_bytes.getvalue().decode("utf-8"),
+            f"创建完成{os.linesep}",
+        )
+        self.assertEqual(
+            error_bytes.getvalue().decode("utf-8"),
+            f"诊断信息{os.linesep}",
+        )
+
     def test_human_recovery_output_includes_actionable_sanitized_evidence(self) -> None:
         failure = cli_contract.CliInternalError(
             "manual recovery required",
@@ -206,10 +238,15 @@ class CliContractTests(unittest.TestCase):
         )
         policy = cli_contract.CliPolicy.from_policy(policy_data)
         self.assertEqual(policy.default_schema_version, 2)
+        self.assertEqual(policy.stream_encoding, "utf-8")
         self.assertEqual(self.result().as_dict(policy=policy)["schemaVersion"], 2)
         with self.assertRaises(cli_contract.CliArgumentError):
             cli_contract.CliPolicy.from_policy(
                 {"cli": {"v2Fields": ["schemaVersion", "ok"]}}
+            )
+        with self.assertRaises(cli_contract.CliArgumentError):
+            cli_contract.CliPolicy.from_policy(
+                {"cli": {"streamEncoding": "cp1252"}}
             )
 
     def test_invalid_policy_is_rejected_before_action_execution(self) -> None:
