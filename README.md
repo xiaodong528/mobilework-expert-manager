@@ -1,7 +1,8 @@
 # MobileWork Expert Manager
 
-把业务目标转换成可确认、可生成、可验证的 MobileWork 专家或专家团。管理器会先用白话说明
-角色、资料、规则、工具、流程和外部连接应该放在哪里，用户确认后才写入专家包。
+把业务目标转换成可确认、可生成、可验证的 MobileWork 专家或专家团。管理器先用白话确认角色、
+资料、流程、能力、权限和运行前提；完整业务方案确认后，再按最小运行权限选择实现方式。新建专家
+还会单独确认创建位置，未经确认不写入专家包。
 
 本仓库同时发布 Claude Code 与 Codex 插件，并通过同名的 `mobilework-tools` Git marketplace
 提供安装。两套宿主共用 `skills/mobilework-expert-manager/`，但各自读取独立的 Manifest 和市场清单。
@@ -16,6 +17,32 @@
 | Skill | `mobilework-expert-manager` |
 | Claude Code 调用 | `/mobilework-expert-manager:mobilework-expert-manager` |
 | Codex 调用 | `$mobilework-expert-manager:mobilework-expert-manager` |
+
+## 0.7.0 更新重点
+
+- **角色权限独立**：单专家、团长和每位团员分别选择低、较低、中、较高或高；角色自主度是静态
+  权限的唯一基线，流程调整不会隐式提权。
+- **主专家可复用**：单专家和专家团团长使用 `mode: all`，既可直接使用，也可由其他 Agent 调用；
+  团员继续使用 `mode: subagent`。
+- **能力按需落地**：确认业务能力后，管理器才在无资源、Skill、custom tool、Plugin 或 MCP 中
+  选择最小适配方案，不再按角色、职责或流程数量机械生成资源。
+- **创建位置强确认**：完整业务方案确认后，仍需单独选择“我的专家”“当前工作空间”或安全的
+  自定义父目录；设计变化后必须重新选择。
+- **命令入口收敛**：Workflow command 和自定义 command 都固定路由到唯一 `mode: all` Agent，
+  并以 `subtask: true` 运行，专家团 command 不绕过团长直达团员。
+- **规范交叉验证更新**：Agent Skills 官方校验固定到仓库声明的 `skills-ref` 提交，格式硬约束阻断，
+  渐进披露等建议项只报告 warning。
+
+## 适用场景
+
+| 需求 | 管理器提供的结果 |
+|---|---|
+| 从业务目标新建专家 | 需求转译、完整业务确认、创建位置选择、生成与校验 |
+| 设计多角色专家团 | 团长与团员职责、逐角色自主度、委派、验收、返工和集成边界 |
+| 修改或迁移旧专家 | 兼容诊断、结构迁移预览、派生物重建和回归校验 |
+| 导入资料或 Skill | 外部内容静态检查、原字节保留、角色分配和完整性 hash |
+| 校验、安装或打包 | 结构化 findings、可移植性扫描、安装 receipt、漂移保护和干净复验 |
+| 排查陌生 ZIP 或目录 | 只做受限静态诊断，不执行包内脚本、Plugin、MCP 或生命周期逻辑 |
 
 ## 通过插件市场安装
 
@@ -128,8 +155,8 @@ Codex 团队市场可以在 `.agents/plugins/marketplace.json` 的 `plugins` 数
 ## 核心能力
 
 - 以 `expert.json` 作为专家包结构与资源所有权的唯一事实源。
-- 把模糊业务需求翻译成 Reference、Skill、Instruction、Workflow、Custom tool、Plugin/Hook、
-  MCP 或 Agent/Team 建议；未经确认不写文件、不拉取 Git、不扩大权限。
+- 先把模糊业务需求整理成可观察、可确认的角色、资料、流程、能力和权限边界；整卡确认后才映射为
+  Reference、Skill、Instruction、Workflow、custom tool、Plugin、MCP 或 Agent/Team。
 - 支持单专家和专家团，以及角色路由、交接、验收、返工与最终集成。
 - Reference 支持包内本地资料和 Git 仓库；Git 地址、分支、说明和 `hidden` 状态进入统一合同，
   不在专家包中保存凭据。
@@ -236,6 +263,19 @@ provider；`options` 也不能绕过该边界。
 9. **安装与读回**：运行 `install_expert.py`，投影到 `<workspace>/.opencode/`，再读回
    `.opencode/opencode.jsonc`、安装资源和 `.opencode/.expert-installs/<slug>.json` receipt。
 
+### 创建位置如何解析
+
+| 选择 | 实际位置 |
+|---|---|
+| 我的专家（MobileWork 正式版） | 宿主注入的 `MOBILEWORK_MY_EXPERTS_DIR`；默认 `~/.mobilework/experts/personal` |
+| 我的专家（源码开发版） | 未自定义 Electron userData 时，默认 `~/.mobilework/electron-dev/openwork-dev-data/home/.mobilework/experts/personal` |
+| 我的专家（独立宿主） | `<home>/.mobilework/experts/personal` |
+| 当前工作空间 | 当前 workspace 下的 `<slug>/` |
+| 其他路径 | 用户选择的已存在绝对父目录下的 `<slug>/` |
+
+旧 `~/.mobilework/my-experts` 只用于 MobileWork 一次性迁移，不是新建目标。自定义父目录必须已存在，
+且不能是文件系统根、symlink、Windows reparse point 或特殊文件；已有同名目标仍需另行确认覆盖。
+
 上传技能默认保持 `edit_policy: preserved`。同名同内容复用；同名异内容默认阻止，只有同时提供
 `--replace --confirm-managed` 才允许替换，并把编辑策略改为 `managed`。未修改旧专家继续兼容；
 发生结构性修改时迁移到统一技能合同。
@@ -244,6 +284,16 @@ provider；`options` 也不能绕过该边界。
 本地 commit 和 `vX.Y.Z` tag。静态校验通过只证明 package-valid，安装读回只证明 installed；
 pure config 最多证明 config-loadable。没有完成真实 Runtime 调用时，结果必须标记为
 `not-tested`，不能宣称专家已经在业务链路中运行成功。
+
+### 验证结果怎样理解
+
+| 结果 | 能证明什么 | 不能证明什么 |
+|---|---|---|
+| `valid` | 输入、结构或静态合同通过相应检查 | 已安装或已在真实会话运行 |
+| `installable` | 包完成生成、校验、打包、干净复验及安装门要求 | OpenCode 已真实加载并执行 |
+| `config-loadable` | 可信 sidecar 已读取并核对安装配置 | 业务任务输出正确 |
+| Runtime `verified` | 已完成明确记录的真实 Runtime 调用 | 未覆盖的平台、模型或业务场景同样通过 |
+| Runtime `not-tested` | 尚无真实 Runtime 证据 | 不能外推为运行成功 |
 
 ## 创建请求示例
 
